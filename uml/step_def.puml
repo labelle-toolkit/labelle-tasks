@@ -1,5 +1,5 @@
 @startuml step_def
-title StepDef - Dynamic Source Resolution
+title StepDef - Dynamic Resolution
 
 class StepDef <<struct>> {
   type: StepType
@@ -19,6 +19,7 @@ class GroupSteps <<component>> {
 
 interface "Callbacks" as callbacks {
   findSource(registry, target): ?Entity
+  findDestination(registry, source): ?Entity
   canUnblock(registry, group): bool
   groupScorer(registry, worker, group): ?f32
 }
@@ -27,17 +28,21 @@ GroupSteps --> StepDef : contains
 StepDef --> StepType : has
 
 note right of StepDef
-  target = destination
-  (internal storage, workstation, output)
+  target meaning depends on StepType:
 
-  source = resolved dynamically
-  via findSource callback
+  Fill: target = destination (internal input)
+        source = resolved via findSource
+
+  Work: target = workstation
+
+  Store: target = source (internal output)
+         destination = resolved via findDestination
 end note
 
 note bottom of StepType
-  Fill: fill target from compatible external source
-  Work: work at target workstation
-  Store: store result at target output storage
+  Fill:  dynamic source → fixed target
+  Work:  work at target workstation
+  Store: fixed source → dynamic destination
 end note
 
 @enduml

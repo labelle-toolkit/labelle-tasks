@@ -1,0 +1,34 @@
+@startuml store_step_flow
+title Store Step - Execution Flow
+
+participant "TaskManager" as tm
+participant "GroupSteps" as steps
+participant "Callbacks" as cb
+participant "Worker" as worker
+
+== Execute Store Step ==
+
+tm -> steps : get current step
+steps --> tm : StepDef{ type=Store, target=internal_food_slot }
+
+tm -> cb : findDestination(registry, internal_food_slot)
+note right
+  User logic:
+  1. Get item type in source
+  2. Find external storages that accept it
+  3. Return by priority/distance/space
+end note
+
+alt destination found
+  cb --> tm : food_storage_a
+  tm -> worker : go to internal_food_slot
+  worker -> worker : pickup food
+  tm -> worker : go to food_storage_a
+  worker -> worker : drop food
+  tm -> steps : advanceStep()
+else no destination available
+  cb --> tm : null
+  tm -> tm : step blocked\n(wait or handle error)
+end
+
+@enduml

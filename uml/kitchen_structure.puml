@@ -1,9 +1,9 @@
 @startuml kitchen_structure
-title Kitchen Structure - Storage Flow
+title Kitchen Structure - Full Storage Flow
 
-package "Game World (External)" {
-  storage "Meat Storage A\n(might be empty)" as meat_a
-  storage "Meat Storage B\n(has meat)" as meat_b
+package "Game World (External Inputs)" {
+  storage "Meat Storage A" as meat_a
+  storage "Meat Storage B" as meat_b
   storage "Vegetable Storage" as veg_ext
 }
 
@@ -15,9 +15,14 @@ package "Kitchen (Task Group)" {
 
   node "Cooking Station\n(Workstation)" as cooking
 
-  package "Output Storage" {
-    storage "Food Storage" as food_out
+  package "Internal Output Storage" {
+    storage "Cooked Food Slot" as food_internal
   }
+}
+
+package "Game World (External Outputs)" {
+  storage "Food Storage A" as food_a
+  storage "Tavern Storage" as tavern
 }
 
 meat_a ..> meat_internal : <color:gray>Fill (if available)</color>
@@ -26,11 +31,19 @@ veg_ext ..> veg_internal : Fill
 
 meat_internal --> cooking : ingredients
 veg_internal --> cooking : ingredients
-cooking --> food_out : Store result
+cooking --> food_internal : produces
+
+food_internal ..> food_a : <color:green>Store</color>
+food_internal ..> tavern : <color:gray>Store (alternative)</color>
 
 note bottom of meat_a
   Source resolved dynamically
   via findSource callback
+end note
+
+note bottom of food_a
+  Destination resolved dynamically
+  via findDestination callback
 end note
 
 @enduml
