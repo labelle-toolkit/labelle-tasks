@@ -1,0 +1,43 @@
+@startuml step_def
+title StepDef - Dynamic Source Resolution
+
+class StepDef <<struct>> {
+  type: StepType
+  target: Entity
+}
+
+enum StepType {
+  Fill
+  Work
+  Store
+}
+
+class GroupSteps <<component>> {
+  steps: []const StepDef
+  current_index: u8
+}
+
+interface "Callbacks" as callbacks {
+  findSource(registry, target): ?Entity
+  canUnblock(registry, group): bool
+  groupScorer(registry, worker, group): ?f32
+}
+
+GroupSteps --> StepDef : contains
+StepDef --> StepType : has
+
+note right of StepDef
+  target = destination
+  (internal storage, workstation, output)
+
+  source = resolved dynamically
+  via findSource callback
+end note
+
+note bottom of StepType
+  Fill: fill target from compatible external source
+  Work: work at target workstation
+  Store: store result at target output storage
+end note
+
+@enduml
