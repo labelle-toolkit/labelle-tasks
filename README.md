@@ -33,23 +33,7 @@ Persistent workflows that cycle continuously. A group contains a sequence of ste
 
 ## Standalone Task Lifecycle
 
-```
-                    ┌─────────┐
-                    │  Queued │
-                    └────┬────┘
-                         │ assign worker
-                         ▼
-                    ┌─────────┐
-                    │  Active │
-                    └────┬────┘
-                         │
-           ┌─────────────┴─────────────┐
-           │ complete                  │ cancel
-           ▼                           ▼
-     ┌───────────┐               ┌───────────┐
-     │ Completed │               │ Cancelled │
-     └───────────┘               └───────────┘
-```
+![Standalone Task Lifecycle](uml/task_lifecycle.png)
 
 - **Queued**: Task waiting for a worker
 - **Active**: Worker is executing the task
@@ -58,20 +42,7 @@ Persistent workflows that cycle continuously. A group contains a sequence of ste
 
 ## Task Group Lifecycle
 
-```
-     ┌─────────┐  conditions met   ┌─────────┐  assign worker  ┌─────────┐
-     │ Blocked │ ────────────────► │  Queued │ ──────────────► │  Active │
-     └─────────┘                   └─────────┘                 └────┬────┘
-          ▲                                                        │
-          │                              ┌─────────────────────────┤
-          │                              │                         │
-          │ cycle done /                 │ interrupted             │ all steps done
-          │ conditions not met           │ (worker released)       │
-          │                              ▼                         │
-          │                        ┌─────────┐                     │
-          └────────────────────────│  Queued │◄────────────────────┘
-                                   └─────────┘
-```
+![Task Group Lifecycle](uml/task_group_lifecycle.png)
 
 - **Blocked**: Waiting for conditions (e.g., ingredients available, storage space)
 - **Queued**: Conditions met, waiting for worker
@@ -82,6 +53,8 @@ Persistent workflows that cycle continuously. A group contains a sequence of ste
 **Groups never complete.** They represent ongoing workflows.
 
 ## Components
+
+![Components](uml/components.png)
 
 ### Common
 
@@ -196,6 +169,8 @@ pub const TaskGroupConfig = struct {
 
 ## API
 
+![TaskManager API](uml/task_manager_api.png)
+
 ```zig
 pub fn TaskManager(comptime Registry: type, comptime Entity: type) type {
     return struct {
@@ -290,6 +265,8 @@ task_manager.completeTask(task);
 
 ### Task Group: Kitchen
 
+![Kitchen Example](uml/kitchen_example.png)
+
 ```zig
 // Define kitchen steps
 const kitchen_steps = [_]StepDef{
@@ -332,6 +309,8 @@ task_manager.completeGroupCycle(kitchen);  // Goes back to Blocked
 ```
 
 ### Handling Interrupts
+
+![Interrupt Flow](uml/interrupt_flow.png)
 
 ```zig
 // Enemy appears, worker needs to fight
