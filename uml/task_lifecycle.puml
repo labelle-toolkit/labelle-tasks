@@ -1,0 +1,34 @@
+@startuml task_lifecycle
+title Standalone Task Lifecycle
+
+[*] --> Queued : create task
+
+Queued --> Active : assign worker
+Active --> Completed : complete
+Active --> Cancelled : cancel
+
+Completed --> [*]
+Cancelled --> [*]
+
+note right of Queued
+  Task waiting for a worker
+  to pick it up
+end note
+
+note right of Active
+  Worker is executing
+  the task
+end note
+
+note right of Completed
+  Task finished successfully
+  Entity can be removed
+end note
+
+note right of Cancelled
+  Task terminated
+  Resources released
+  Game handles consequences
+end note
+
+@enduml

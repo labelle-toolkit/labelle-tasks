@@ -1,0 +1,47 @@
+@startuml kitchen_example
+title Kitchen Task Group - Example Flow
+
+participant "Game Loop" as game
+participant "TaskManager" as tm
+participant "Kitchen Group" as kitchen
+participant "Worker" as worker
+
+== Initialization ==
+game -> kitchen : create(status=Blocked)
+game -> kitchen : add GroupSteps\n[Pickup, Pickup, Cook, Store]
+
+== Unblock Check ==
+game -> tm : updateBlockedGroups(canUnblock)
+tm -> kitchen : canUnblock?
+note right: Check ingredients\nand storage space
+kitchen --> tm : true
+tm -> kitchen : status = Queued
+
+== Worker Assignment ==
+game -> tm : assignBestGroup(worker, scorer)
+tm -> kitchen : score for worker?
+kitchen --> tm : 85.0
+tm -> kitchen : status = Active
+tm -> worker : add CurrentGroup
+tm -> kitchen : add GroupAssignedTo
+
+== Step Execution ==
+loop for each step
+  worker -> game : execute current step
+  game -> tm : advanceGroupStep(kitchen)
+  tm -> kitchen : current_index++
+end
+
+== Cycle Complete ==
+game -> tm : completeGroupCycle(kitchen)
+tm -> worker : remove CurrentGroup
+tm -> kitchen : remove GroupAssignedTo
+tm -> kitchen : status = Blocked
+tm -> kitchen : current_index = 0
+
+note over kitchen
+  Kitchen cycles back to Blocked
+  waiting for more ingredients
+end note
+
+@enduml

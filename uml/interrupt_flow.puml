@@ -1,0 +1,48 @@
+@startuml interrupt_flow
+title Task Interruption Flow
+
+participant "Game" as game
+participant "TaskManager" as tm
+participant "Worker" as worker
+participant "Current Task/Group" as current
+participant "Fight Task" as fight
+
+== Worker is executing a task ==
+worker -> current : executing...
+
+== Enemy Appears ==
+game -> game : detect enemy
+game -> fight : create(priority=Critical)
+
+== Check Interrupt ==
+game -> tm : canInterrupt(current, Critical)
+tm -> current : check interrupt_level
+alt interrupt_level < Critical
+  tm --> game : true
+else interrupt_level = Atomic
+  tm --> game : false
+  note right: Cannot interrupt\natomic tasks
+end
+
+== Interrupt Approved ==
+alt current is Standalone Task
+  game -> tm : cancelTask(current)
+  tm -> current : status = Cancelled
+  tm -> tm : releaseAll(current)
+  tm -> worker : remove CurrentTask
+  game -> game : handle consequences\n(drop items, etc.)
+else current is Task Group
+  game -> tm : releaseWorkerFromGroup(current)
+  tm -> current : status = Queued
+  tm -> worker : remove CurrentGroup
+  note right: Group goes back to Queued\nAnother worker can pick it up
+end
+
+== Assign Fight ==
+game -> tm : assignBestTask(worker, fightScorer)
+tm -> fight : status = Active
+tm -> worker : add CurrentTask(fight)
+
+worker -> fight : execute fight
+
+@enduml

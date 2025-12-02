@@ -1,0 +1,34 @@
+@startuml task_group_lifecycle
+title Task Group Lifecycle
+
+[*] --> Blocked : create group
+
+Blocked --> Queued : conditions met\n(canUnblock = true)
+Queued --> Active : assign worker
+Active --> Queued : interrupted\n(worker released)
+Active --> Blocked : cycle done\n(all steps completed)
+Queued --> Blocked : conditions no longer met
+
+note right of Blocked
+  Waiting for conditions:
+  - ingredients available
+  - storage space
+  - etc.
+end note
+
+note right of Queued
+  Conditions met
+  Waiting for worker
+end note
+
+note right of Active
+  Worker assigned
+  Executing steps sequentially
+end note
+
+note bottom of Blocked
+  Groups never complete.
+  They cycle indefinitely.
+end note
+
+@enduml

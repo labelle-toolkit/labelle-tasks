@@ -1,0 +1,46 @@
+@startuml task_manager_api
+title TaskManager API
+
+class TaskManager<Registry, Entity> {
+  registry: *Registry
+  --
+  **Standalone Task Assignment**
+  assignBestTask(worker, scorer): ?Entity
+  --
+  **Standalone Task Lifecycle**
+  cancelTask(task): void
+  completeTask(task): void
+  --
+  **Task Group Assignment**
+  assignBestGroup(worker, scorer): ?Entity
+  releaseWorkerFromGroup(group): void
+  --
+  **Task Group Lifecycle**
+  updateBlockedGroups(canUnblock): void
+  advanceGroupStep(group): void
+  completeGroupCycle(group): void
+  --
+  **Queries**
+  canInterrupt(entity, priority): bool
+  currentGroupStep(group): ?u8
+  --
+  **Reservations**
+  reserve(task_or_group, resource): !void
+  release(task_or_group, resource): void
+  releaseAll(task_or_group): void
+}
+
+interface "Callbacks" as callbacks {
+  taskScorer(registry, worker, task): ?f32
+  groupScorer(registry, worker, group): ?f32
+  canUnblock(registry, group): bool
+}
+
+TaskManager ..> callbacks : uses
+
+note right of callbacks
+  User-provided functions
+  to customize behavior
+end note
+
+@enduml
