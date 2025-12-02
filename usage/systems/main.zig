@@ -76,66 +76,79 @@ const Resources = struct {
 };
 
 // ============================================================================
-// System Configuration
+// System Callbacks
 // ============================================================================
 
 var g_resources: Resources = .{};
 var g_tick: u32 = 0;
 
-const SystemConfig = struct {
-    pub const GroupComponent = KitchenGroup;
-    pub const WorkerComponent = Worker;
-    pub const AssignedComponent = AssignedToGroup;
-    pub const GroupAssignedComponent = GroupAssignedWorker;
+fn canUnblock(reg: *Registry, entity: Entity) bool {
+    _ = reg;
+    _ = entity;
+    // Check if resources are available
+    return g_resources.ingredients_available and
+        g_resources.stove_available and
+        g_resources.storage_available;
+}
 
-    pub fn canUnblock(reg: *Registry, entity: Entity) bool {
-        _ = reg;
-        _ = entity;
-        // Check if resources are available
-        return g_resources.ingredients_available and
-            g_resources.stove_available and
-            g_resources.storage_available;
-    }
+fn isWorkerIdle(reg: *Registry, entity: Entity) bool {
+    const worker = reg.get(Worker, entity);
+    return worker.state == .Idle;
+}
 
-    pub fn isWorkerIdle(reg: *Registry, entity: Entity) bool {
-        const worker = reg.get(Worker, entity);
-        return worker.state == .Idle;
-    }
+fn onAssigned(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
+    const worker = reg.get(Worker, worker_entity);
+    const worker_name = reg.get(Name, worker_entity);
+    _ = group_entity;
 
-    pub fn onAssigned(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
-        const worker = reg.get(Worker, worker_entity);
-        const worker_name = reg.get(Name, worker_entity);
-        _ = group_entity;
+    worker.state = .Working;
+    std.debug.print("[Tick {d:3}] {s} assigned to kitchen group\n", .{ g_tick, worker_name.value });
+}
 
-        worker.state = .Working;
-        std.debug.print("[Tick {d:3}] {s} assigned to kitchen group\n", .{ g_tick, worker_name.value });
-    }
+fn shouldContinue(reg: *Registry, worker_entity: Entity, group_entity: Entity) bool {
+    const worker = reg.get(Worker, worker_entity);
+    _ = group_entity;
 
-    pub fn shouldContinue(reg: *Registry, worker_entity: Entity, group_entity: Entity) bool {
-        const worker = reg.get(Worker, worker_entity);
-        _ = group_entity;
+    // Worker continues if they haven't reached max cycles
+    return worker.cycles_completed < worker.max_cycles;
+}
 
-        // Worker continues if they haven't reached max cycles
-        return worker.cycles_completed < worker.max_cycles;
-    }
+fn setWorkerIdle(reg: *Registry, worker_entity: Entity) void {
+    const worker = reg.get(Worker, worker_entity);
+    worker.state = .Idle;
+}
 
-    pub fn setWorkerIdle(reg: *Registry, worker_entity: Entity) void {
-        const worker = reg.get(Worker, worker_entity);
-        worker.state = .Idle;
-    }
+fn onReleased(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
+    const worker_name = reg.get(Name, worker_entity);
+    _ = group_entity;
 
-    pub fn onReleased(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
-        const worker_name = reg.get(Name, worker_entity);
-        _ = group_entity;
+    std.debug.print("[Tick {d:3}] {s} released from group (finished all cycles)\n", .{ g_tick, worker_name.value });
+}
 
-        std.debug.print("[Tick {d:3}] {s} released from group (finished all cycles)\n", .{ g_tick, worker_name.value });
-    }
-};
+// Instantiate the systems with comptime parameters
+const BlockedSystem = tasks.BlockedToQueuedSystem(
+    KitchenGroup,
+    GroupAssignedWorker,
+    canUnblock,
+);
 
-// Instantiate the systems with our config
-const BlockedSystem = tasks.BlockedToQueuedSystem(SystemConfig);
-const AssignmentSystem = tasks.WorkerAssignmentSystem(SystemConfig);
-const CompletionSystem = tasks.GroupCompletionSystem(SystemConfig);
+const AssignmentSystem = tasks.WorkerAssignmentSystem(
+    KitchenGroup,
+    Worker,
+    AssignedToGroup,
+    GroupAssignedWorker,
+    isWorkerIdle,
+    onAssigned,
+);
+
+const CompletionSystem = tasks.GroupCompletionSystem(
+    KitchenGroup,
+    AssignedToGroup,
+    GroupAssignedWorker,
+    shouldContinue,
+    setWorkerIdle,
+    onReleased,
+);
 
 // ============================================================================
 // Step Processing (user-defined work logic)
