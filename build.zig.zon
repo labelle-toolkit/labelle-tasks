@@ -1,0 +1,20 @@
+.{
+    .name = .labelle_tasks,
+    .version = "0.0.1",
+    .fingerprint = 0x98836923cbb94d87,
+    .dependencies = .{
+        .zspec = .{
+            .url = "https://github.com/apotema/zspec/archive/refs/heads/main.tar.gz",
+            .hash = "zspec-0.3.0-jaKLbbqZAgAB-MBfy6M3HKB3jSTQ-TsNW9OxpLhLlav5",
+        },
+        .@"zig-ecs" = .{
+            .url = "https://github.com/prime31/zig-ecs/archive/refs/heads/master.tar.gz",
+            .hash = "entt-1.0.0-qJPtbNLVAgDPXaUbyRSsBTK75Cr1WujUA92kToJugWry",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
