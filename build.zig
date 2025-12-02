@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("zspec", zspec_dep.module("zspec"));
     test_mod.addImport("labelle_tasks", lib_mod);
+    test_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_mod,

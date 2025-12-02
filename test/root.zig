@@ -7,6 +7,7 @@ pub const task_spec = @import("task_spec.zig");
 pub const task_group_spec = @import("task_group_spec.zig");
 pub const group_steps_spec = @import("group_steps_spec.zig");
 pub const can_interrupt_spec = @import("can_interrupt_spec.zig");
+pub const systems_spec = @import("systems_spec.zig");
 
 test {
     zspec.runAll(@This());
