@@ -1,0 +1,49 @@
+@startuml workstation_lifecycle
+title Workstation Status Lifecycle
+
+[*] --> Blocked : addWorkstation()
+
+Blocked --> Queued : notifyResourcesAvailable()\n(no worker assigned)
+Blocked --> Active : notifyResourcesAvailable()\n(worker already assigned)
+Queued --> Active : worker assigned\n(via findBestWorker)
+Active --> Blocked : cycle complete\n(shouldContinue = true)
+Active --> Blocked : worker released\n(shouldContinue = false)
+Queued --> Blocked : worker abandons\nor becomes busy
+
+Blocked --> [*] : removeWorkstation()
+Queued --> [*] : removeWorkstation()
+Active --> [*] : removeWorkstation()
+
+note right of Blocked
+  Waiting for conditions:
+  - ingredients available
+  - storage space
+  - etc.
+
+  Game calls notifyResourcesAvailable()
+  when conditions are met.
+end note
+
+note right of Queued
+  Conditions met
+  Waiting for idle worker
+
+  Engine will call findBestWorker
+  when workers become available.
+end note
+
+note right of Active
+  Worker assigned
+  Executing steps sequentially
+
+  Game calls notifyStepComplete()
+  after each step.
+end note
+
+note bottom of Blocked
+  Workstations cycle indefinitely.
+  Step progress is preserved when
+  worker is released or abandons.
+end note
+
+@enduml

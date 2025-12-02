@@ -1,166 +1,122 @@
-//! Fully Event-Driven Task Runner Example
+//! Multi-Cycle Engine Example
 //!
-//! Demonstrates the event-driven TaskRunner that uses zig-ecs signals
-//! with NO polling whatsoever.
+//! Demonstrates the Engine API with worker cycling:
+//! - Worker completes multiple cycles at a workstation
+//! - shouldContinue callback controls when worker continues
+//! - Worker is released after max cycles
 //!
-//! **Key features:**
-//! - `signalResourcesAvailable()` triggers Blocked → Queued → assignment
-//! - `signalWorkerIdle()` triggers worker → group assignment
-//! - `completeStep()` advances to next step
-//! - `tick()` does NOTHING - all transitions are event-driven!
-//!
-//! Uses standard components from the library:
-//! - tasks.Worker (with Idle/Working/Blocked states)
-//! - tasks.AssignedToGroup
-//! - tasks.GroupAssignedWorker
+//! This replaces the ECS event-driven example with the simpler Engine API.
 
 const std = @import("std");
-const ecs = @import("ecs");
 const tasks = @import("labelle_tasks");
 
-const Priority = tasks.Priority;
-const TaskGroupStatus = tasks.TaskGroupStatus;
 const StepType = tasks.StepType;
 const StepDef = tasks.StepDef;
-const GroupSteps = tasks.GroupSteps;
-const Worker = tasks.Worker;
-const WorkerState = tasks.WorkerState;
-const AssignedToGroup = tasks.AssignedToGroup;
-const GroupAssignedWorker = tasks.GroupAssignedWorker;
-
-const Registry = ecs.Registry;
-const Entity = ecs.Entity;
+const Priority = tasks.Priority;
 
 // ============================================================================
-// User Components
+// Game Entity IDs
 // ============================================================================
 
-const Name = struct {
-    value: []const u8,
-};
+const GameEntityId = u32;
 
-// Extra worker data (beyond the standard Worker component)
-const ChefData = struct {
-    cycles_completed: u32 = 0,
-    max_cycles: u32 = 2,
-};
-
-const KitchenGroup = struct {
-    status: TaskGroupStatus = .Blocked,
-    priority: Priority,
-    steps: GroupSteps,
-
-    const kitchen_steps = [_]StepDef{
-        .{ .type = .Pickup },
-        .{ .type = .Cook },
-        .{ .type = .Store },
-    };
-
-    pub fn init(priority: Priority) KitchenGroup {
-        return .{
-            .status = .Blocked,
-            .priority = priority,
-            .steps = GroupSteps.init(&kitchen_steps),
-        };
-    }
-};
+const CHEF_MARIO: GameEntityId = 1;
+const KITCHEN: GameEntityId = 100;
 
 // ============================================================================
-// Simulation State
+// Game State
 // ============================================================================
 
 var g_tick: u32 = 0;
+var g_work_timers: std.AutoHashMap(GameEntityId, u32) = undefined;
+var g_cycles_completed: u32 = 0;
+const MAX_CYCLES: u32 = 2;
 
-// Track pending work (in real game, this would be timers/movement system)
-var g_worker_with_pending_step: ?Entity = null;
-var g_step_ticks_remaining: u32 = 0;
+fn initGameState(allocator: std.mem.Allocator) void {
+    g_work_timers = std.AutoHashMap(GameEntityId, u32).init(allocator);
+    g_cycles_completed = 0;
+}
+
+fn deinitGameState() void {
+    g_work_timers.deinit();
+}
 
 // ============================================================================
 // Callbacks
 // ============================================================================
 
-/// Called once when a step BEGINS (not every tick!).
-/// In a real game, this would start a timer, movement, or animation.
-fn startStep(reg: *Registry, worker_entity: Entity, group_entity: Entity, step: StepDef) void {
-    const worker_name = reg.get(Name, worker_entity);
-    const chef_data = reg.get(ChefData, worker_entity);
-    const group = reg.get(KitchenGroup, group_entity);
+fn findBestWorker(
+    workstation_id: GameEntityId,
+    step: StepType,
+    available_workers: []const GameEntityId,
+) ?GameEntityId {
+    _ = workstation_id;
+    _ = step;
+    if (available_workers.len > 0) {
+        return available_workers[0];
+    }
+    return null;
+}
 
-    std.debug.print("[Tick {d:3}] {s} STARTING: {s}\n", .{
+fn onStepStarted(
+    worker_id: GameEntityId,
+    workstation_id: GameEntityId,
+    step: StepDef,
+) void {
+    _ = worker_id;
+    _ = workstation_id;
+
+    std.debug.print("[Tick {d:3}] Chef Mario STARTING: {s}\n", .{
         g_tick,
-        worker_name.value,
         @tagName(step.type),
     });
 
-    // Simulate work taking time (in real game: start timer/movement)
-    g_worker_with_pending_step = worker_entity;
-    g_step_ticks_remaining = switch (step.type) {
-        .Pickup => 1, // 1 tick to pickup
-        .Cook => 2, // 2 ticks to cook
-        .Store => 1, // 1 tick to store
-        else => 1,
+    // Simulate work taking time
+    const ticks: u32 = switch (step.type) {
+        .Pickup => 1,
+        .Cook => 2,
+        .Store => 1,
+        .Craft => 1,
     };
+    g_work_timers.put(CHEF_MARIO, ticks) catch {};
+}
 
-    // Check if this is the last step (will complete a cycle)
-    if (group.steps.current_index == group.steps.steps.len - 1) {
-        chef_data.cycles_completed += 1;
+fn onStepCompleted(
+    worker_id: GameEntityId,
+    workstation_id: GameEntityId,
+    step: StepDef,
+) void {
+    _ = worker_id;
+    _ = workstation_id;
+
+    std.debug.print("[Tick {d:3}] Chef Mario FINISHED step\n", .{g_tick});
+
+    // Track cycles when last step completes
+    if (step.type == .Store) {
+        g_cycles_completed += 1;
     }
 }
 
-fn shouldContinue(reg: *Registry, worker_entity: Entity, group_entity: Entity) bool {
-    _ = group_entity;
-    const chef_data = reg.get(ChefData, worker_entity);
-    return chef_data.cycles_completed < chef_data.max_cycles;
-}
-
-fn onReleased(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
-    _ = group_entity;
-    const worker_name = reg.get(Name, worker_entity);
-    const chef_data = reg.get(ChefData, worker_entity);
-    std.debug.print("[Tick {d:3}] {s} released (completed {d} cycles)\n", .{
+fn onWorkerReleased(
+    worker_id: GameEntityId,
+    workstation_id: GameEntityId,
+) void {
+    _ = worker_id;
+    _ = workstation_id;
+    std.debug.print("[Tick {d:3}] Chef Mario released (completed {d} cycles)\n", .{
         g_tick,
-        worker_name.value,
-        chef_data.cycles_completed,
+        g_cycles_completed,
     });
 }
 
-// ============================================================================
-// Task Runner
-// ============================================================================
-
-const KitchenRunner = tasks.TaskRunner(
-    KitchenGroup,
-    startStep,
-    shouldContinue,
-    onReleased,
-);
-
-// ============================================================================
-// Simulated Game Systems
-// ============================================================================
-
-/// Simulates timers/movement completing.
-/// In a real game, your timer system or movement system would call completeStep.
-fn simulateWorkCompletion(reg: *Registry) void {
-    if (g_worker_with_pending_step) |worker| {
-        if (g_step_ticks_remaining > 0) {
-            g_step_ticks_remaining -= 1;
-            if (g_step_ticks_remaining == 0) {
-                const worker_name = reg.get(Name, worker);
-                std.debug.print("[Tick {d:3}] {s} FINISHED step\n", .{ g_tick, worker_name.value });
-
-                // Signal completion via the event system
-                // Note: completeStep triggers startStep for next step, which may set
-                // g_worker_with_pending_step again. Only clear if no more steps.
-                KitchenRunner.completeStep(reg, worker);
-
-                // If startStep wasn't called (no more steps), clear the pending worker
-                if (g_step_ticks_remaining == 0) {
-                    g_worker_with_pending_step = null;
-                }
-            }
-        }
-    }
+fn shouldContinue(
+    workstation_id: GameEntityId,
+    worker_id: GameEntityId,
+    cycles_completed: u32,
+) bool {
+    _ = workstation_id;
+    _ = worker_id;
+    return cycles_completed < MAX_CYCLES;
 }
 
 // ============================================================================
@@ -170,14 +126,13 @@ fn simulateWorkCompletion(reg: *Registry) void {
 pub fn main() !void {
     std.debug.print("\n", .{});
     std.debug.print("========================================\n", .{});
-    std.debug.print("  FULLY EVENT-DRIVEN TASK RUNNER        \n", .{});
+    std.debug.print("  MULTI-CYCLE ENGINE EXAMPLE            \n", .{});
     std.debug.print("========================================\n\n", .{});
 
-    std.debug.print("This example demonstrates FULLY EVENT-DRIVEN execution:\n", .{});
-    std.debug.print("- signalResourcesAvailable() triggers Blocked -> assignment\n", .{});
-    std.debug.print("- startStep() called ONCE when step begins\n", .{});
-    std.debug.print("- completeStep() advances to next step\n", .{});
-    std.debug.print("- tick() does NOTHING - completely event-driven!\n\n", .{});
+    std.debug.print("This example demonstrates:\n", .{});
+    std.debug.print("- Worker completing multiple cycles\n", .{});
+    std.debug.print("- shouldContinue callback for cycle control\n", .{});
+    std.debug.print("- Worker release after max cycles\n\n", .{});
 
     std.debug.print("Step durations: Pickup=1, Cook=2, Store=1\n\n", .{});
 
@@ -185,82 +140,109 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var reg = Registry.init(allocator);
-    defer reg.deinit();
+    initGameState(allocator);
+    defer deinitGameState();
 
-    // IMPORTANT: Set up event handlers before creating entities
-    KitchenRunner.setup(&reg);
+    // ========================================================================
+    // Initialize Engine
+    // ========================================================================
 
-    // Create a worker with standard Worker component + custom ChefData
-    const chef = reg.create();
-    reg.add(chef, Name{ .value = "Chef Mario" });
-    reg.add(chef, Worker{}); // Standard component from library
-    reg.add(chef, ChefData{ .max_cycles = 2 }); // Custom data
+    var engine = tasks.Engine(GameEntityId).init(allocator);
+    defer engine.deinit();
 
-    // Create a kitchen group
-    const group = reg.create();
-    reg.add(group, KitchenGroup.init(.Normal));
+    engine.setFindBestWorker(findBestWorker);
+    engine.setOnStepStarted(onStepStarted);
+    engine.setOnStepCompleted(onStepCompleted);
+    engine.setOnWorkerReleased(onWorkerReleased);
+    engine.setShouldContinue(shouldContinue);
+
+    // ========================================================================
+    // Register Entities
+    // ========================================================================
 
     std.debug.print("Setup:\n", .{});
     std.debug.print("- Chef Mario (max 2 cycles)\n", .{});
-    std.debug.print("- Kitchen group (3 steps: Pickup -> Cook -> Store)\n\n", .{});
+    std.debug.print("- Kitchen (3 steps: Pickup -> Cook -> Store)\n\n", .{});
 
-    // IMPORTANT: Signal that resources are available to start the workflow
-    // This is the event that kicks everything off!
+    _ = engine.addWorker(CHEF_MARIO, .{});
+
+    const kitchen_steps = [_]StepDef{
+        .{ .type = .Pickup },
+        .{ .type = .Cook },
+        .{ .type = .Store },
+    };
+
+    _ = engine.addWorkstation(KITCHEN, .{
+        .steps = &kitchen_steps,
+        .priority = .Normal,
+    });
+
+    // ========================================================================
+    // Simulate
+    // ========================================================================
+
     std.debug.print("[Tick   0] Signaling resources available...\n", .{});
-    KitchenRunner.signalResourcesAvailable(&reg, group);
+    engine.notifyResourcesAvailable(KITCHEN);
 
-    // Run simulation
     const max_ticks = 30;
     while (g_tick < max_ticks) {
         g_tick += 1;
 
-        // tick() does NOTHING in event-driven mode!
-        // We call it here just to show it's safe to call, but it's not needed.
-        KitchenRunner.tick(&reg);
+        // Simulate work completion
+        var workers_to_complete: [1]GameEntityId = undefined;
+        var num_to_complete: usize = 0;
 
-        // Simulate work completion (timer/movement system)
-        simulateWorkCompletion(&reg);
+        var timer_iter = g_work_timers.iterator();
+        while (timer_iter.next()) |entry| {
+            const remaining = entry.value_ptr.*;
+            if (remaining > 1) {
+                entry.value_ptr.* = remaining - 1;
+            } else if (remaining == 1) {
+                workers_to_complete[num_to_complete] = entry.key_ptr.*;
+                num_to_complete += 1;
+            }
+        }
 
-        // If a cycle completed and worker continues, signal resources available again
-        const group_comp = reg.get(KitchenGroup, group);
-        const chef_data = reg.get(ChefData, chef);
-        if (group_comp.status == .Blocked and
-            reg.tryGet(GroupAssignedWorker, group) != null and
-            chef_data.cycles_completed < chef_data.max_cycles)
-        {
+        for (workers_to_complete[0..num_to_complete]) |worker| {
+            _ = g_work_timers.remove(worker);
+            engine.notifyStepComplete(worker);
+        }
+
+        // If cycle completed and worker continues, signal resources
+        const status = engine.getWorkstationStatus(KITCHEN);
+        if (status == .Blocked and engine.getAssignedWorker(KITCHEN) != null) {
             std.debug.print("[Tick {d:3}] Cycle done, signaling resources for next cycle...\n", .{g_tick});
-            KitchenRunner.signalResourcesAvailable(&reg, group);
+            engine.notifyResourcesAvailable(KITCHEN);
         }
 
         // Check if done
-        const worker = reg.get(Worker, chef);
-        if (worker.state == .Idle and chef_data.cycles_completed >= chef_data.max_cycles) {
+        const worker_state = engine.getWorkerState(CHEF_MARIO);
+        if (worker_state == .Idle and g_cycles_completed >= MAX_CYCLES) {
             std.debug.print("\n[Tick {d:3}] Simulation complete!\n", .{g_tick});
             break;
         }
     }
 
-    // Final assertions
+    // ========================================================================
+    // Assertions
+    // ========================================================================
+
     std.debug.print("\n--- Assertions ---\n", .{});
 
-    const final_worker = reg.get(Worker, chef);
-    const final_chef = reg.get(ChefData, chef);
-    const final_group = reg.get(KitchenGroup, group);
-
-    std.debug.print("Worker cycles completed: {d}\n", .{final_chef.cycles_completed});
-    std.debug.assert(final_chef.cycles_completed == 2);
+    std.debug.print("Worker cycles completed: {d}\n", .{g_cycles_completed});
+    std.debug.assert(g_cycles_completed == 2);
     std.debug.print("[PASS] Worker completed 2 cycles\n", .{});
 
-    std.debug.assert(final_worker.state == .Idle);
+    const final_worker = engine.getWorkerState(CHEF_MARIO);
+    std.debug.assert(final_worker == .Idle);
     std.debug.print("[PASS] Worker is idle after completion\n", .{});
 
-    std.debug.assert(final_group.status == .Blocked);
-    std.debug.print("[PASS] Group is blocked (waiting for next worker)\n", .{});
+    const final_status = engine.getWorkstationStatus(KITCHEN);
+    std.debug.assert(final_status == .Blocked);
+    std.debug.print("[PASS] Workstation is blocked (waiting for resources)\n", .{});
 
-    // Worker should be unassigned
-    const has_assignment = reg.tryGet(AssignedToGroup, chef) != null;
-    std.debug.assert(!has_assignment);
+    const assigned = engine.getAssignedWorker(KITCHEN);
+    std.debug.assert(assigned == null);
     std.debug.print("[PASS] Worker is unassigned\n", .{});
 
     std.debug.print("\n========================================\n", .{});

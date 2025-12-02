@@ -10,19 +10,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const ecs_dep = b.dependency("zig-ecs", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     // Main library module
     const lib_mod = b.addModule("labelle-tasks", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{
-            .{ .name = "ecs", .module = ecs_dep.module("zig-ecs") },
-        },
     });
 
     // Library artifact
@@ -32,9 +24,6 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "ecs", .module = ecs_dep.module("zig-ecs") },
-            },
         }),
     });
     b.installArtifact(lib);
@@ -47,7 +36,6 @@ pub fn build(b: *std.Build) void {
     });
     test_mod.addImport("zspec", zspec_dep.module("zspec"));
     test_mod.addImport("labelle_tasks", lib_mod);
-    test_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_mod,
@@ -63,14 +51,13 @@ pub fn build(b: *std.Build) void {
     // Usage Examples
     // ========================================================================
 
-    // Simple example - demonstrates Task, TaskStatus, Priority, InterruptLevel
+    // Simple example - demonstrates priority-based workstation selection
     const simple_mod = b.createModule(.{
         .root_source_file = b.path("usage/simple/main.zig"),
         .target = target,
         .optimize = optimize,
     });
     simple_mod.addImport("labelle_tasks", lib_mod);
-    simple_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
 
     const simple_example = b.addExecutable(.{
         .name = "simple_example",
@@ -79,17 +66,16 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(simple_example);
 
     const run_simple = b.addRunArtifact(simple_example);
-    const simple_step = b.step("simple", "Run the simple task example");
+    const simple_step = b.step("simple", "Run the simple example");
     simple_step.dependOn(&run_simple.step);
 
-    // Kitchen example - demonstrates TaskGroup, GroupSteps, multi-step workflows
+    // Kitchen example - demonstrates multi-step workflows with priority
     const kitchen_mod = b.createModule(.{
         .root_source_file = b.path("usage/kitchen/main.zig"),
         .target = target,
         .optimize = optimize,
     });
     kitchen_mod.addImport("labelle_tasks", lib_mod);
-    kitchen_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
 
     const kitchen_example = b.addExecutable(.{
         .name = "kitchen_example",
@@ -108,7 +94,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     abandonment_mod.addImport("labelle_tasks", lib_mod);
-    abandonment_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
 
     const abandonment_example = b.addExecutable(.{
         .name = "abandonment_example",
@@ -120,29 +105,47 @@ pub fn build(b: *std.Build) void {
     const abandonment_step = b.step("abandonment", "Run the worker abandonment example");
     abandonment_step.dependOn(&run_abandonment.step);
 
-    // Systems example - demonstrates ECS systems for automatic state management
-    const systems_mod = b.createModule(.{
+    // Multi-cycle example - demonstrates shouldContinue callback
+    const multicycle_mod = b.createModule(.{
         .root_source_file = b.path("usage/systems/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    systems_mod.addImport("labelle_tasks", lib_mod);
-    systems_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
+    multicycle_mod.addImport("labelle_tasks", lib_mod);
 
-    const systems_example = b.addExecutable(.{
-        .name = "systems_example",
-        .root_module = systems_mod,
+    const multicycle_example = b.addExecutable(.{
+        .name = "multicycle_example",
+        .root_module = multicycle_mod,
     });
-    b.installArtifact(systems_example);
+    b.installArtifact(multicycle_example);
 
-    const run_systems = b.addRunArtifact(systems_example);
-    const systems_step = b.step("systems", "Run the ECS systems example");
-    systems_step.dependOn(&run_systems.step);
+    const run_multicycle = b.addRunArtifact(multicycle_example);
+    const multicycle_step = b.step("multicycle", "Run the multi-cycle example");
+    multicycle_step.dependOn(&run_multicycle.step);
+
+    // Multi-worker example - demonstrates two workers on two workstations
+    const multiworker_mod = b.createModule(.{
+        .root_source_file = b.path("usage/engine/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    multiworker_mod.addImport("labelle_tasks", lib_mod);
+
+    const multiworker_example = b.addExecutable(.{
+        .name = "multiworker_example",
+        .root_module = multiworker_mod,
+    });
+    b.installArtifact(multiworker_example);
+
+    const run_multiworker = b.addRunArtifact(multiworker_example);
+    const multiworker_step = b.step("multiworker", "Run the multi-worker example");
+    multiworker_step.dependOn(&run_multiworker.step);
 
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_simple.step);
     examples_step.dependOn(&run_kitchen.step);
     examples_step.dependOn(&run_abandonment.step);
-    examples_step.dependOn(&run_systems.step);
+    examples_step.dependOn(&run_multicycle.step);
+    examples_step.dependOn(&run_multiworker.step);
 }

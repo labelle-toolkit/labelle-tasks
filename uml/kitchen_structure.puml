@@ -1,49 +1,48 @@
 @startuml kitchen_structure
-title Kitchen Structure - Full Storage Flow
+title Kitchen Workstation - Structure
 
-package "Game World (External Inputs)" {
-  storage "Meat Storage A" as meat_a
-  storage "Meat Storage B" as meat_b
-  storage "Vegetable Storage" as veg_ext
+package "Game World" {
+  storage "Ingredient Storage" as ingredients
+  storage "Food Storage" as food_storage
 }
 
-package "Kitchen (Task Group)" {
-  package "Internal Input Storages" {
-    storage "Internal Meat Slot" as meat_internal
-    storage "Internal Vegetable Slot" as veg_internal
-  }
+package "Kitchen Workstation" {
+  node "Cooking Station" as cooking
 
-  node "Cooking Station\n(Workstation)" as cooking
-
-  package "Internal Output Storage" {
-    storage "Cooked Food Slot" as food_internal
-  }
+  note bottom of cooking
+    Workstation with steps:
+    1. Pickup (get ingredients)
+    2. Cook (process at station)
+    3. Store (put finished food)
+  end note
 }
 
-package "Game World (External Outputs)" {
-  storage "Food Storage A" as food_a
-  storage "Tavern Storage" as tavern
-}
+actor "Chef" as chef
 
-meat_a ..> meat_internal : <color:gray>Fill (if available)</color>
-meat_b ..> meat_internal : <color:green>Fill</color>
-veg_ext ..> veg_internal : Fill
+ingredients ..> cooking : <color:green>Step 1: Pickup</color>
+chef --> cooking : <color:blue>Step 2: Cook</color>
+cooking ..> food_storage : <color:orange>Step 3: Store</color>
 
-meat_internal --> cooking : ingredients
-veg_internal --> cooking : ingredients
-cooking --> food_internal : produces
+note right of chef
+  Worker registered with Engine
+  via addWorker(chef_id, {})
 
-food_internal ..> food_a : <color:green>Store</color>
-food_internal ..> tavern : <color:gray>Store (alternative)</color>
-
-note bottom of meat_a
-  Source resolved dynamically
-  via findSource callback
+  Engine assigns chef to kitchen
+  when resources available.
 end note
 
-note bottom of food_a
-  Destination resolved dynamically
-  via findDestination callback
+note bottom of ingredients
+  Game determines when
+  ingredients are available
+  and calls:
+  notifyResourcesAvailable()
+end note
+
+note bottom of food_storage
+  Game handles actual item
+  movement via callbacks:
+  onStepStarted()
+  onStepCompleted()
 end note
 
 @enduml

@@ -1,0 +1,32 @@
+@startuml worker_lifecycle
+title Worker State Lifecycle
+
+[*] --> Idle : addWorker()
+
+Idle --> Working : assigned to workstation
+Working --> Idle : released\n(cycle complete)
+Working --> Blocked : notifyWorkerBusy()
+Blocked --> Idle : notifyWorkerIdle()
+Idle --> Idle : abandonWork()
+
+Idle --> [*] : removeWorker()
+Working --> [*] : removeWorker()
+Blocked --> [*] : removeWorker()
+
+note right of Idle
+  Available for assignment
+  to queued workstations
+end note
+
+note right of Working
+  Executing steps at
+  assigned workstation
+end note
+
+note right of Blocked
+  Temporarily unavailable
+  (fighting, sleeping, etc.)
+  Released from workstation
+end note
+
+@enduml

@@ -1,48 +1,52 @@
 @startuml step_def
-title StepDef - Dynamic Resolution
+title StepDef - Step Definition
 
 class StepDef <<struct>> {
   type: StepType
-  target: Entity
 }
 
 enum StepType {
-  Fill
-  Work
+  Pickup
+  Cook
   Store
+  Craft
 }
 
-class GroupSteps <<component>> {
+class Workstation <<internal>> {
   steps: []const StepDef
-  current_index: u8
+  current_step: u8
 }
 
 interface "Callbacks" as callbacks {
-  findSource(registry, target): ?Entity
-  findDestination(registry, source): ?Entity
-  canUnblock(registry, group): bool
-  groupScorer(registry, worker, group): ?f32
+  OnStepStartedFn(worker, ws, step): void
+  OnStepCompletedFn(worker, ws, step): void
 }
 
-GroupSteps --> StepDef : contains
+Workstation --> StepDef : contains
 StepDef --> StepType : has
 
 note right of StepDef
-  target meaning depends on StepType:
+  Steps define what type of work
+  happens at a workstation.
 
-  Fill: target = destination (internal input)
-        source = resolved via findSource
-
-  Work: target = workstation
-
-  Store: target = source (internal output)
-         destination = resolved via findDestination
+  The game handles the actual
+  execution (movement, animation)
+  via callbacks.
 end note
 
 note bottom of StepType
-  Fill:  dynamic source → fixed target
-  Work:  work at target workstation
-  Store: fixed source → dynamic destination
+  Pickup: Get items from source
+  Cook: Process at workstation
+  Store: Put items to destination
+  Craft: Create new items
+end note
+
+note right of callbacks
+  Game receives step info
+  and handles execution:
+  - Start movement/animation
+  - Play sounds
+  - Update UI
 end note
 
 @enduml

@@ -1,4 +1,4 @@
-//! Worker Abandonment Example
+//! Worker Abandonment Engine Example
 //!
 //! Demonstrates task group continuation after worker abandonment:
 //! - Worker starts a multi-step task group
@@ -6,39 +6,30 @@
 //! - Group keeps its current step (doesn't reset)
 //! - New worker continues from where the previous worker left off
 //!
-//! Key concept: abandonGroup() vs completeGroupCycle()
-//! - completeGroupCycle: resets steps to 0, group is done
-//! - abandonGroup: keeps current step, group goes to Blocked for re-evaluation
+//! Key concept: abandonWork() keeps the step, releaseWorker() resets
 
 const std = @import("std");
-const ecs = @import("ecs");
 const tasks = @import("labelle_tasks");
 
-const Priority = tasks.Priority;
-const TaskGroupStatus = tasks.TaskGroupStatus;
 const StepType = tasks.StepType;
 const StepDef = tasks.StepDef;
-const GroupSteps = tasks.GroupSteps;
-
-const Registry = ecs.Registry;
-const Entity = ecs.Entity;
+const Priority = tasks.Priority;
 
 // ============================================================================
-// Components (same as kitchen example)
+// Game Entity IDs
 // ============================================================================
 
-const Position = struct {
-    x: i32,
-    y: i32,
+const GameEntityId = u32;
 
-    pub fn eql(self: Position, other: Position) bool {
-        return self.x == other.x and self.y == other.y;
-    }
-};
+const CHEF_ALICE: GameEntityId = 1;
+const CHEF_BOB: GameEntityId = 2;
+const STOVE: GameEntityId = 100;
 
-const Name = struct {
-    value: []const u8,
-};
+// ============================================================================
+// Game State
+// ============================================================================
+
+const Position = struct { x: i32, y: i32 };
 
 const ItemType = enum {
     Meat,
@@ -46,16 +37,12 @@ const ItemType = enum {
     CookedMeal,
 };
 
-const Storage = struct {
-    priority: Priority,
-    accepts: []const ItemType,
-};
-
-const StoredItems = struct {
+const StorageData = struct {
+    name: []const u8,
     items: [10]?ItemType = [_]?ItemType{null} ** 10,
     count: usize = 0,
 
-    pub fn hasItem(self: *const StoredItems, item_type: ItemType) bool {
+    fn hasItem(self: *const StorageData, item_type: ItemType) bool {
         for (self.items[0..self.count]) |maybe_item| {
             if (maybe_item) |item| {
                 if (item == item_type) return true;
@@ -64,7 +51,7 @@ const StoredItems = struct {
         return false;
     }
 
-    pub fn takeItem(self: *StoredItems, item_type: ItemType) bool {
+    fn takeItem(self: *StorageData, item_type: ItemType) bool {
         for (&self.items, 0..) |*maybe_item, i| {
             if (maybe_item.*) |item| {
                 if (item == item_type and i < self.count) {
@@ -82,520 +69,271 @@ const StoredItems = struct {
         return false;
     }
 
-    pub fn addItem(self: *StoredItems, item_type: ItemType) bool {
+    fn addItem(self: *StorageData, item_type: ItemType) bool {
         if (self.count >= 10) return false;
         self.items[self.count] = item_type;
         self.count += 1;
         return true;
     }
-
-    pub fn isFull(self: *const StoredItems) bool {
-        return self.count >= 10;
-    }
 };
 
-const Stove = struct {
-    in_use: bool = false,
-};
-
-const WorkerState = enum {
-    Idle,
-    MovingToPickup,
-    PickingUp,
-    MovingToCook,
-    Cooking,
-    MovingToStore,
-    Storing,
-};
-
-const Worker = struct {
-    state: WorkerState = .Idle,
-    target_position: ?Position = null,
+const WorkerData = struct {
+    name: []const u8,
+    pos: Position,
     carrying: ?ItemType = null,
+    target_pos: ?Position = null,
+    state: enum { Idle, Moving, Working } = .Idle,
 };
 
-const AssignedToGroup = struct {
-    group: Entity,
-};
+// Global game state
+var g_tick: u32 = 0;
+var g_fridge: StorageData = undefined;
+var g_meal_storage: StorageData = undefined;
+var g_alice: WorkerData = undefined;
+var g_bob: WorkerData = undefined;
+var g_stove_pos: Position = undefined;
+var g_fridge_pos: Position = undefined;
+var g_meal_storage_pos: Position = undefined;
 
-const GroupAssignedWorker = struct {
-    worker: Entity,
-};
+// Current step tracking
+var g_current_worker: ?GameEntityId = null;
+var g_current_step: ?StepDef = null;
 
-const KitchenGroup = struct {
-    status: TaskGroupStatus = .Blocked,
-    priority: Priority,
-    steps: GroupSteps,
-    target_storage: ?Entity = null,
+fn initGameState() void {
+    g_fridge_pos = .{ .x = 0, .y = 0 };
+    g_stove_pos = .{ .x = 5, .y = 0 };
+    g_meal_storage_pos = .{ .x = 10, .y = 0 };
 
-    const kitchen_steps = [_]StepDef{
-        .{ .type = .Pickup }, // step 0: pickup meat
-        .{ .type = .Pickup }, // step 1: pickup vegetable
-        .{ .type = .Cook }, // step 2: cook at stove
-        .{ .type = .Store }, // step 3: store cooked meal
+    g_fridge = .{ .name = "Fridge" };
+    _ = g_fridge.addItem(.Meat);
+    _ = g_fridge.addItem(.Vegetable);
+
+    g_meal_storage = .{ .name = "Meal Storage" };
+
+    g_alice = .{
+        .name = "Chef Alice",
+        .pos = .{ .x = 5, .y = 0 },
     };
 
-    pub fn init(priority: Priority) KitchenGroup {
-        return .{
-            .status = .Blocked,
-            .priority = priority,
-            .steps = GroupSteps.init(&kitchen_steps),
-        };
-    }
+    g_bob = .{
+        .name = "Chef Bob",
+        .pos = .{ .x = 5, .y = 0 },
+    };
+}
 
-    pub fn currentStepType(self: *const KitchenGroup) ?StepType {
-        const step = self.steps.currentStep();
-        return if (step) |s| s.type else null;
-    }
+fn getWorkerData(id: GameEntityId) ?*WorkerData {
+    return switch (id) {
+        CHEF_ALICE => &g_alice,
+        CHEF_BOB => &g_bob,
+        else => null,
+    };
+}
 
-    pub fn advance(self: *KitchenGroup) void {
-        _ = self.steps.advance();
-        self.target_storage = null;
-    }
-
-    pub fn reset(self: *KitchenGroup) void {
-        self.steps.reset();
-        self.target_storage = null;
-    }
-};
+fn log(comptime fmt: []const u8, args: anytype) void {
+    std.debug.print("[Tick {d:3}] " ++ fmt ++ "\n", .{g_tick} ++ args);
+}
 
 // ============================================================================
-// World
+// Engine Callbacks
 // ============================================================================
 
-const World = struct {
-    reg: *Registry,
-    tick: u32 = 0,
-    allocator: std.mem.Allocator,
+// Track who is in a fight (can't work)
+var g_alice_in_fight: bool = false;
 
-    pub fn init(allocator: std.mem.Allocator) !World {
-        const reg = try allocator.create(Registry);
-        reg.* = Registry.init(allocator);
-        return World{ .reg = reg, .tick = 0, .allocator = allocator };
+fn findBestWorker(
+    workstation_id: GameEntityId,
+    step: StepType,
+    available_workers: []const GameEntityId,
+) ?GameEntityId {
+    _ = workstation_id;
+    _ = step;
+    // Skip Alice if she's in a fight
+    for (available_workers) |worker| {
+        if (worker == CHEF_ALICE and g_alice_in_fight) continue;
+        return worker;
     }
+    return null;
+}
 
-    pub fn deinit(self: *World) void {
-        self.reg.deinit();
-        self.allocator.destroy(self.reg);
+fn onStepStarted(
+    worker_id: GameEntityId,
+    workstation_id: GameEntityId,
+    step: StepDef,
+) void {
+    _ = workstation_id;
+
+    g_current_worker = worker_id;
+    g_current_step = step;
+
+    const worker = getWorkerData(worker_id) orelse return;
+
+    switch (step.type) {
+        .Pickup => {
+            worker.target_pos = g_fridge_pos;
+            worker.state = .Moving;
+            // Determine item based on what's in fridge
+            const item_name: []const u8 = if (g_fridge.hasItem(.Meat)) "Meat" else "Vegetable";
+            log("{s} moving to Fridge to pickup {s}", .{ worker.name, item_name });
+        },
+        .Cook => {
+            worker.target_pos = g_stove_pos;
+            worker.state = .Moving;
+            log("{s} moving to Stove to cook", .{worker.name});
+        },
+        .Store => {
+            worker.target_pos = g_meal_storage_pos;
+            worker.state = .Moving;
+            log("{s} moving to Meal Storage to store CookedMeal", .{worker.name});
+        },
+        else => {},
     }
+}
 
-    pub fn createStorage(self: *World, name: []const u8, pos: Position, priority: Priority, accepts: []const ItemType) Entity {
-        const entity = self.reg.create();
-        self.reg.add(entity, Name{ .value = name });
-        self.reg.add(entity, pos);
-        self.reg.add(entity, Storage{ .priority = priority, .accepts = accepts });
-        self.reg.add(entity, StoredItems{});
-        return entity;
-    }
+fn onStepCompleted(
+    worker_id: GameEntityId,
+    workstation_id: GameEntityId,
+    step: StepDef,
+) void {
+    _ = workstation_id;
+    _ = step;
+    _ = worker_id;
+}
 
-    pub fn createStove(self: *World, name: []const u8, pos: Position) Entity {
-        const entity = self.reg.create();
-        self.reg.add(entity, Name{ .value = name });
-        self.reg.add(entity, pos);
-        self.reg.add(entity, Stove{});
-        return entity;
-    }
+fn onWorkerReleased(
+    worker_id: GameEntityId,
+    workstation_id: GameEntityId,
+) void {
+    _ = workstation_id;
+    const worker = getWorkerData(worker_id) orelse return;
+    log("{s} released", .{worker.name});
+}
 
-    pub fn createWorker(self: *World, name: []const u8, pos: Position) Entity {
-        const entity = self.reg.create();
-        self.reg.add(entity, Name{ .value = name });
-        self.reg.add(entity, pos);
-        self.reg.add(entity, Worker{});
-        return entity;
-    }
+fn shouldContinue(
+    workstation_id: GameEntityId,
+    worker_id: GameEntityId,
+    cycles_completed: u32,
+) bool {
+    _ = workstation_id;
+    _ = worker_id;
+    _ = cycles_completed;
+    return false;
+}
 
-    pub fn createKitchenGroup(self: *World, priority: Priority) Entity {
-        const entity = self.reg.create();
-        self.reg.add(entity, KitchenGroup.init(priority));
-        return entity;
-    }
+// ============================================================================
+// Game Simulation
+// ============================================================================
 
-    pub fn findStorageWithItem(self: *World, item_type: ItemType) ?Entity {
-        var best_entity: ?Entity = null;
-        var best_priority: ?Priority = null;
+fn simulateTick(engine: *tasks.Engine(GameEntityId)) void {
+    g_tick += 1;
+    log("=== TICK START ===", .{});
 
-        var view = self.reg.view(.{ Storage, StoredItems }, .{});
-        var iter = view.entityIterator();
+    const worker_id = g_current_worker orelse return;
+    const worker = getWorkerData(worker_id) orelse return;
 
-        while (iter.next()) |entity| {
-            const storage = self.reg.get(Storage, entity);
-            const items = self.reg.get(StoredItems, entity);
-            if (items.hasItem(item_type)) {
-                if (best_priority == null or @intFromEnum(storage.priority) > @intFromEnum(best_priority.?)) {
-                    best_entity = entity;
-                    best_priority = storage.priority;
+    if (worker.state == .Moving) {
+        if (worker.target_pos) |target| {
+            if (worker.pos.x == target.x and worker.pos.y == target.y) {
+                worker.state = .Working;
+                log("{s} arrived at destination", .{worker.name});
+            } else {
+                if (worker.pos.x < target.x) {
+                    worker.pos.x += 1;
+                } else if (worker.pos.x > target.x) {
+                    worker.pos.x -= 1;
+                } else if (worker.pos.y < target.y) {
+                    worker.pos.y += 1;
+                } else if (worker.pos.y > target.y) {
+                    worker.pos.y -= 1;
                 }
+                log("{s} moved to ({d}, {d})", .{ worker.name, worker.pos.x, worker.pos.y });
             }
         }
-        return best_entity;
-    }
-
-    pub fn findStorageForItem(self: *World, item_type: ItemType) ?Entity {
-        var best_entity: ?Entity = null;
-        var best_priority: ?Priority = null;
-
-        var view = self.reg.view(.{ Storage, StoredItems }, .{});
-        var iter = view.entityIterator();
-
-        while (iter.next()) |entity| {
-            const storage = self.reg.get(Storage, entity);
-            const items = self.reg.get(StoredItems, entity);
-            if (!items.isFull()) {
-                for (storage.accepts) |accepted| {
-                    if (accepted == item_type) {
-                        if (best_priority == null or @intFromEnum(storage.priority) > @intFromEnum(best_priority.?)) {
-                            best_entity = entity;
-                            best_priority = storage.priority;
+    } else if (worker.state == .Working) {
+        if (g_current_step) |step| {
+            switch (step.type) {
+                .Pickup => {
+                    // Pick up whatever is available
+                    if (g_fridge.hasItem(.Meat)) {
+                        if (g_fridge.takeItem(.Meat)) {
+                            worker.carrying = .Meat;
+                            log("{s} picked up Meat from Fridge", .{worker.name});
                         }
-                        break;
+                    } else if (g_fridge.hasItem(.Vegetable)) {
+                        if (g_fridge.takeItem(.Vegetable)) {
+                            worker.carrying = .Vegetable;
+                            log("{s} picked up Vegetable from Fridge", .{worker.name});
+                        }
                     }
-                }
-            }
-        }
-        return best_entity;
-    }
-
-    pub fn findAvailableStove(self: *World) ?Entity {
-        var view = self.reg.view(.{Stove}, .{});
-        var iter = view.entityIterator();
-        while (iter.next()) |entity| {
-            const stove = self.reg.get(Stove, entity);
-            if (!stove.in_use) return entity;
-        }
-        return null;
-    }
-
-    pub fn canKitchenUnblock(self: *World, group: *KitchenGroup) bool {
-        // Check based on current step - not all resources needed for all steps
-        const step_type = group.currentStepType() orelse return false;
-
-        return switch (step_type) {
-            .Pickup => {
-                const item = if (group.steps.current_index == 0) ItemType.Meat else ItemType.Vegetable;
-                return self.findStorageWithItem(item) != null;
-            },
-            .Cook => self.findAvailableStove() != null,
-            .Store => self.findStorageForItem(.CookedMeal) != null,
-            else => false,
-        };
-    }
-
-    pub fn log(self: *World, comptime fmt: []const u8, args: anytype) void {
-        std.debug.print("[Tick {d:3}] " ++ fmt ++ "\n", .{self.tick} ++ args);
-    }
-
-    pub fn runTick(self: *World) void {
-        self.tick += 1;
-        self.log("=== TICK START ===", .{});
-
-        self.updateBlockedGroups();
-        self.assignWorkersToGroups();
-        self.processWorkers();
-
-        self.log("=== TICK END ===", .{});
-    }
-
-    fn updateBlockedGroups(self: *World) void {
-        var view = self.reg.view(.{KitchenGroup}, .{});
-        var iter = view.entityIterator();
-
-        while (iter.next()) |entity| {
-            const group = self.reg.get(KitchenGroup, entity);
-            if (group.status == .Blocked) {
-                if (self.canKitchenUnblock(group)) {
-                    group.status = .Queued;
-                    self.log("Kitchen group unblocked -> Queued (at step {d})", .{group.steps.current_index});
-                }
-            }
-        }
-    }
-
-    fn assignWorkersToGroups(self: *World) void {
-        var group_view = self.reg.view(.{KitchenGroup}, .{GroupAssignedWorker});
-        var group_iter = group_view.entityIterator();
-
-        while (group_iter.next()) |group_entity| {
-            const group = self.reg.get(KitchenGroup, group_entity);
-            if (group.status != .Queued) continue;
-
-            var worker_view = self.reg.view(.{ Worker, Name }, .{AssignedToGroup});
-            var worker_iter = worker_view.entityIterator();
-
-            while (worker_iter.next()) |worker_entity| {
-                const worker = self.reg.get(Worker, worker_entity);
-                const worker_name = self.reg.get(Name, worker_entity);
-                if (worker.state == .Idle) {
-                    self.reg.add(worker_entity, AssignedToGroup{ .group = group_entity });
-                    self.reg.add(group_entity, GroupAssignedWorker{ .worker = worker_entity });
-                    group.status = .Active;
-                    self.log("{s} assigned to kitchen group (continuing from step {d})", .{ worker_name.value, group.steps.current_index });
-                    break;
-                }
-            }
-        }
-    }
-
-    fn processWorkers(self: *World) void {
-        var view = self.reg.view(.{ Worker, Position, Name, AssignedToGroup }, .{});
-        var iter = view.entityIterator();
-
-        while (iter.next()) |worker_entity| {
-            const worker = self.reg.get(Worker, worker_entity);
-            const pos = self.reg.get(Position, worker_entity);
-            const name = self.reg.get(Name, worker_entity);
-            const assigned = self.reg.get(AssignedToGroup, worker_entity);
-            self.processWorkerForGroup(worker_entity, worker, pos, name.value, assigned.group);
-        }
-    }
-
-    fn processWorkerForGroup(self: *World, worker_entity: Entity, worker: *Worker, pos: *Position, name: []const u8, group_entity: Entity) void {
-        const group = self.reg.get(KitchenGroup, group_entity);
-
-        switch (worker.state) {
-            .Idle => {
-                const step_type = group.currentStepType() orelse {
-                    self.completeGroupCycle(worker_entity, group_entity);
-                    return;
-                };
-
-                switch (step_type) {
-                    .Pickup => self.startPickup(worker, group, name),
-                    .Cook => self.startCook(worker, name),
-                    .Store => self.startStore(worker, group, name),
-                    else => {},
-                }
-            },
-            .MovingToPickup, .MovingToCook, .MovingToStore => {
-                if (worker.target_position) |target| {
-                    if (pos.eql(target)) {
-                        worker.state = switch (worker.state) {
-                            .MovingToPickup => .PickingUp,
-                            .MovingToCook => .Cooking,
-                            .MovingToStore => .Storing,
-                            else => .Idle,
-                        };
-                        self.log("{s} arrived at destination", .{name});
-                    } else {
-                        self.moveWorkerTowards(pos, target, name);
-                    }
-                }
-            },
-            .PickingUp => {
-                if (group.target_storage) |storage_entity| {
-                    const storage_items = self.reg.get(StoredItems, storage_entity);
-                    const storage_name = self.reg.get(Name, storage_entity);
-                    const item_type = self.getNeededItemType(group);
-                    if (storage_items.takeItem(item_type)) {
-                        worker.carrying = item_type;
-                        self.log("{s} picked up {s} from {s}", .{ name, @tagName(item_type), storage_name.value });
-                    }
-                }
-                group.advance();
-                worker.state = .Idle;
-            },
-            .Cooking => {
-                if (worker.carrying != null) {
+                    worker.state = .Idle;
+                    engine.notifyStepComplete(worker_id);
+                },
+                .Cook => {
                     worker.carrying = .CookedMeal;
-                    self.log("{s} cooked a meal!", .{name});
-
-                    var stove_view = self.reg.view(.{ Stove, Position }, .{});
-                    var stove_iter = stove_view.entityIterator();
-                    while (stove_iter.next()) |stove_entity| {
-                        const stove = self.reg.get(Stove, stove_entity);
-                        const stove_pos = self.reg.get(Position, stove_entity);
-                        if (stove_pos.eql(pos.*)) {
-                            stove.in_use = false;
-                            break;
-                        }
-                    }
-                }
-                group.advance();
-                worker.state = .Idle;
-            },
-            .Storing => {
-                if (group.target_storage) |storage_entity| {
-                    const storage_items = self.reg.get(StoredItems, storage_entity);
-                    const storage_name = self.reg.get(Name, storage_entity);
-                    if (worker.carrying) |item_type| {
-                        if (storage_items.addItem(item_type)) {
-                            self.log("{s} stored {s} in {s}", .{ name, @tagName(item_type), storage_name.value });
+                    log("{s} cooked a meal!", .{worker.name});
+                    worker.state = .Idle;
+                    engine.notifyStepComplete(worker_id);
+                },
+                .Store => {
+                    if (worker.carrying) |item| {
+                        if (g_meal_storage.addItem(item)) {
+                            log("{s} stored {s} in Meal Storage", .{ worker.name, @tagName(item) });
                             worker.carrying = null;
                         }
                     }
-                }
-                group.advance();
-                worker.state = .Idle;
-            },
-        }
-    }
-
-    fn getNeededItemType(self: *World, group: *KitchenGroup) ItemType {
-        _ = self;
-        if (group.steps.current_index == 0) return .Meat;
-        return .Vegetable;
-    }
-
-    fn startPickup(self: *World, worker: *Worker, group: *KitchenGroup, name: []const u8) void {
-        const item_type = self.getNeededItemType(group);
-        if (self.findStorageWithItem(item_type)) |storage_entity| {
-            const storage_pos = self.reg.get(Position, storage_entity);
-            const storage_name = self.reg.get(Name, storage_entity);
-            group.target_storage = storage_entity;
-            worker.target_position = storage_pos.*;
-            worker.state = .MovingToPickup;
-            self.log("{s} moving to {s} to pickup {s}", .{ name, storage_name.value, @tagName(item_type) });
-        }
-    }
-
-    fn startCook(self: *World, worker: *Worker, name: []const u8) void {
-        if (self.findAvailableStove()) |stove_entity| {
-            const stove = self.reg.get(Stove, stove_entity);
-            const stove_pos = self.reg.get(Position, stove_entity);
-            const stove_name = self.reg.get(Name, stove_entity);
-            stove.in_use = true;
-            worker.target_position = stove_pos.*;
-            worker.state = .MovingToCook;
-            self.log("{s} moving to {s} to cook", .{ name, stove_name.value });
-        }
-    }
-
-    fn startStore(self: *World, worker: *Worker, group: *KitchenGroup, name: []const u8) void {
-        if (worker.carrying) |item_type| {
-            if (self.findStorageForItem(item_type)) |storage_entity| {
-                const storage_pos = self.reg.get(Position, storage_entity);
-                const storage_name = self.reg.get(Name, storage_entity);
-                group.target_storage = storage_entity;
-                worker.target_position = storage_pos.*;
-                worker.state = .MovingToStore;
-                self.log("{s} moving to {s} to store {s}", .{ name, storage_name.value, @tagName(item_type) });
+                    worker.state = .Idle;
+                    engine.notifyStepComplete(worker_id);
+                },
+                else => {},
             }
         }
     }
 
-    fn moveWorkerTowards(self: *World, pos: *Position, target: Position, name: []const u8) void {
-        if (pos.x < target.x) {
-            pos.x += 1;
-        } else if (pos.x > target.x) {
-            pos.x -= 1;
-        } else if (pos.y < target.y) {
-            pos.y += 1;
-        } else if (pos.y > target.y) {
-            pos.y -= 1;
-        }
-        self.log("{s} moved to ({d}, {d})", .{ name, pos.x, pos.y });
-    }
+    log("=== TICK END ===", .{});
+}
 
-    fn completeGroupCycle(self: *World, worker_entity: Entity, group_entity: Entity) void {
-        self.log("Kitchen group completed a cycle!", .{});
+fn printStatus() void {
+    std.debug.print("\n--- World Status ---\n", .{});
 
-        const group = self.reg.get(KitchenGroup, group_entity);
-        const worker = self.reg.get(Worker, worker_entity);
-
-        group.reset();
-        group.status = .Blocked;
-        worker.state = .Idle;
-
-        self.reg.remove(AssignedToGroup, worker_entity);
-        self.reg.remove(GroupAssignedWorker, group_entity);
-    }
-
-    /// Worker abandons the group mid-work (e.g., fight, death, shift end).
-    /// The group keeps its current step and goes back to Blocked for re-evaluation.
-    pub fn abandonGroup(self: *World, worker_entity: Entity, group_entity: Entity) void {
-        const group = self.reg.get(KitchenGroup, group_entity);
-        const worker = self.reg.get(Worker, worker_entity);
-        const worker_name = self.reg.get(Name, worker_entity);
-        const worker_pos = self.reg.get(Position, worker_entity);
-
-        self.log("{s} ABANDONED group at step {d}/{d}!", .{
-            worker_name.value,
-            group.steps.current_index,
-            group.steps.steps.len,
-        });
-
-        // Release stove if worker was cooking or moving to cook
-        if (worker.state == .MovingToCook or worker.state == .Cooking) {
-            var stove_view = self.reg.view(.{ Stove, Position }, .{});
-            var stove_iter = stove_view.entityIterator();
-            while (stove_iter.next()) |stove_entity| {
-                const stove = self.reg.get(Stove, stove_entity);
-                const stove_pos = self.reg.get(Position, stove_entity);
-                // Release the stove the worker was heading to or at
-                if (worker.target_position) |target| {
-                    if (stove_pos.eql(target)) {
-                        stove.in_use = false;
-                        self.log("Released stove at ({d}, {d})", .{ stove_pos.x, stove_pos.y });
-                        break;
-                    }
-                } else if (stove_pos.eql(worker_pos.*)) {
-                    stove.in_use = false;
-                    self.log("Released stove at ({d}, {d})", .{ stove_pos.x, stove_pos.y });
-                    break;
-                }
+    std.debug.print("Storages:\n", .{});
+    std.debug.print("  {s}: ", .{g_meal_storage.name});
+    if (g_meal_storage.count == 0) {
+        std.debug.print("(empty)", .{});
+    } else {
+        for (g_meal_storage.items[0..g_meal_storage.count]) |maybe_item| {
+            if (maybe_item) |item| {
+                std.debug.print("{s} ", .{@tagName(item)});
             }
         }
-
-        // KEY: Keep current step index - DON'T reset!
-        group.status = .Blocked; // Re-evaluate resource availability
-        group.target_storage = null;
-
-        worker.state = .Idle;
-        worker.target_position = null;
-        // Note: worker keeps carrying items
-
-        self.reg.remove(AssignedToGroup, worker_entity);
-        self.reg.remove(GroupAssignedWorker, group_entity);
     }
+    std.debug.print("\n", .{});
 
-    pub fn printStatus(self: *World) void {
-        std.debug.print("\n--- World Status ---\n", .{});
-
-        std.debug.print("Storages:\n", .{});
-        var storage_view = self.reg.view(.{ Storage, StoredItems, Name }, .{});
-        var storage_iter = storage_view.entityIterator();
-        while (storage_iter.next()) |entity| {
-            const items = self.reg.get(StoredItems, entity);
-            const name = self.reg.get(Name, entity);
-            std.debug.print("  {s}: ", .{name.value});
-            if (items.count == 0) {
-                std.debug.print("(empty)", .{});
-            } else {
-                for (items.items[0..items.count]) |maybe_item| {
-                    if (maybe_item) |item| {
-                        std.debug.print("{s} ", .{@tagName(item)});
-                    }
-                }
+    std.debug.print("  {s}: ", .{g_fridge.name});
+    if (g_fridge.count == 0) {
+        std.debug.print("(empty)", .{});
+    } else {
+        for (g_fridge.items[0..g_fridge.count]) |maybe_item| {
+            if (maybe_item) |item| {
+                std.debug.print("{s} ", .{@tagName(item)});
             }
-            std.debug.print("\n", .{});
         }
-
-        std.debug.print("Workers:\n", .{});
-        var worker_view = self.reg.view(.{ Worker, Position, Name }, .{});
-        var worker_iter = worker_view.entityIterator();
-        while (worker_iter.next()) |entity| {
-            const worker = self.reg.get(Worker, entity);
-            const name = self.reg.get(Name, entity);
-            std.debug.print("  {s}: state={s}", .{ name.value, @tagName(worker.state) });
-            if (worker.carrying) |item| {
-                std.debug.print(" carrying={s}", .{@tagName(item)});
-            }
-            std.debug.print("\n", .{});
-        }
-
-        std.debug.print("Groups:\n", .{});
-        var group_view = self.reg.view(.{KitchenGroup}, .{});
-        var group_iter = group_view.entityIterator();
-        while (group_iter.next()) |entity| {
-            const group = self.reg.get(KitchenGroup, entity);
-            std.debug.print("  status={s} step={d}/{d}\n", .{
-                @tagName(group.status),
-                group.steps.current_index,
-                group.steps.steps.len,
-            });
-        }
-        std.debug.print("-------------------\n\n", .{});
     }
-};
+    std.debug.print("\n", .{});
+
+    std.debug.print("Workers:\n", .{});
+    std.debug.print("  {s}: state={s}", .{ g_bob.name, @tagName(g_bob.state) });
+    if (g_bob.carrying) |item| {
+        std.debug.print(" carrying={s}", .{@tagName(item)});
+    }
+    std.debug.print("\n", .{});
+
+    std.debug.print("  {s}: state={s}", .{ g_alice.name, @tagName(g_alice.state) });
+    if (g_alice.carrying) |item| {
+        std.debug.print(" carrying={s}", .{@tagName(item)});
+    }
+    std.debug.print("\n", .{});
+
+    std.debug.print("-------------------\n\n", .{});
+}
 
 // ============================================================================
 // Main
@@ -604,7 +342,7 @@ const World = struct {
 pub fn main() !void {
     std.debug.print("\n", .{});
     std.debug.print("========================================\n", .{});
-    std.debug.print("  WORKER ABANDONMENT EXAMPLE            \n", .{});
+    std.debug.print("  WORKER ABANDONMENT ENGINE EXAMPLE     \n", .{});
     std.debug.print("========================================\n\n", .{});
 
     std.debug.print("Scenario:\n", .{});
@@ -617,54 +355,67 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var world = try World.init(allocator);
-    defer world.deinit();
-
-    // Setup kitchen
-    const raw_items = [_]ItemType{ .Meat, .Vegetable };
-    const meal_items = [_]ItemType{.CookedMeal};
-
-    const fridge = world.createStorage("Fridge", .{ .x = 0, .y = 0 }, .High, &raw_items);
-    const meal_storage = world.createStorage("Meal Storage", .{ .x = 10, .y = 0 }, .Normal, &meal_items);
-
-    const fridge_items = world.reg.get(StoredItems, fridge);
-    _ = fridge_items.addItem(.Meat);
-    _ = fridge_items.addItem(.Vegetable);
-
-    _ = world.createStove("Stove", .{ .x = 5, .y = 0 });
-
-    // Create first worker
-    const alice = world.createWorker("Chef Alice", .{ .x = 5, .y = 0 });
-
-    // Create kitchen group
-    const kitchen_group = world.createKitchenGroup(.Normal);
+    initGameState();
 
     // ========================================================================
-    // Phase 1: Alice works until step 1
+    // Initialize Engine
     // ========================================================================
+
+    var engine = tasks.Engine(GameEntityId).init(allocator);
+    defer engine.deinit();
+
+    engine.setFindBestWorker(findBestWorker);
+    engine.setOnStepStarted(onStepStarted);
+    engine.setOnStepCompleted(onStepCompleted);
+    engine.setOnWorkerReleased(onWorkerReleased);
+    engine.setShouldContinue(shouldContinue);
+
+    // ========================================================================
+    // Register Entities - Start with just Alice
+    // ========================================================================
+
+    _ = engine.addWorker(CHEF_ALICE, .{});
+
+    const kitchen_steps = [_]StepDef{
+        .{ .type = .Pickup }, // step 0: pickup meat
+        .{ .type = .Pickup }, // step 1: pickup vegetable
+        .{ .type = .Cook }, // step 2: cook at stove
+        .{ .type = .Store }, // step 3: store cooked meal
+    };
+
+    _ = engine.addWorkstation(STOVE, .{
+        .steps = &kitchen_steps,
+        .priority = .Normal,
+    });
+
+    // ========================================================================
+    // Phase 1: Alice picks up meat
+    // ========================================================================
+
     std.debug.print("--- Phase 1: Alice picks up meat ---\n\n", .{});
 
+    engine.notifyResourcesAvailable(STOVE);
+
+    // Run until Alice completes step 0 (picks up meat)
     var step_reached = false;
     var ticks: u32 = 0;
     while (ticks < 15) : (ticks += 1) {
-        world.runTick();
+        simulateTick(&engine);
 
-        const grp = world.reg.get(KitchenGroup, kitchen_group);
-        if (grp.steps.current_index == 1) {
+        // Check if step 1 started (meaning step 0 completed)
+        const current_step = engine.getCurrentStep(STOVE);
+        if (current_step != null and current_step.? == 1) {
             step_reached = true;
             break;
         }
     }
-    world.printStatus();
+    printStatus();
 
     // Assertions
     std.debug.assert(step_reached);
-    const grp_phase1 = world.reg.get(KitchenGroup, kitchen_group);
-    std.debug.assert(grp_phase1.steps.current_index == 1);
-    std.debug.assert(grp_phase1.status == .Active);
-
-    const alice_worker = world.reg.get(Worker, alice);
-    std.debug.assert(alice_worker.carrying == .Meat);
+    const step_after_phase1 = engine.getCurrentStep(STOVE);
+    std.debug.assert(step_after_phase1.? == 1);
+    std.debug.assert(g_alice.carrying == .Meat);
 
     std.debug.print("[PASS] Alice completed step 0, now at step 1\n", .{});
     std.debug.print("[PASS] Alice is carrying Meat\n", .{});
@@ -673,20 +424,30 @@ pub fn main() !void {
     // ========================================================================
     // Phase 2: Alice gets into a fight!
     // ========================================================================
+
     std.debug.print("========================================\n", .{});
     std.debug.print("  FIGHT! Alice abandons work!           \n", .{});
     std.debug.print("========================================\n\n", .{});
 
-    world.abandonGroup(alice, kitchen_group);
-    world.printStatus();
+    // Alice is now in a fight - she can't work
+    g_alice_in_fight = true;
 
-    // Assertions after abandonment
-    const grp_abandoned = world.reg.get(KitchenGroup, kitchen_group);
-    std.debug.assert(grp_abandoned.status == .Blocked);
-    std.debug.assert(grp_abandoned.steps.current_index == 1); // KEY: Still at step 1!
+    // KEY: abandonWork keeps the step index!
+    engine.abandonWork(CHEF_ALICE);
+    g_alice.state = .Idle;
+    g_alice.target_pos = null;
+    g_current_worker = null;
 
-    std.debug.assert(!world.reg.has(AssignedToGroup, alice));
-    std.debug.assert(!world.reg.has(GroupAssignedWorker, kitchen_group));
+    printStatus();
+
+    // Assertions
+    const status_after_abandon = engine.getWorkstationStatus(STOVE);
+    std.debug.assert(status_after_abandon == .Blocked);
+    const step_after_abandon = engine.getCurrentStep(STOVE);
+    std.debug.assert(step_after_abandon.? == 1); // KEY: Still at step 1!
+
+    const alice_assigned = engine.getAssignedWorker(STOVE);
+    std.debug.assert(alice_assigned == null);
 
     std.debug.print("[PASS] Group is Blocked but KEPT step=1\n", .{});
     std.debug.print("[PASS] Alice unassigned, still has Meat\n\n", .{});
@@ -694,46 +455,40 @@ pub fn main() !void {
     // ========================================================================
     // Phase 3: Bob arrives and continues
     // ========================================================================
+
     std.debug.print("========================================\n", .{});
     std.debug.print("  Bob arrives to continue!              \n", .{});
     std.debug.print("========================================\n\n", .{});
 
-    const bob = world.createWorker("Chef Bob", .{ .x = 5, .y = 0 });
+    // Add Bob as available worker
+    _ = engine.addWorker(CHEF_BOB, .{});
+
+    // Signal resources available again - Bob should be assigned
+    engine.notifyResourcesAvailable(STOVE);
 
     // Run until completion
     var completed = false;
     ticks = 0;
     while (ticks < 30) : (ticks += 1) {
-        world.runTick();
+        simulateTick(&engine);
 
-        const grp = world.reg.get(KitchenGroup, kitchen_group);
-        if (grp.status == .Blocked and grp.steps.current_index == 0) {
+        if (engine.getCyclesCompleted(STOVE) >= 1) {
             completed = true;
             break;
         }
     }
-    world.printStatus();
+    printStatus();
 
     // Final assertions
     std.debug.assert(completed);
-
-    const final_meal = world.reg.get(StoredItems, meal_storage);
-    std.debug.assert(final_meal.count == 1);
-    std.debug.assert(final_meal.hasItem(.CookedMeal));
-
-    const final_fridge = world.reg.get(StoredItems, fridge);
-    std.debug.assert(final_fridge.count == 0); // Both items taken
-
-    const bob_worker = world.reg.get(Worker, bob);
-    std.debug.assert(bob_worker.state == .Idle);
-    std.debug.assert(bob_worker.carrying == null);
-
-    // Alice still has meat (she never dropped it)
-    const alice_final = world.reg.get(Worker, alice);
-    std.debug.assert(alice_final.carrying == .Meat);
-
     std.debug.print("[PASS] Bob completed the recipe!\n", .{});
+
+    std.debug.assert(g_meal_storage.count == 1);
+    std.debug.assert(g_meal_storage.hasItem(.CookedMeal));
     std.debug.print("[PASS] Meal stored successfully\n", .{});
+
+    // Alice still has her meat
+    std.debug.assert(g_alice.carrying == .Meat);
     std.debug.print("[PASS] Alice still has her Meat (from the fight)\n", .{});
 
     std.debug.print("\n========================================\n", .{});
