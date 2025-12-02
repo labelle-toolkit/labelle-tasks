@@ -29,8 +29,11 @@ jobs:
       - name: Run abandonment example
         run: zig build abandonment
 
-      - name: Run systems example
-        run: zig build systems
+      - name: Run multicycle example
+        run: zig build multicycle
+
+      - name: Run multiworker example
+        run: zig build multiworker
 
   build:
     runs-on: ubuntu-latest
