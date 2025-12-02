@@ -148,12 +148,53 @@ pub fn canInterrupt(interrupt_level: InterruptLevel, by_priority: Priority) bool
 }
 
 // ============================================================================
-// ECS Systems
+// ECS Integration
 // ============================================================================
 
 const ecs = @import("ecs");
 pub const Registry = ecs.Registry;
 pub const Entity = ecs.Entity;
+
+// ============================================================================
+// Standard Worker Components
+// ============================================================================
+
+/// Worker state for task assignment.
+/// - Idle: available for assignment
+/// - Working: currently assigned to a task group
+/// - Blocked: unavailable (fighting, sleeping, eating, etc.)
+pub const WorkerState = enum {
+    Idle,
+    Working,
+    Blocked,
+};
+
+/// Standard worker component. Add this to entities that can perform tasks.
+pub const Worker = struct {
+    state: WorkerState = .Idle,
+
+    pub fn isIdle(self: Worker) bool {
+        return self.state == .Idle;
+    }
+
+    pub fn isAvailable(self: Worker) bool {
+        return self.state == .Idle;
+    }
+};
+
+/// Component added to worker when assigned to a group.
+pub const AssignedToGroup = struct {
+    group: Entity,
+};
+
+/// Component added to group when a worker is assigned.
+pub const GroupAssignedWorker = struct {
+    worker: Entity,
+};
+
+// ============================================================================
+// ECS Systems
+// ============================================================================
 
 /// System that transitions task groups from Blocked to Queued (or Active) status.
 ///
@@ -289,4 +330,145 @@ pub fn GroupCompletionSystem(
             }
         }
     };
+}
+
+/// System that processes active task groups by executing their current step.
+///
+/// For each active group with an assigned worker, calls `processStep` with the current step,
+/// then advances to the next step.
+///
+/// Parameters:
+/// - `GroupComponent`: Component type for task groups (must have `status: TaskGroupStatus`, `steps: GroupSteps`)
+/// - `GroupAssignedComponent`: Component on group indicating assigned worker (must have `worker: Entity`)
+/// - `processStep`: fn(*Registry, Entity, Entity, StepDef) void - called to process step (worker, group, step)
+pub fn StepProcessingSystem(
+    comptime GroupComponent: type,
+    comptime GroupAssignedComponent: type,
+    comptime processStep: fn (*Registry, Entity, Entity, StepDef) void,
+) type {
+    return struct {
+        pub fn run(reg: *Registry) void {
+            var view = reg.view(.{ GroupComponent, GroupAssignedComponent }, .{});
+            var iter = view.entityIterator();
+
+            while (iter.next()) |group_entity| {
+                const group = reg.get(GroupComponent, group_entity);
+                if (group.status != .Active) continue;
+
+                const assigned = reg.get(GroupAssignedComponent, group_entity);
+                const worker_entity = assigned.worker;
+
+                // Process current step if not complete
+                if (group.steps.currentStep()) |step| {
+                    processStep(reg, worker_entity, group_entity, step);
+                    _ = group.steps.advance();
+                }
+            }
+        }
+    };
+}
+
+// ============================================================================
+// Task Runner (combines all systems)
+// ============================================================================
+
+/// A combined task runner that executes all task systems in the correct order.
+///
+/// Uses the standard Worker, AssignedToGroup, and GroupAssignedWorker components.
+///
+/// Execution order per tick:
+/// 1. BlockedToQueuedSystem - unblock groups when resources available
+/// 2. WorkerAssignmentSystem - assign idle workers to queued groups
+/// 3. StepProcessingSystem - execute current step for active groups
+/// 4. GroupCompletionSystem - handle completed groups, release/continue workers
+///
+/// Parameters:
+/// - `GroupComponent`: Component type for task groups
+/// - `canUnblock`: fn(*Registry, Entity) bool
+/// - `processStep`: fn(*Registry, Entity, Entity, StepDef) void
+/// - `shouldContinue`: fn(*Registry, Entity, Entity) bool
+/// - `onAssigned`: fn(*Registry, Entity, Entity) void (optional, can be noop)
+/// - `onReleased`: fn(*Registry, Entity, Entity) void (optional, can be noop)
+pub fn TaskRunner(
+    comptime GroupComponent: type,
+    comptime canUnblock: fn (*Registry, Entity) bool,
+    comptime processStep: fn (*Registry, Entity, Entity, StepDef) void,
+    comptime shouldContinue: fn (*Registry, Entity, Entity) bool,
+    comptime onAssigned: fn (*Registry, Entity, Entity) void,
+    comptime onReleased: fn (*Registry, Entity, Entity) void,
+) type {
+    return struct {
+        const Self = @This();
+
+        // Internal systems using standard components
+        const Blocked = BlockedToQueuedSystem(GroupComponent, GroupAssignedWorker, canUnblock);
+        const Assignment = WorkerAssignmentSystem(
+            GroupComponent,
+            Worker,
+            AssignedToGroup,
+            GroupAssignedWorker,
+            isWorkerIdle,
+            assignWorker,
+        );
+        const Steps = StepProcessingSystem(GroupComponent, GroupAssignedWorker, processStep);
+        const Completion = GroupCompletionSystem(
+            GroupComponent,
+            AssignedToGroup,
+            GroupAssignedWorker,
+            shouldContinue,
+            setWorkerIdle,
+            onReleased,
+        );
+
+        fn isWorkerIdle(reg: *Registry, entity: Entity) bool {
+            const worker = reg.get(Worker, entity);
+            return worker.state == .Idle;
+        }
+
+        fn assignWorker(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
+            const worker = reg.get(Worker, worker_entity);
+            worker.state = .Working;
+            onAssigned(reg, worker_entity, group_entity);
+        }
+
+        fn setWorkerIdle(reg: *Registry, worker_entity: Entity) void {
+            const worker = reg.get(Worker, worker_entity);
+            worker.state = .Idle;
+        }
+
+        /// Run all task systems for one tick.
+        pub fn tick(reg: *Registry) void {
+            Blocked.run(reg);
+            Assignment.run(reg);
+            Steps.run(reg);
+            Completion.run(reg);
+        }
+
+        /// Run only the blocked-to-queued transition.
+        pub fn runBlocked(reg: *Registry) void {
+            Blocked.run(reg);
+        }
+
+        /// Run only worker assignment.
+        pub fn runAssignment(reg: *Registry) void {
+            Assignment.run(reg);
+        }
+
+        /// Run only step processing.
+        pub fn runSteps(reg: *Registry) void {
+            Steps.run(reg);
+        }
+
+        /// Run only completion handling.
+        pub fn runCompletion(reg: *Registry) void {
+            Completion.run(reg);
+        }
+    };
+}
+
+/// No-op callback for when you don't need onAssigned/onReleased.
+pub fn noop(reg: *Registry, worker: Entity, group: Entity) void {
+    _ = reg;
+    _ = worker;
+    _ = group;
 }

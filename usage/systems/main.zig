@@ -1,12 +1,18 @@
 //! ECS Systems Example
 //!
-//! Demonstrates the built-in ECS systems provided by labelle-tasks:
-//! - BlockedToQueuedSystem: Transitions groups from Blocked to Queued
-//! - WorkerAssignmentSystem: Assigns idle workers to queued groups
-//! - GroupCompletionSystem: Handles group completion and worker release
+//! Demonstrates the TaskRunner - a batteries-included approach that combines
+//! all task systems into a single tick() call.
 //!
-//! This example shows a simplified kitchen workflow using the systems
-//! instead of manual state management.
+//! Uses standard components from the library:
+//! - tasks.Worker (with Idle/Working/Blocked states)
+//! - tasks.AssignedToGroup
+//! - tasks.GroupAssignedWorker
+//!
+//! You only need to provide:
+//! - Your GroupComponent (with status and steps)
+//! - canUnblock: check if resources are available
+//! - processStep: execute the current step
+//! - shouldContinue: decide if worker does another cycle
 
 const std = @import("std");
 const ecs = @import("ecs");
@@ -17,35 +23,26 @@ const TaskGroupStatus = tasks.TaskGroupStatus;
 const StepType = tasks.StepType;
 const StepDef = tasks.StepDef;
 const GroupSteps = tasks.GroupSteps;
+const Worker = tasks.Worker;
+const WorkerState = tasks.WorkerState;
+const AssignedToGroup = tasks.AssignedToGroup;
+const GroupAssignedWorker = tasks.GroupAssignedWorker;
 
 const Registry = ecs.Registry;
 const Entity = ecs.Entity;
 
 // ============================================================================
-// Components
+// User Components
 // ============================================================================
 
 const Name = struct {
     value: []const u8,
 };
 
-const WorkerState = enum {
-    Idle,
-    Working,
-};
-
-const Worker = struct {
-    state: WorkerState = .Idle,
+// Extra worker data (beyond the standard Worker component)
+const ChefData = struct {
     cycles_completed: u32 = 0,
-    max_cycles: u32 = 2, // Worker will do 2 cycles then stop
-};
-
-const AssignedToGroup = struct {
-    group: Entity,
-};
-
-const GroupAssignedWorker = struct {
-    worker: Entity,
+    max_cycles: u32 = 2,
 };
 
 const KitchenGroup = struct {
@@ -76,7 +73,7 @@ const Resources = struct {
 };
 
 // ============================================================================
-// System Callbacks
+// Callbacks
 // ============================================================================
 
 var g_resources: Resources = .{};
@@ -85,111 +82,64 @@ var g_tick: u32 = 0;
 fn canUnblock(reg: *Registry, entity: Entity) bool {
     _ = reg;
     _ = entity;
-    // Check if resources are available
     return g_resources.ingredients_available and
         g_resources.stove_available and
         g_resources.storage_available;
 }
 
-fn isWorkerIdle(reg: *Registry, entity: Entity) bool {
-    const worker = reg.get(Worker, entity);
-    return worker.state == .Idle;
-}
-
-fn onAssigned(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
-    const worker = reg.get(Worker, worker_entity);
+fn processStep(reg: *Registry, worker_entity: Entity, group_entity: Entity, step: StepDef) void {
     const worker_name = reg.get(Name, worker_entity);
-    _ = group_entity;
+    const chef_data = reg.get(ChefData, worker_entity);
+    const group = reg.get(KitchenGroup, group_entity);
 
-    worker.state = .Working;
-    std.debug.print("[Tick {d:3}] {s} assigned to kitchen group\n", .{ g_tick, worker_name.value });
+    std.debug.print("[Tick {d:3}] {s} performing: {s}\n", .{
+        g_tick,
+        worker_name.value,
+        @tagName(step.type),
+    });
+
+    // Check if this will complete a cycle (last step)
+    if (group.steps.current_index == group.steps.steps.len - 1) {
+        chef_data.cycles_completed += 1;
+        std.debug.print("[Tick {d:3}] {s} completed cycle {d}/{d}\n", .{
+            g_tick,
+            worker_name.value,
+            chef_data.cycles_completed,
+            chef_data.max_cycles,
+        });
+    }
 }
 
 fn shouldContinue(reg: *Registry, worker_entity: Entity, group_entity: Entity) bool {
-    const worker = reg.get(Worker, worker_entity);
     _ = group_entity;
-
-    // Worker continues if they haven't reached max cycles
-    return worker.cycles_completed < worker.max_cycles;
+    const chef_data = reg.get(ChefData, worker_entity);
+    return chef_data.cycles_completed < chef_data.max_cycles;
 }
 
-fn setWorkerIdle(reg: *Registry, worker_entity: Entity) void {
-    const worker = reg.get(Worker, worker_entity);
-    worker.state = .Idle;
+fn onAssigned(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
+    _ = group_entity;
+    const worker_name = reg.get(Name, worker_entity);
+    std.debug.print("[Tick {d:3}] {s} assigned to kitchen group\n", .{ g_tick, worker_name.value });
 }
 
 fn onReleased(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
-    const worker_name = reg.get(Name, worker_entity);
     _ = group_entity;
-
+    const worker_name = reg.get(Name, worker_entity);
     std.debug.print("[Tick {d:3}] {s} released from group (finished all cycles)\n", .{ g_tick, worker_name.value });
 }
 
-// Instantiate the systems with comptime parameters
-const BlockedSystem = tasks.BlockedToQueuedSystem(
+// ============================================================================
+// Task Runner
+// ============================================================================
+
+const KitchenRunner = tasks.TaskRunner(
     KitchenGroup,
-    GroupAssignedWorker,
     canUnblock,
-);
-
-const AssignmentSystem = tasks.WorkerAssignmentSystem(
-    KitchenGroup,
-    Worker,
-    AssignedToGroup,
-    GroupAssignedWorker,
-    isWorkerIdle,
-    onAssigned,
-);
-
-const CompletionSystem = tasks.GroupCompletionSystem(
-    KitchenGroup,
-    AssignedToGroup,
-    GroupAssignedWorker,
+    processStep,
     shouldContinue,
-    setWorkerIdle,
+    onAssigned,
     onReleased,
 );
-
-// ============================================================================
-// Step Processing (user-defined work logic)
-// ============================================================================
-
-fn processActiveGroups(reg: *Registry) void {
-    var view = reg.view(.{ KitchenGroup, GroupAssignedWorker }, .{});
-    var iter = view.entityIterator();
-
-    while (iter.next()) |group_entity| {
-        const group = reg.get(KitchenGroup, group_entity);
-        if (group.status != .Active) continue;
-
-        const assigned = reg.get(GroupAssignedWorker, group_entity);
-        const worker = reg.get(Worker, assigned.worker);
-        const worker_name = reg.get(Name, assigned.worker);
-
-        // Process current step
-        if (group.steps.currentStep()) |step| {
-            std.debug.print("[Tick {d:3}] {s} performing: {s}\n", .{
-                g_tick,
-                worker_name.value,
-                @tagName(step.type),
-            });
-
-            // Advance to next step
-            _ = group.steps.advance();
-
-            // Check if this completed a cycle
-            if (group.steps.isComplete()) {
-                worker.cycles_completed += 1;
-                std.debug.print("[Tick {d:3}] {s} completed cycle {d}/{d}\n", .{
-                    g_tick,
-                    worker_name.value,
-                    worker.cycles_completed,
-                    worker.max_cycles,
-                });
-            }
-        }
-    }
-}
 
 // ============================================================================
 // Main
@@ -198,13 +148,16 @@ fn processActiveGroups(reg: *Registry) void {
 pub fn main() !void {
     std.debug.print("\n", .{});
     std.debug.print("========================================\n", .{});
-    std.debug.print("  ECS SYSTEMS EXAMPLE                   \n", .{});
+    std.debug.print("  TASK RUNNER EXAMPLE                   \n", .{});
     std.debug.print("========================================\n\n", .{});
 
-    std.debug.print("This example demonstrates the built-in ECS systems:\n", .{});
-    std.debug.print("- BlockedToQueuedSystem\n", .{});
-    std.debug.print("- WorkerAssignmentSystem\n", .{});
-    std.debug.print("- GroupCompletionSystem\n\n", .{});
+    std.debug.print("This example demonstrates the TaskRunner,\n", .{});
+    std.debug.print("which combines all systems into one tick() call.\n\n", .{});
+
+    std.debug.print("Standard components used:\n", .{});
+    std.debug.print("- tasks.Worker (Idle/Working/Blocked states)\n", .{});
+    std.debug.print("- tasks.AssignedToGroup\n", .{});
+    std.debug.print("- tasks.GroupAssignedWorker\n\n", .{});
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -213,10 +166,11 @@ pub fn main() !void {
     var reg = Registry.init(allocator);
     defer reg.deinit();
 
-    // Create a worker
+    // Create a worker with standard Worker component + custom ChefData
     const chef = reg.create();
     reg.add(chef, Name{ .value = "Chef Mario" });
-    reg.add(chef, Worker{ .max_cycles = 2 });
+    reg.add(chef, Worker{}); // Standard component from library
+    reg.add(chef, ChefData{ .max_cycles = 2 }); // Custom data
 
     // Create a kitchen group
     const group = reg.create();
@@ -226,20 +180,18 @@ pub fn main() !void {
     std.debug.print("- Chef Mario (max 2 cycles)\n", .{});
     std.debug.print("- Kitchen group (3 steps: Pickup -> Cook -> Store)\n\n", .{});
 
-    // Run simulation
+    // Run simulation - just call tick()!
     const max_ticks = 15;
     while (g_tick < max_ticks) {
         g_tick += 1;
 
-        // Run the systems in order
-        BlockedSystem.run(&reg);
-        AssignmentSystem.run(&reg);
-        processActiveGroups(&reg);
-        CompletionSystem.run(&reg);
+        // Single call runs all systems in correct order
+        KitchenRunner.tick(&reg);
 
         // Check if done
         const worker = reg.get(Worker, chef);
-        if (worker.state == .Idle and worker.cycles_completed >= worker.max_cycles) {
+        const chef_data = reg.get(ChefData, chef);
+        if (worker.state == .Idle and chef_data.cycles_completed >= chef_data.max_cycles) {
             std.debug.print("\n[Tick {d:3}] Simulation complete!\n", .{g_tick});
             break;
         }
@@ -249,10 +201,11 @@ pub fn main() !void {
     std.debug.print("\n--- Assertions ---\n", .{});
 
     const final_worker = reg.get(Worker, chef);
+    const final_chef = reg.get(ChefData, chef);
     const final_group = reg.get(KitchenGroup, group);
 
-    std.debug.print("Worker cycles completed: {d}\n", .{final_worker.cycles_completed});
-    std.debug.assert(final_worker.cycles_completed == 2);
+    std.debug.print("Worker cycles completed: {d}\n", .{final_chef.cycles_completed});
+    std.debug.assert(final_chef.cycles_completed == 2);
     std.debug.print("[PASS] Worker completed 2 cycles\n", .{});
 
     std.debug.assert(final_worker.state == .Idle);

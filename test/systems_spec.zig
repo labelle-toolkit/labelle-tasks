@@ -10,7 +10,9 @@ const Entity = ecs.Entity;
 const TaskGroupStatus = tasks.TaskGroupStatus;
 const GroupSteps = tasks.GroupSteps;
 const StepDef = tasks.StepDef;
+const StepType = tasks.StepType;
 const Priority = tasks.Priority;
+const WorkerState = tasks.WorkerState;
 
 // ============================================================================
 // Test Components
@@ -447,6 +449,288 @@ pub const @"GroupCompletionSystem" = struct {
             try expect.equal(group.status, .Blocked); // Unchanged
             try expect.equal(group.steps.current_index, 2); // Unchanged
             try expect.equal(g_shouldContinue_calls, 0);
+        }
+    };
+};
+
+// ============================================================================
+// Standard Components Tests
+// ============================================================================
+
+pub const @"Worker" = struct {
+    pub const @"init" = struct {
+        test "defaults to Idle state" {
+            const worker = tasks.Worker{};
+            try expect.equal(worker.state, WorkerState.Idle);
+        }
+    };
+
+    pub const @"isIdle" = struct {
+        test "returns true when Idle" {
+            const worker = tasks.Worker{ .state = .Idle };
+            try expect.equal(worker.isIdle(), true);
+        }
+
+        test "returns false when Working" {
+            const worker = tasks.Worker{ .state = .Working };
+            try expect.equal(worker.isIdle(), false);
+        }
+
+        test "returns false when Blocked" {
+            const worker = tasks.Worker{ .state = .Blocked };
+            try expect.equal(worker.isIdle(), false);
+        }
+    };
+
+    pub const @"isAvailable" = struct {
+        test "returns true when Idle" {
+            const worker = tasks.Worker{ .state = .Idle };
+            try expect.equal(worker.isAvailable(), true);
+        }
+
+        test "returns false when Working" {
+            const worker = tasks.Worker{ .state = .Working };
+            try expect.equal(worker.isAvailable(), false);
+        }
+
+        test "returns false when Blocked" {
+            const worker = tasks.Worker{ .state = .Blocked };
+            try expect.equal(worker.isAvailable(), false);
+        }
+    };
+};
+
+pub const @"WorkerState enum" = struct {
+    test "has three states" {
+        try expect.equal(@typeInfo(WorkerState).@"enum".fields.len, 3);
+    }
+
+    test "includes Idle state" {
+        const state: WorkerState = .Idle;
+        try expect.equal(state, .Idle);
+    }
+
+    test "includes Working state" {
+        const state: WorkerState = .Working;
+        try expect.equal(state, .Working);
+    }
+
+    test "includes Blocked state" {
+        const state: WorkerState = .Blocked;
+        try expect.equal(state, .Blocked);
+    }
+};
+
+// ============================================================================
+// StepProcessingSystem Tests
+// ============================================================================
+
+var g_processStep_calls: u32 = 0;
+var g_processStep_worker: ?Entity = null;
+var g_processStep_group: ?Entity = null;
+var g_processStep_stepType: ?StepType = null;
+
+fn testProcessStep(reg: *Registry, worker_entity: Entity, group_entity: Entity, step: StepDef) void {
+    _ = reg;
+    g_processStep_calls += 1;
+    g_processStep_worker = worker_entity;
+    g_processStep_group = group_entity;
+    g_processStep_stepType = step.type;
+}
+
+fn resetStepCallbacks() void {
+    g_processStep_calls = 0;
+    g_processStep_worker = null;
+    g_processStep_group = null;
+    g_processStep_stepType = null;
+}
+
+const StepSystem = tasks.StepProcessingSystem(TestGroup, GroupAssignedWorker, testProcessStep);
+
+pub const @"StepProcessingSystem" = struct {
+    pub const @"run" = struct {
+        test "processes current step and advances" {
+            resetStepCallbacks();
+            var reg = Registry.init(std.testing.allocator);
+            defer reg.deinit();
+
+            const worker_entity = reg.create();
+            reg.add(worker_entity, TestWorker{});
+
+            const group_entity = reg.create();
+            var g = TestGroup.init();
+            g.status = .Active;
+            reg.add(group_entity, g);
+            reg.add(group_entity, GroupAssignedWorker{ .worker = worker_entity });
+
+            StepSystem.run(&reg);
+
+            try expect.equal(g_processStep_calls, 1);
+            try expect.equal(g_processStep_worker.?, worker_entity);
+            try expect.equal(g_processStep_group.?, group_entity);
+            try expect.equal(g_processStep_stepType.?, .Pickup);
+
+            const group = reg.get(TestGroup, group_entity);
+            try expect.equal(group.steps.current_index, 1);
+        }
+
+        test "does not process non-Active groups" {
+            resetStepCallbacks();
+            var reg = Registry.init(std.testing.allocator);
+            defer reg.deinit();
+
+            const worker_entity = reg.create();
+            reg.add(worker_entity, TestWorker{});
+
+            const group_entity = reg.create();
+            var g = TestGroup.init();
+            g.status = .Blocked;
+            reg.add(group_entity, g);
+            reg.add(group_entity, GroupAssignedWorker{ .worker = worker_entity });
+
+            StepSystem.run(&reg);
+
+            try expect.equal(g_processStep_calls, 0);
+        }
+
+        test "does not process completed groups" {
+            resetStepCallbacks();
+            var reg = Registry.init(std.testing.allocator);
+            defer reg.deinit();
+
+            const worker_entity = reg.create();
+            reg.add(worker_entity, TestWorker{});
+
+            const group_entity = reg.create();
+            var g = TestGroup.init();
+            g.status = .Active;
+            g.steps.current_index = 2; // Already complete
+            reg.add(group_entity, g);
+            reg.add(group_entity, GroupAssignedWorker{ .worker = worker_entity });
+
+            StepSystem.run(&reg);
+
+            try expect.equal(g_processStep_calls, 0);
+        }
+    };
+};
+
+// ============================================================================
+// TaskRunner Tests
+// ============================================================================
+
+var g_runner_canUnblock: bool = true;
+var g_runner_shouldContinue: bool = false;
+var g_runner_processStep_calls: u32 = 0;
+var g_runner_onAssigned_calls: u32 = 0;
+var g_runner_onReleased_calls: u32 = 0;
+
+fn runnerCanUnblock(reg: *Registry, entity: Entity) bool {
+    _ = reg;
+    _ = entity;
+    return g_runner_canUnblock;
+}
+
+fn runnerProcessStep(reg: *Registry, worker: Entity, group: Entity, step: StepDef) void {
+    _ = reg;
+    _ = worker;
+    _ = group;
+    _ = step;
+    g_runner_processStep_calls += 1;
+}
+
+fn runnerShouldContinue(reg: *Registry, worker: Entity, group: Entity) bool {
+    _ = reg;
+    _ = worker;
+    _ = group;
+    return g_runner_shouldContinue;
+}
+
+fn runnerOnAssigned(reg: *Registry, worker: Entity, group: Entity) void {
+    _ = reg;
+    _ = worker;
+    _ = group;
+    g_runner_onAssigned_calls += 1;
+}
+
+fn runnerOnReleased(reg: *Registry, worker: Entity, group: Entity) void {
+    _ = reg;
+    _ = worker;
+    _ = group;
+    g_runner_onReleased_calls += 1;
+}
+
+fn resetRunnerCallbacks() void {
+    g_runner_canUnblock = true;
+    g_runner_shouldContinue = false;
+    g_runner_processStep_calls = 0;
+    g_runner_onAssigned_calls = 0;
+    g_runner_onReleased_calls = 0;
+}
+
+const TestRunner = tasks.TaskRunner(
+    TestGroup,
+    runnerCanUnblock,
+    runnerProcessStep,
+    runnerShouldContinue,
+    runnerOnAssigned,
+    runnerOnReleased,
+);
+
+pub const @"TaskRunner" = struct {
+    pub const @"tick" = struct {
+        test "runs full cycle: blocked -> assigned -> step -> complete" {
+            resetRunnerCallbacks();
+            var reg = Registry.init(std.testing.allocator);
+            defer reg.deinit();
+
+            const worker = reg.create();
+            reg.add(worker, tasks.Worker{});
+
+            const group = reg.create();
+            reg.add(group, TestGroup.init()); // Blocked initially
+
+            // Tick 1: Blocked -> Queued -> Active + first step (Pickup)
+            TestRunner.tick(&reg);
+
+            try expect.equal(g_runner_onAssigned_calls, 1);
+            try expect.equal(g_runner_processStep_calls, 1);
+
+            const worker_comp = reg.get(tasks.Worker, worker);
+            try expect.equal(worker_comp.state, .Working);
+
+            // Tick 2: second step (Cook) -> complete -> released
+            // (TestGroup has 2 steps, so after step 1 it's complete)
+            TestRunner.tick(&reg);
+            try expect.equal(g_runner_processStep_calls, 2);
+            try expect.equal(g_runner_onReleased_calls, 1);
+
+            const final_worker = reg.get(tasks.Worker, worker);
+            try expect.equal(final_worker.state, .Idle);
+
+            const final_group = reg.get(TestGroup, group);
+            try expect.equal(final_group.status, .Blocked);
+        }
+
+        test "does not assign Blocked workers" {
+            resetRunnerCallbacks();
+            var reg = Registry.init(std.testing.allocator);
+            defer reg.deinit();
+
+            const worker = reg.create();
+            reg.add(worker, tasks.Worker{ .state = .Blocked });
+
+            const group = reg.create();
+            reg.add(group, TestGroup.init());
+
+            TestRunner.tick(&reg);
+
+            // Worker should not be assigned (Blocked state)
+            try expect.equal(g_runner_onAssigned_calls, 0);
+            try expect.equal(reg.tryGet(tasks.AssignedToGroup, worker), null);
+
+            const group_comp = reg.get(TestGroup, group);
+            try expect.equal(group_comp.status, .Queued); // Waiting for worker
         }
     };
 };
