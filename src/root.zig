@@ -100,9 +100,13 @@ pub const GroupSteps = struct {
     current_index: u8,
 
     pub fn init(steps: []const StepDef) GroupSteps {
+        return initAt(steps, 0);
+    }
+
+    pub fn initAt(steps: []const StepDef, start_index: u8) GroupSteps {
         return .{
             .steps = steps,
-            .current_index = 0,
+            .current_index = start_index,
         };
     }
 

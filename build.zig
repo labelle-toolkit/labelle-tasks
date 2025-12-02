@@ -94,8 +94,28 @@ pub fn build(b: *std.Build) void {
     const kitchen_step = b.step("kitchen", "Run the kitchen example");
     kitchen_step.dependOn(&run_kitchen.step);
 
+    // Abandonment example - demonstrates worker abandonment and task continuation
+    const abandonment_mod = b.createModule(.{
+        .root_source_file = b.path("usage/abandonment/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    abandonment_mod.addImport("labelle_tasks", lib_mod);
+    abandonment_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
+
+    const abandonment_example = b.addExecutable(.{
+        .name = "abandonment_example",
+        .root_module = abandonment_mod,
+    });
+    b.installArtifact(abandonment_example);
+
+    const run_abandonment = b.addRunArtifact(abandonment_example);
+    const abandonment_step = b.step("abandonment", "Run the worker abandonment example");
+    abandonment_step.dependOn(&run_abandonment.step);
+
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_simple.step);
     examples_step.dependOn(&run_kitchen.step);
+    examples_step.dependOn(&run_abandonment.step);
 }

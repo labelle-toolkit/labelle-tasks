@@ -25,6 +25,31 @@ pub const @"GroupSteps" = struct {
         }
     };
 
+    pub const @"initAt" = struct {
+        test "starts at specified index" {
+            const steps = GS.initAt(&kitchen_steps, 2);
+            try expect.equal(steps.current_index, 2);
+        }
+
+        test "returns correct step at specified index" {
+            const steps = GS.initAt(&kitchen_steps, 1);
+            const current = steps.currentStep();
+            try expect.equal(current.?.type, StepType.Cook);
+        }
+
+        test "can resume from last step" {
+            const steps = GS.initAt(&kitchen_steps, 2);
+            const current = steps.currentStep();
+            try expect.equal(current.?.type, StepType.Store);
+        }
+
+        test "initAt 0 is equivalent to init" {
+            const steps_init = GS.init(&kitchen_steps);
+            const steps_at = GS.initAt(&kitchen_steps, 0);
+            try expect.equal(steps_init.current_index, steps_at.current_index);
+        }
+    };
+
     pub const @"currentStep" = struct {
         test "returns the first step initially" {
             const steps = GS.init(&kitchen_steps);
