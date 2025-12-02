@@ -527,32 +527,6 @@ const World = struct {
         self.reg.remove(GroupAssignedWorker, group_entity);
     }
 
-    /// Worker abandons the group mid-work (e.g., fight, death, shift end).
-    /// The group keeps its current step and goes back to Blocked for re-evaluation.
-    pub fn abandonGroup(self: *World, worker_entity: Entity, group_entity: Entity) void {
-        const group = self.reg.get(KitchenGroup, group_entity);
-        const worker = self.reg.get(Worker, worker_entity);
-        const worker_name = self.reg.get(Name, worker_entity);
-
-        self.log("{s} abandoned group at step {d}/{d}", .{
-            worker_name.value,
-            group.steps.current_index,
-            group.steps.steps.len,
-        });
-
-        // Keep current step index - DON'T reset!
-        group.status = .Blocked; // Re-evaluate resource availability
-        group.target_storage = null;
-
-        worker.state = .Idle;
-        worker.target_position = null;
-        // Note: worker keeps carrying items - they might drop them or keep them
-
-        // Remove assignments
-        self.reg.remove(AssignedToGroup, worker_entity);
-        self.reg.remove(GroupAssignedWorker, group_entity);
-    }
-
     fn printStatus(self: *World) void {
         std.debug.print("\n--- World Status ---\n", .{});
 

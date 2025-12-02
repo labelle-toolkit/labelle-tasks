@@ -505,12 +505,35 @@ const World = struct {
         const group = self.reg.get(KitchenGroup, group_entity);
         const worker = self.reg.get(Worker, worker_entity);
         const worker_name = self.reg.get(Name, worker_entity);
+        const worker_pos = self.reg.get(Position, worker_entity);
 
         self.log("{s} ABANDONED group at step {d}/{d}!", .{
             worker_name.value,
             group.steps.current_index,
             group.steps.steps.len,
         });
+
+        // Release stove if worker was cooking or moving to cook
+        if (worker.state == .MovingToCook or worker.state == .Cooking) {
+            var stove_view = self.reg.view(.{ Stove, Position }, .{});
+            var stove_iter = stove_view.entityIterator();
+            while (stove_iter.next()) |stove_entity| {
+                const stove = self.reg.get(Stove, stove_entity);
+                const stove_pos = self.reg.get(Position, stove_entity);
+                // Release the stove the worker was heading to or at
+                if (worker.target_position) |target| {
+                    if (stove_pos.eql(target)) {
+                        stove.in_use = false;
+                        self.log("Released stove at ({d}, {d})", .{ stove_pos.x, stove_pos.y });
+                        break;
+                    }
+                } else if (stove_pos.eql(worker_pos.*)) {
+                    stove.in_use = false;
+                    self.log("Released stove at ({d}, {d})", .{ stove_pos.x, stove_pos.y });
+                    break;
+                }
+            }
+        }
 
         // KEY: Keep current step index - DON'T reset!
         group.status = .Blocked; // Re-evaluate resource availability
