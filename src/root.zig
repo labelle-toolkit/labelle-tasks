@@ -103,7 +103,10 @@ pub const GroupSteps = struct {
         return initAt(steps, 0);
     }
 
+    /// Initialize GroupSteps at a specific step index for resuming interrupted work.
+    /// Asserts that start_index <= steps.len (equal means already complete).
     pub fn initAt(steps: []const StepDef, start_index: u8) GroupSteps {
+        std.debug.assert(start_index <= steps.len);
         return .{
             .steps = steps,
             .current_index = start_index,

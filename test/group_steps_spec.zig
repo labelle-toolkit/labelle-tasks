@@ -48,6 +48,18 @@ pub const @"GroupSteps" = struct {
             const steps_at = GS.initAt(&kitchen_steps, 0);
             try expect.equal(steps_init.current_index, steps_at.current_index);
         }
+
+        test "initAt steps.len is immediately complete" {
+            const steps = GS.initAt(&kitchen_steps, 3);
+            try expect.equal(steps.isComplete(), true);
+            try expect.equal(steps.currentStep() == null, true);
+        }
+
+        test "initAt steps.len returns false on advance" {
+            var steps = GS.initAt(&kitchen_steps, 3);
+            const advanced = steps.advance();
+            try expect.equal(advanced, false);
+        }
     };
 
     pub const @"currentStep" = struct {
