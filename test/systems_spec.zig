@@ -621,8 +621,7 @@ pub const @"StepProcessingSystem" = struct {
 
 var g_runner_canUnblock: bool = true;
 var g_runner_shouldContinue: bool = false;
-var g_runner_processStep_calls: u32 = 0;
-var g_runner_onAssigned_calls: u32 = 0;
+var g_runner_startStep_calls: u32 = 0;
 var g_runner_onReleased_calls: u32 = 0;
 
 fn runnerCanUnblock(reg: *Registry, entity: Entity) bool {
@@ -631,12 +630,12 @@ fn runnerCanUnblock(reg: *Registry, entity: Entity) bool {
     return g_runner_canUnblock;
 }
 
-fn runnerProcessStep(reg: *Registry, worker: Entity, group: Entity, step: StepDef) void {
+fn runnerStartStep(reg: *Registry, worker: Entity, group: Entity, step: StepDef) void {
     _ = reg;
     _ = worker;
     _ = group;
     _ = step;
-    g_runner_processStep_calls += 1;
+    g_runner_startStep_calls += 1;
 }
 
 fn runnerShouldContinue(reg: *Registry, worker: Entity, group: Entity) bool {
@@ -644,13 +643,6 @@ fn runnerShouldContinue(reg: *Registry, worker: Entity, group: Entity) bool {
     _ = worker;
     _ = group;
     return g_runner_shouldContinue;
-}
-
-fn runnerOnAssigned(reg: *Registry, worker: Entity, group: Entity) void {
-    _ = reg;
-    _ = worker;
-    _ = group;
-    g_runner_onAssigned_calls += 1;
 }
 
 fn runnerOnReleased(reg: *Registry, worker: Entity, group: Entity) void {
@@ -663,26 +655,27 @@ fn runnerOnReleased(reg: *Registry, worker: Entity, group: Entity) void {
 fn resetRunnerCallbacks() void {
     g_runner_canUnblock = true;
     g_runner_shouldContinue = false;
-    g_runner_processStep_calls = 0;
-    g_runner_onAssigned_calls = 0;
+    g_runner_startStep_calls = 0;
     g_runner_onReleased_calls = 0;
 }
 
 const TestRunner = tasks.TaskRunner(
     TestGroup,
     runnerCanUnblock,
-    runnerProcessStep,
+    runnerStartStep,
     runnerShouldContinue,
-    runnerOnAssigned,
     runnerOnReleased,
 );
 
 pub const @"TaskRunner" = struct {
     pub const @"tick" = struct {
-        test "runs full cycle: blocked -> assigned -> step -> complete" {
+        test "runs full cycle: blocked -> assigned -> step -> complete (event-driven)" {
             resetRunnerCallbacks();
             var reg = Registry.init(std.testing.allocator);
             defer reg.deinit();
+
+            // Setup event handlers
+            TestRunner.setup(&reg);
 
             const worker = reg.create();
             reg.add(worker, tasks.Worker{});
@@ -690,19 +683,25 @@ pub const @"TaskRunner" = struct {
             const group = reg.create();
             reg.add(group, TestGroup.init()); // Blocked initially
 
-            // Tick 1: Blocked -> Queued -> Active + first step (Pickup)
+            // Tick 1: Blocked -> Queued -> Active + startStep called for first step
             TestRunner.tick(&reg);
 
-            try expect.equal(g_runner_onAssigned_calls, 1);
-            try expect.equal(g_runner_processStep_calls, 1);
+            try expect.equal(g_runner_startStep_calls, 1); // startStep called on assignment
 
             const worker_comp = reg.get(tasks.Worker, worker);
             try expect.equal(worker_comp.state, .Working);
 
-            // Tick 2: second step (Cook) -> complete -> released
-            // (TestGroup has 2 steps, so after step 1 it's complete)
+            // Complete step 1 (Pickup) - this triggers startStep for step 2 (Cook)
+            TestRunner.completeStep(&reg, worker);
+            try expect.equal(g_runner_startStep_calls, 2); // startStep for Cook
+
+            // Complete step 2 (Cook) - group is now complete
+            TestRunner.completeStep(&reg, worker);
+            // No more steps, so startStep not called again
+            try expect.equal(g_runner_startStep_calls, 2);
+
+            // Tick to process completion
             TestRunner.tick(&reg);
-            try expect.equal(g_runner_processStep_calls, 2);
             try expect.equal(g_runner_onReleased_calls, 1);
 
             const final_worker = reg.get(tasks.Worker, worker);
@@ -717,6 +716,8 @@ pub const @"TaskRunner" = struct {
             var reg = Registry.init(std.testing.allocator);
             defer reg.deinit();
 
+            TestRunner.setup(&reg);
+
             const worker = reg.create();
             reg.add(worker, tasks.Worker{ .state = .Blocked });
 
@@ -726,7 +727,7 @@ pub const @"TaskRunner" = struct {
             TestRunner.tick(&reg);
 
             // Worker should not be assigned (Blocked state)
-            try expect.equal(g_runner_onAssigned_calls, 0);
+            try expect.equal(g_runner_startStep_calls, 0);
             try expect.equal(reg.tryGet(tasks.AssignedToGroup, worker), null);
 
             const group_comp = reg.get(TestGroup, group);

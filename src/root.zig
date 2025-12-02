@@ -192,6 +192,10 @@ pub const GroupAssignedWorker = struct {
     worker: Entity,
 };
 
+/// Marker component: add to worker when current step is complete.
+/// The event system will react to this, advance the step, and remove the marker.
+pub const StepComplete = struct {};
+
 // ============================================================================
 // ECS Systems
 // ============================================================================
@@ -369,32 +373,36 @@ pub fn StepProcessingSystem(
 }
 
 // ============================================================================
-// Task Runner (combines all systems)
+// Task Runner (event-driven)
 // ============================================================================
 
-/// A combined task runner that executes all task systems in the correct order.
+/// Event-driven task runner using zig-ecs component signals.
 ///
-/// Uses the standard Worker, AssignedToGroup, and GroupAssignedWorker components.
+/// Uses the standard Worker, AssignedToGroup, GroupAssignedWorker, and StepComplete components.
 ///
-/// Execution order per tick:
-/// 1. BlockedToQueuedSystem - unblock groups when resources available
-/// 2. WorkerAssignmentSystem - assign idle workers to queued groups
-/// 3. StepProcessingSystem - execute current step for active groups
-/// 4. GroupCompletionSystem - handle completed groups, release/continue workers
+/// **Event-driven flow:**
+/// 1. Worker assigned → `onAssigned` callback → user starts step (movement, timer, etc.)
+/// 2. Step done → user adds `StepComplete` to worker → system advances step
+/// 3. All steps done → `GroupCompletionSystem` handles cycle completion
+///
+/// **tick() only runs:**
+/// - BlockedToQueuedSystem (resource availability can change)
+/// - WorkerAssignmentSystem (workers become idle)
+/// - GroupCompletionSystem (handles completed cycles)
+///
+/// **No polling for step progress!** Steps advance via StepComplete marker component.
 ///
 /// Parameters:
 /// - `GroupComponent`: Component type for task groups
 /// - `canUnblock`: fn(*Registry, Entity) bool
-/// - `processStep`: fn(*Registry, Entity, Entity, StepDef) void
+/// - `startStep`: fn(*Registry, Entity, Entity, StepDef) void - called when step should begin
 /// - `shouldContinue`: fn(*Registry, Entity, Entity) bool
-/// - `onAssigned`: fn(*Registry, Entity, Entity) void (optional, can be noop)
 /// - `onReleased`: fn(*Registry, Entity, Entity) void (optional, can be noop)
 pub fn TaskRunner(
     comptime GroupComponent: type,
     comptime canUnblock: fn (*Registry, Entity) bool,
-    comptime processStep: fn (*Registry, Entity, Entity, StepDef) void,
+    comptime startStep: fn (*Registry, Entity, Entity, StepDef) void,
     comptime shouldContinue: fn (*Registry, Entity, Entity) bool,
-    comptime onAssigned: fn (*Registry, Entity, Entity) void,
     comptime onReleased: fn (*Registry, Entity, Entity) void,
 ) type {
     return struct {
@@ -408,16 +416,7 @@ pub fn TaskRunner(
             AssignedToGroup,
             GroupAssignedWorker,
             isWorkerIdle,
-            assignWorker,
-        );
-        const Steps = StepProcessingSystem(GroupComponent, GroupAssignedWorker, processStep);
-        const Completion = GroupCompletionSystem(
-            GroupComponent,
-            AssignedToGroup,
-            GroupAssignedWorker,
-            shouldContinue,
-            setWorkerIdle,
-            onReleased,
+            onWorkerAssigned,
         );
 
         fn isWorkerIdle(reg: *Registry, entity: Entity) bool {
@@ -425,10 +424,15 @@ pub fn TaskRunner(
             return worker.state == .Idle;
         }
 
-        fn assignWorker(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
+        fn onWorkerAssigned(reg: *Registry, worker_entity: Entity, group_entity: Entity) void {
             const worker = reg.get(Worker, worker_entity);
             worker.state = .Working;
-            onAssigned(reg, worker_entity, group_entity);
+
+            // Start first step immediately
+            const group = reg.get(GroupComponent, group_entity);
+            if (group.steps.currentStep()) |step| {
+                startStep(reg, worker_entity, group_entity, step);
+            }
         }
 
         fn setWorkerIdle(reg: *Registry, worker_entity: Entity) void {
@@ -436,12 +440,83 @@ pub fn TaskRunner(
             worker.state = .Idle;
         }
 
-        /// Run all task systems for one tick.
+        /// Custom completion system that starts next cycle when worker continues.
+        fn handleCompletion(reg: *Registry) void {
+            var view = reg.view(.{ GroupComponent, GroupAssignedWorker }, .{});
+            var iter = view.entityIterator();
+
+            while (iter.next()) |group_entity| {
+                const group = reg.get(GroupComponent, group_entity);
+                if (group.status != .Active) continue;
+                if (!group.steps.isComplete()) continue;
+
+                const assigned = reg.get(GroupAssignedWorker, group_entity);
+                const worker_entity = assigned.worker;
+
+                // Reset group steps for next cycle
+                group.steps.reset();
+
+                // Check if worker should continue
+                if (shouldContinue(reg, worker_entity, group_entity)) {
+                    // Worker stays assigned, start first step of new cycle
+                    if (group.steps.currentStep()) |step| {
+                        startStep(reg, worker_entity, group_entity, step);
+                    }
+                } else {
+                    // Release worker, group goes back to Blocked
+                    group.status = .Blocked;
+                    reg.remove(AssignedToGroup, worker_entity);
+                    reg.remove(GroupAssignedWorker, group_entity);
+                    setWorkerIdle(reg, worker_entity);
+                    onReleased(reg, worker_entity, group_entity);
+                }
+            }
+        }
+
+        /// Called when StepComplete component is added to a worker.
+        /// Advances to next step or marks group ready for completion.
+        fn onStepCompleteAdded(reg: *Registry, worker_entity: Entity) void {
+            // Remove the marker immediately
+            reg.remove(StepComplete, worker_entity);
+
+            // Get assignment
+            const assigned = reg.tryGet(AssignedToGroup, worker_entity);
+            if (assigned == null) return;
+
+            const group = reg.get(GroupComponent, assigned.?.group);
+
+            // Advance to next step
+            if (group.steps.advance()) {
+                // Check if more steps remain
+                if (group.steps.currentStep()) |next_step| {
+                    startStep(reg, worker_entity, assigned.?.group, next_step);
+                }
+                // If no more steps (isComplete), runCompletion will handle it
+            }
+        }
+
+        /// Set up event handlers. Call this once during initialization.
+        /// This connects the StepComplete signal to automatically advance steps.
+        pub fn setup(reg: *Registry) void {
+            reg.onConstruct(StepComplete).connect(onStepCompleteAdded);
+        }
+
+        /// Run task systems for one tick (no step polling).
+        ///
+        /// Only runs:
+        /// - BlockedToQueuedSystem (resources may have changed)
+        /// - WorkerAssignmentSystem (workers may be idle)
+        /// - Completion handling (groups may have finished all steps)
         pub fn tick(reg: *Registry) void {
             Blocked.run(reg);
             Assignment.run(reg);
-            Steps.run(reg);
-            Completion.run(reg);
+            handleCompletion(reg);
+        }
+
+        /// Signal that a worker has completed their current step.
+        /// This triggers the event system to advance to the next step.
+        pub fn completeStep(reg: *Registry, worker_entity: Entity) void {
+            reg.add(worker_entity, StepComplete{});
         }
 
         /// Run only the blocked-to-queued transition.
@@ -454,19 +529,14 @@ pub fn TaskRunner(
             Assignment.run(reg);
         }
 
-        /// Run only step processing.
-        pub fn runSteps(reg: *Registry) void {
-            Steps.run(reg);
-        }
-
         /// Run only completion handling.
         pub fn runCompletion(reg: *Registry) void {
-            Completion.run(reg);
+            handleCompletion(reg);
         }
     };
 }
 
-/// No-op callback for when you don't need onAssigned/onReleased.
+/// No-op callback for when you don't need onReleased.
 pub fn noop(reg: *Registry, worker: Entity, group: Entity) void {
     _ = reg;
     _ = worker;
