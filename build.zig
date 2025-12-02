@@ -20,6 +20,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "ecs", .module = ecs_dep.module("zig-ecs") },
+        },
     });
 
     // Library artifact
@@ -29,6 +32,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ecs", .module = ecs_dep.module("zig-ecs") },
+            },
         }),
     });
     b.installArtifact(lib);
@@ -113,9 +119,29 @@ pub fn build(b: *std.Build) void {
     const abandonment_step = b.step("abandonment", "Run the worker abandonment example");
     abandonment_step.dependOn(&run_abandonment.step);
 
+    // Systems example - demonstrates ECS systems for automatic state management
+    const systems_mod = b.createModule(.{
+        .root_source_file = b.path("usage/systems/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    systems_mod.addImport("labelle_tasks", lib_mod);
+    systems_mod.addImport("ecs", ecs_dep.module("zig-ecs"));
+
+    const systems_example = b.addExecutable(.{
+        .name = "systems_example",
+        .root_module = systems_mod,
+    });
+    b.installArtifact(systems_example);
+
+    const run_systems = b.addRunArtifact(systems_example);
+    const systems_step = b.step("systems", "Run the ECS systems example");
+    systems_step.dependOn(&run_systems.step);
+
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_simple.step);
     examples_step.dependOn(&run_kitchen.step);
     examples_step.dependOn(&run_abandonment.step);
+    examples_step.dependOn(&run_systems.step);
 }

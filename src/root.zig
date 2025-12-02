@@ -146,3 +146,131 @@ pub fn canInterrupt(interrupt_level: InterruptLevel, by_priority: Priority) bool
         .Atomic => false,
     };
 }
+
+// ============================================================================
+// ECS Systems
+// ============================================================================
+
+const ecs = @import("ecs");
+pub const Registry = ecs.Registry;
+pub const Entity = ecs.Entity;
+
+/// System that transitions task groups from Blocked to Queued (or Active) status.
+///
+/// If a blocked group already has an assigned worker (continuing from previous cycle),
+/// it transitions directly to Active instead of Queued.
+///
+/// Config must provide:
+/// - `GroupComponent`: The component type for task groups (must have `status: TaskGroupStatus`)
+/// - `GroupAssignedComponent`: Component on group indicating assigned worker
+/// - `canUnblock(reg, entity) bool`: Returns true if the group can be unblocked
+pub fn BlockedToQueuedSystem(comptime Config: type) type {
+    return struct {
+        pub fn run(reg: *Registry) void {
+            var view = reg.view(.{Config.GroupComponent}, .{});
+            var iter = view.entityIterator();
+            while (iter.next()) |entity| {
+                const group = reg.get(Config.GroupComponent, entity);
+                if (group.status == .Blocked) {
+                    if (Config.canUnblock(reg, entity)) {
+                        // If group already has a worker assigned (continuing), go to Active
+                        // Otherwise go to Queued to wait for worker assignment
+                        const has_worker = reg.tryGet(Config.GroupAssignedComponent, entity) != null;
+                        group.status = if (has_worker) .Active else .Queued;
+                    }
+                }
+            }
+        }
+    };
+}
+
+/// System that assigns idle workers to queued task groups (1:1, highest priority first).
+///
+/// Config must provide:
+/// - `GroupComponent`: The component type for task groups (must have `status: TaskGroupStatus`, `priority: Priority`)
+/// - `WorkerComponent`: The component type for workers
+/// - `AssignedComponent`: Component added to worker when assigned (must have `group: Entity` field)
+/// - `GroupAssignedComponent`: Component added to group when assigned (must have `worker: Entity` field)
+/// - `isWorkerIdle(reg, entity) bool`: Returns true if worker is available for assignment
+/// - `onAssigned(reg, worker_entity, group_entity) void`: Called after assignment is made
+pub fn WorkerAssignmentSystem(comptime Config: type) type {
+    return struct {
+        pub fn run(reg: *Registry) void {
+            // Find queued groups without workers, sorted by priority (highest first)
+            var group_view = reg.view(.{Config.GroupComponent}, .{Config.GroupAssignedComponent});
+            var group_iter = group_view.entityIterator();
+
+            while (group_iter.next()) |group_entity| {
+                const group = reg.get(Config.GroupComponent, group_entity);
+                if (group.status != .Queued) continue;
+
+                // Find an idle worker
+                var worker_view = reg.view(.{Config.WorkerComponent}, .{Config.AssignedComponent});
+                var worker_iter = worker_view.entityIterator();
+
+                while (worker_iter.next()) |worker_entity| {
+                    if (Config.isWorkerIdle(reg, worker_entity)) {
+                        // Assign worker to group
+                        reg.add(worker_entity, Config.AssignedComponent{ .group = group_entity });
+                        reg.add(group_entity, Config.GroupAssignedComponent{ .worker = worker_entity });
+                        group.status = .Active;
+
+                        Config.onAssigned(reg, worker_entity, group_entity);
+                        break;
+                    }
+                }
+            }
+        }
+    };
+}
+
+/// System that handles task group completion and worker release.
+///
+/// When a group's steps are complete, this system:
+/// 1. Resets the group (steps back to 0, status to Blocked)
+/// 2. Calls `shouldContinue` to check if worker stays assigned
+/// 3. If not continuing, releases the worker and calls `onReleased`
+///
+/// Config must provide:
+/// - `GroupComponent`: The component type for task groups (must have `status: TaskGroupStatus`, `steps: GroupSteps`)
+/// - `WorkerComponent`: The component type for workers
+/// - `AssignedComponent`: Component on worker indicating assignment
+/// - `GroupAssignedComponent`: Component on group indicating assigned worker
+/// - `shouldContinue(reg, worker_entity, group_entity) bool`: Returns true if worker should start another cycle
+/// - `onReleased(reg, worker_entity, group_entity) void`: Called when worker is released from group
+/// - `setWorkerIdle(reg, worker_entity) void`: Called to reset worker to idle state
+pub fn GroupCompletionSystem(comptime Config: type) type {
+    return struct {
+        pub fn run(reg: *Registry) void {
+            var view = reg.view(.{ Config.GroupComponent, Config.GroupAssignedComponent }, .{});
+            var iter = view.entityIterator();
+
+            while (iter.next()) |group_entity| {
+                const group = reg.get(Config.GroupComponent, group_entity);
+                if (group.status != .Active) continue;
+                if (!group.steps.isComplete()) continue;
+
+                const assigned = reg.get(Config.GroupAssignedComponent, group_entity);
+                const worker_entity = assigned.worker;
+
+                // Reset group steps for next cycle
+                group.steps.reset();
+
+                // Check if worker should continue
+                if (Config.shouldContinue(reg, worker_entity, group_entity)) {
+                    // Worker stays assigned, set group to Blocked for resource re-check
+                    // BlockedToQueuedSystem will transition back to Queued if resources available
+                    // Then since worker is still assigned, it will go straight to Active
+                    group.status = .Blocked;
+                } else {
+                    // Release worker, group goes back to Blocked
+                    group.status = .Blocked;
+                    reg.remove(Config.AssignedComponent, worker_entity);
+                    reg.remove(Config.GroupAssignedComponent, group_entity);
+                    Config.setWorkerIdle(reg, worker_entity);
+                    Config.onReleased(reg, worker_entity, group_entity);
+                }
+            }
+        }
+    };
+}

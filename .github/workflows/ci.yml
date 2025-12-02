@@ -29,6 +29,9 @@ jobs:
       - name: Run abandonment example
         run: zig build abandonment
 
+      - name: Run systems example
+        run: zig build systems
+
   build:
     runs-on: ubuntu-latest
     steps:
