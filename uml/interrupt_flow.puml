@@ -1,48 +1,52 @@
 @startuml interrupt_flow
-title Task Interruption Flow
+title Worker Abandonment Flow
 
 participant "Game" as game
-participant "TaskManager" as tm
-participant "Worker" as worker
-participant "Current Task/Group" as current
-participant "Fight Task" as fight
+participant "Engine" as engine
+participant "Chef" as chef
+participant "Kitchen" as kitchen
 
-== Worker is executing a task ==
-worker -> current : executing...
+== Chef is working at kitchen ==
+chef -> kitchen : executing step...
 
 == Enemy Appears ==
 game -> game : detect enemy
-game -> fight : create(priority=Critical)
+note right: Game decides chef\nmust stop cooking
 
-== Check Interrupt ==
-game -> tm : canInterrupt(current, Critical)
-tm -> current : check interrupt_level
-alt interrupt_level < Critical
-  tm --> game : true
-else interrupt_level = Atomic
-  tm --> game : false
-  note right: Cannot interrupt\natomic tasks
+== Abandon Work ==
+game -> engine : abandonWork(chef_id)
+engine -> chef : state = Idle
+engine -> kitchen : status = Blocked\n(step progress preserved)
+engine -> kitchen : assigned_worker = null
+
+note over kitchen
+  Kitchen keeps current_step intact.
+  When resources available again,
+  another worker can resume from
+  where the chef left off.
+end note
+
+== Fight Handling ==
+note over game
+  Game handles fight logic
+  outside of task engine.
+  Engine is not aware of fights.
+end note
+
+== After Fight ==
+game -> engine : notifyWorkerIdle(chef_id)
+note right: Chef is available again
+
+== Resume Kitchen ==
+game -> engine : notifyResourcesAvailable(kitchen_id)
+engine -> engine : findBestWorker(kitchen_id, ...)
+alt chef is best worker
+  engine -> chef : state = Working
+  engine -> kitchen : status = Active
+  engine -> game : onStepStarted(chef_id, kitchen_id, current_step)
+  note right: Resumes from preserved step
+else different worker
+  note right: Another worker picks up\nwhere chef left off
 end
-
-== Interrupt Approved ==
-alt current is Standalone Task
-  game -> tm : cancelTask(current)
-  tm -> current : status = Cancelled
-  tm -> tm : releaseAll(current)
-  tm -> worker : remove CurrentTask
-  game -> game : handle consequences\n(drop items, etc.)
-else current is Task Group
-  game -> tm : releaseWorkerFromGroup(current)
-  tm -> current : status = Queued
-  tm -> worker : remove CurrentGroup
-  note right: Group goes back to Queued\nAnother worker can pick it up
-end
-
-== Assign Fight ==
-game -> tm : assignBestTask(worker, fightScorer)
-tm -> fight : status = Active
-tm -> worker : add CurrentTask(fight)
-
-worker -> fight : execute fight
 
 @enduml

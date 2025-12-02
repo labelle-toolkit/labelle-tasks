@@ -1,0 +1,65 @@
+@startuml engine_api
+title Engine API
+
+class "Engine<GameId>" as Engine {
+  allocator: Allocator
+  --
+  **Initialization**
+  init(allocator): Engine
+  deinit(): void
+  --
+  **Worker Management**
+  addWorker(game_id, options): WorkerId
+  removeWorker(game_id): void
+  getWorkerState(game_id): ?WorkerState
+  --
+  **Workstation Management**
+  addWorkstation(game_id, options): WorkstationId
+  removeWorkstation(game_id): void
+  getWorkstationStatus(game_id): ?WorkstationStatus
+  getCurrentStep(game_id): ?u8
+  --
+  **Event Notifications**
+  notifyResourcesAvailable(game_id): void
+  notifyStepComplete(worker_game_id): void
+  notifyWorkerIdle(game_id): void
+  notifyWorkerBusy(game_id): void
+  abandonWork(game_id): void
+  --
+  **Queries**
+  getCyclesCompleted(game_id): u32
+  getWorkerAssignment(worker_id): ?GameId
+  getAssignedWorker(workstation_id): ?GameId
+  --
+  **Callback Registration**
+  setFindBestWorker(callback): void
+  setOnStepStarted(callback): void
+  setOnStepCompleted(callback): void
+  setOnWorkerReleased(callback): void
+  setShouldContinue(callback): void
+}
+
+interface "Callbacks" as callbacks {
+  FindBestWorkerFn(ws_id, step, available): ?GameId
+  OnStepStartedFn(worker_id, ws_id, step): void
+  OnStepCompletedFn(worker_id, ws_id, step): void
+  OnWorkerReleasedFn(worker_id, ws_id): void
+  ShouldContinueFn(ws_id, worker_id, cycles): bool
+}
+
+Engine ..> callbacks : uses
+
+note right of callbacks
+  User-provided functions
+  for game-specific logic:
+  - Worker selection (pathfinding)
+  - Animations, sounds
+  - Cycle decisions
+end note
+
+note bottom of Engine
+  Generic over GameId type
+  (u32, u64, custom struct)
+end note
+
+@enduml

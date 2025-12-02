@@ -1,34 +1,35 @@
 @startuml store_step_flow
 title Store Step - Execution Flow
 
-participant "TaskManager" as tm
-participant "GroupSteps" as steps
-participant "Callbacks" as cb
+participant "Engine" as engine
+participant "Game" as game
 participant "Worker" as worker
 
 == Execute Store Step ==
 
-tm -> steps : get current step
-steps --> tm : StepDef{ type=Store, target=internal_food_slot }
+engine -> game : onStepStarted(worker_id, ws_id,\n{type: .Store})
 
-tm -> cb : findDestination(registry, internal_food_slot)
-note right
-  User logic:
-  1. Get item type in source
-  2. Find external storages that accept it
-  3. Return by priority/distance/space
+note right of game
+  Game receives step callback
+  and handles execution:
+  1. Pickup item from workstation
+  2. Determine destination storage
+  3. Move worker to destination
+  4. Drop item animation
 end note
 
-alt destination found
-  cb --> tm : food_storage_a
-  tm -> worker : go to internal_food_slot
-  worker -> worker : pickup food
-  tm -> worker : go to food_storage_a
-  worker -> worker : drop food
-  tm -> steps : advanceStep()
-else no destination available
-  cb --> tm : null
-  tm -> tm : step blocked\n(wait or handle error)
-end
+game -> worker : pickupFrom(workstation)
+
+game -> game : findDestination(item_type)
+game -> worker : moveTo(destination)
+worker -> worker : drop item
+
+== Step Complete ==
+game -> engine : notifyStepComplete(worker_id)
+
+note right of engine
+  Engine advances to next step
+  or completes cycle if last step
+end note
 
 @enduml

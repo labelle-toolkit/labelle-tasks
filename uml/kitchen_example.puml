@@ -1,47 +1,49 @@
 @startuml kitchen_example
-title Kitchen Task Group - Example Flow
+title Kitchen Workstation - Example Flow
 
 participant "Game Loop" as game
-participant "TaskManager" as tm
-participant "Kitchen Group" as kitchen
-participant "Worker" as worker
+participant "Engine" as engine
+participant "Kitchen" as kitchen
+participant "Chef" as chef
 
 == Initialization ==
-game -> kitchen : create(status=Blocked)
-game -> kitchen : add GroupSteps\n[Pickup, Pickup, Cook, Store]
+game -> engine : init(allocator)
+game -> engine : addWorker(chef_id, {})
+game -> engine : addWorkstation(kitchen_id,\n{steps: [Pickup, Cook, Store], priority: .High})
+game -> engine : setFindBestWorker(findBestWorker)
+game -> engine : setOnStepStarted(onStepStarted)
+game -> engine : setShouldContinue(shouldContinue)
 
-== Unblock Check ==
-game -> tm : updateBlockedGroups(canUnblock)
-tm -> kitchen : canUnblock?
-note right: Check ingredients\nand storage space
-kitchen --> tm : true
-tm -> kitchen : status = Queued
-
-== Worker Assignment ==
-game -> tm : assignBestGroup(worker, scorer)
-tm -> kitchen : score for worker?
-kitchen --> tm : 85.0
-tm -> kitchen : status = Active
-tm -> worker : add CurrentGroup
-tm -> kitchen : add GroupAssignedTo
+== Resources Available ==
+game -> engine : notifyResourcesAvailable(kitchen_id)
+engine -> engine : findBestWorker(kitchen_id, .Pickup, [chef_id])
+engine --> game : chef_id selected
+engine -> kitchen : status = Active
+engine -> chef : state = Working
 
 == Step Execution ==
-loop for each step
-  worker -> game : execute current step
-  game -> tm : advanceGroupStep(kitchen)
-  tm -> kitchen : current_index++
-end
+engine -> game : onStepStarted(chef_id, kitchen_id, {.Pickup})
+note right: Game starts chef movement\nand pickup animation
+
+game -> engine : notifyStepComplete(chef_id)
+engine -> game : onStepStarted(chef_id, kitchen_id, {.Cook})
+note right: Game starts cooking animation
+
+game -> engine : notifyStepComplete(chef_id)
+engine -> game : onStepStarted(chef_id, kitchen_id, {.Store})
+note right: Game starts storage animation
+
+game -> engine : notifyStepComplete(chef_id)
 
 == Cycle Complete ==
-game -> tm : completeGroupCycle(kitchen)
-tm -> worker : remove CurrentGroup
-tm -> kitchen : remove GroupAssignedTo
-tm -> kitchen : status = Blocked
-tm -> kitchen : current_index = 0
-
-note over kitchen
-  Kitchen cycles back to Blocked
-  waiting for more ingredients
-end note
+engine -> game : shouldContinue(kitchen_id, chef_id, 1)
+alt shouldContinue returns true
+  engine -> kitchen : status = Blocked\n(waiting for resources)
+  note right: Chef stays assigned\nwaiting for next cycle
+else shouldContinue returns false
+  engine -> game : onWorkerReleased(chef_id, kitchen_id)
+  engine -> chef : state = Idle
+  engine -> kitchen : status = Blocked
+end
 
 @enduml

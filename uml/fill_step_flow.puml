@@ -1,34 +1,34 @@
 @startuml fill_step_flow
-title Fill Step - Execution Flow
+title Pickup Step - Execution Flow
 
-participant "TaskManager" as tm
-participant "GroupSteps" as steps
-participant "Callbacks" as cb
+participant "Engine" as engine
+participant "Game" as game
 participant "Worker" as worker
 
-== Execute Fill Step ==
+== Execute Pickup Step ==
 
-tm -> steps : get current step
-steps --> tm : StepDef{ type=Fill, target=internal_meat_slot }
+engine -> game : onStepStarted(worker_id, ws_id,\n{type: .Pickup})
 
-tm -> cb : findSource(registry, internal_meat_slot)
-note right
-  User logic:
-  1. Get item type needed by target
-  2. Find external storages with that item
-  3. Return closest/best available
+note right of game
+  Game receives step callback
+  and handles execution:
+  1. Determine source location
+  2. Move worker to source
+  3. Pickup item animation
+  4. Move worker to workstation
 end note
 
-alt source found
-  cb --> tm : meat_storage_b
-  tm -> worker : go to meat_storage_b
-  worker -> worker : pickup meat
-  tm -> worker : go to internal_meat_slot
-  worker -> worker : drop meat
-  tm -> steps : advanceStep()
-else no source available
-  cb --> tm : null
-  tm -> tm : step blocked\n(wait or handle error)
-end
+game -> worker : moveTo(source)
+worker -> worker : pickup item
+
+game -> worker : moveTo(workstation)
+
+== Step Complete ==
+game -> engine : notifyStepComplete(worker_id)
+
+note right of engine
+  Engine advances to next step
+  or completes cycle if last step
+end note
 
 @enduml

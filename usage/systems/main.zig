@@ -1,11 +1,11 @@
-//! Simple Engine Example
+//! Multi-Cycle Engine Example
 //!
-//! Demonstrates the basic Engine API:
-//! - Priority levels affecting workstation selection
-//! - Worker assignment based on priority
-//! - Multi-step workflows
+//! Demonstrates the Engine API with worker cycling:
+//! - Worker completes multiple cycles at a workstation
+//! - shouldContinue callback controls when worker continues
+//! - Worker is released after max cycles
 //!
-//! Two workstations with different priorities compete for a single worker.
+//! This replaces the ECS event-driven example with the simpler Engine API.
 
 const std = @import("std");
 const tasks = @import("labelle_tasks");
@@ -20,9 +20,8 @@ const Priority = tasks.Priority;
 
 const GameEntityId = u32;
 
-const WORKER_BOB: GameEntityId = 1;
-const STATION_HIGH: GameEntityId = 100;
-const STATION_LOW: GameEntityId = 101;
+const CHEF_MARIO: GameEntityId = 1;
+const KITCHEN: GameEntityId = 100;
 
 // ============================================================================
 // Game State
@@ -30,22 +29,16 @@ const STATION_LOW: GameEntityId = 101;
 
 var g_tick: u32 = 0;
 var g_work_timers: std.AutoHashMap(GameEntityId, u32) = undefined;
+var g_cycles_completed: u32 = 0;
+const MAX_CYCLES: u32 = 2;
 
 fn initGameState(allocator: std.mem.Allocator) void {
     g_work_timers = std.AutoHashMap(GameEntityId, u32).init(allocator);
+    g_cycles_completed = 0;
 }
 
 fn deinitGameState() void {
     g_work_timers.deinit();
-}
-
-fn entityName(id: GameEntityId) []const u8 {
-    return switch (id) {
-        WORKER_BOB => "Bob",
-        STATION_HIGH => "High Priority Station",
-        STATION_LOW => "Low Priority Station",
-        else => "Unknown",
-    };
 }
 
 // ============================================================================
@@ -59,7 +52,6 @@ fn findBestWorker(
 ) ?GameEntityId {
     _ = workstation_id;
     _ = step;
-    // Only one worker, just return them
     if (available_workers.len > 0) {
         return available_workers[0];
     }
@@ -71,15 +63,22 @@ fn onStepStarted(
     workstation_id: GameEntityId,
     step: StepDef,
 ) void {
-    std.debug.print("[Tick {d:3}] {s} STARTING {s} at {s}\n", .{
+    _ = worker_id;
+    _ = workstation_id;
+
+    std.debug.print("[Tick {d:3}] Chef Mario STARTING: {s}\n", .{
         g_tick,
-        entityName(worker_id),
         @tagName(step.type),
-        entityName(workstation_id),
     });
 
-    // All steps take 1 tick
-    g_work_timers.put(worker_id, 1) catch {};
+    // Simulate work taking time
+    const ticks: u32 = switch (step.type) {
+        .Pickup => 1,
+        .Cook => 2,
+        .Store => 1,
+        .Craft => 1,
+    };
+    g_work_timers.put(CHEF_MARIO, ticks) catch {};
 }
 
 fn onStepCompleted(
@@ -87,22 +86,26 @@ fn onStepCompleted(
     workstation_id: GameEntityId,
     step: StepDef,
 ) void {
-    std.debug.print("[Tick {d:3}] {s} COMPLETED {s} at {s}\n", .{
-        g_tick,
-        entityName(worker_id),
-        @tagName(step.type),
-        entityName(workstation_id),
-    });
+    _ = worker_id;
+    _ = workstation_id;
+
+    std.debug.print("[Tick {d:3}] Chef Mario FINISHED step\n", .{g_tick});
+
+    // Track cycles when last step completes
+    if (step.type == .Store) {
+        g_cycles_completed += 1;
+    }
 }
 
 fn onWorkerReleased(
     worker_id: GameEntityId,
     workstation_id: GameEntityId,
 ) void {
-    std.debug.print("[Tick {d:3}] {s} RELEASED from {s}\n", .{
+    _ = worker_id;
+    _ = workstation_id;
+    std.debug.print("[Tick {d:3}] Chef Mario released (completed {d} cycles)\n", .{
         g_tick,
-        entityName(worker_id),
-        entityName(workstation_id),
+        g_cycles_completed,
     });
 }
 
@@ -113,8 +116,7 @@ fn shouldContinue(
 ) bool {
     _ = workstation_id;
     _ = worker_id;
-    // Do 1 cycle per workstation
-    return cycles_completed < 1;
+    return cycles_completed < MAX_CYCLES;
 }
 
 // ============================================================================
@@ -124,12 +126,15 @@ fn shouldContinue(
 pub fn main() !void {
     std.debug.print("\n", .{});
     std.debug.print("========================================\n", .{});
-    std.debug.print("  SIMPLE ENGINE EXAMPLE                 \n", .{});
+    std.debug.print("  MULTI-CYCLE ENGINE EXAMPLE            \n", .{});
     std.debug.print("========================================\n\n", .{});
 
     std.debug.print("This example demonstrates:\n", .{});
-    std.debug.print("- Priority-based workstation selection\n", .{});
-    std.debug.print("- Worker assignment to highest priority first\n\n", .{});
+    std.debug.print("- Worker completing multiple cycles\n", .{});
+    std.debug.print("- shouldContinue callback for cycle control\n", .{});
+    std.debug.print("- Worker release after max cycles\n\n", .{});
+
+    std.debug.print("Step durations: Pickup=1, Cook=2, Store=1\n\n", .{});
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -156,40 +161,30 @@ pub fn main() !void {
     // ========================================================================
 
     std.debug.print("Setup:\n", .{});
-    std.debug.print("- One worker (Bob)\n", .{});
-    std.debug.print("- High Priority Station (should be picked first)\n", .{});
-    std.debug.print("- Low Priority Station (should be picked second)\n\n", .{});
+    std.debug.print("- Chef Mario (max 2 cycles)\n", .{});
+    std.debug.print("- Kitchen (3 steps: Pickup -> Cook -> Store)\n\n", .{});
 
-    _ = engine.addWorker(WORKER_BOB, .{});
+    _ = engine.addWorker(CHEF_MARIO, .{});
 
-    const simple_steps = [_]StepDef{
+    const kitchen_steps = [_]StepDef{
         .{ .type = .Pickup },
+        .{ .type = .Cook },
         .{ .type = .Store },
     };
 
-    _ = engine.addWorkstation(STATION_HIGH, .{
-        .steps = &simple_steps,
-        .priority = .High,
-    });
-
-    _ = engine.addWorkstation(STATION_LOW, .{
-        .steps = &simple_steps,
-        .priority = .Low,
+    _ = engine.addWorkstation(KITCHEN, .{
+        .steps = &kitchen_steps,
+        .priority = .Normal,
     });
 
     // ========================================================================
     // Simulate
     // ========================================================================
 
-    std.debug.print("--- Starting simulation ---\n\n", .{});
+    std.debug.print("[Tick   0] Signaling resources available...\n", .{});
+    engine.notifyResourcesAvailable(KITCHEN);
 
-    // Signal both stations have resources at the same time
-    std.debug.print("[Tick   0] Both stations signal resources available!\n", .{});
-    engine.notifyResourcesAvailable(STATION_HIGH);
-    engine.notifyResourcesAvailable(STATION_LOW);
-
-    // Run simulation
-    const max_ticks = 20;
+    const max_ticks = 30;
     while (g_tick < max_ticks) {
         g_tick += 1;
 
@@ -213,16 +208,19 @@ pub fn main() !void {
             engine.notifyStepComplete(worker);
         }
 
-        // Check completion
-        const high_cycles = engine.getCyclesCompleted(STATION_HIGH);
-        const low_cycles = engine.getCyclesCompleted(STATION_LOW);
-
-        if (high_cycles >= 1 and low_cycles >= 1) {
-            std.debug.print("\n[Tick {d:3}] Both stations completed!\n", .{g_tick});
-            break;
+        // If cycle completed and worker continues, signal resources
+        const status = engine.getWorkstationStatus(KITCHEN);
+        if (status == .Blocked and engine.getAssignedWorker(KITCHEN) != null) {
+            std.debug.print("[Tick {d:3}] Cycle done, signaling resources for next cycle...\n", .{g_tick});
+            engine.notifyResourcesAvailable(KITCHEN);
         }
 
-        // If worker released, they'll auto-assign to queued station
+        // Check if done
+        const worker_state = engine.getWorkerState(CHEF_MARIO);
+        if (worker_state == .Idle and g_cycles_completed >= MAX_CYCLES) {
+            std.debug.print("\n[Tick {d:3}] Simulation complete!\n", .{g_tick});
+            break;
+        }
     }
 
     // ========================================================================
@@ -231,18 +229,21 @@ pub fn main() !void {
 
     std.debug.print("\n--- Assertions ---\n", .{});
 
-    const high_cycles = engine.getCyclesCompleted(STATION_HIGH);
-    const low_cycles = engine.getCyclesCompleted(STATION_LOW);
+    std.debug.print("Worker cycles completed: {d}\n", .{g_cycles_completed});
+    std.debug.assert(g_cycles_completed == 2);
+    std.debug.print("[PASS] Worker completed 2 cycles\n", .{});
 
-    std.debug.assert(high_cycles == 1);
-    std.debug.print("[PASS] High Priority Station completed 1 cycle\n", .{});
+    const final_worker = engine.getWorkerState(CHEF_MARIO);
+    std.debug.assert(final_worker == .Idle);
+    std.debug.print("[PASS] Worker is idle after completion\n", .{});
 
-    std.debug.assert(low_cycles == 1);
-    std.debug.print("[PASS] Low Priority Station completed 1 cycle\n", .{});
+    const final_status = engine.getWorkstationStatus(KITCHEN);
+    std.debug.assert(final_status == .Blocked);
+    std.debug.print("[PASS] Workstation is blocked (waiting for resources)\n", .{});
 
-    const bob_state = engine.getWorkerState(WORKER_BOB);
-    std.debug.assert(bob_state.? == .Idle);
-    std.debug.print("[PASS] Bob is idle\n", .{});
+    const assigned = engine.getAssignedWorker(KITCHEN);
+    std.debug.assert(assigned == null);
+    std.debug.print("[PASS] Worker is unassigned\n", .{});
 
     std.debug.print("\n========================================\n", .{});
     std.debug.print("    ALL ASSERTIONS PASSED!              \n", .{});

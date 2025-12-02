@@ -1,7 +1,7 @@
 @startuml components
 title labelle-tasks Components
 
-package "Common" {
+package "Core Types" {
   enum Priority {
     Low
     Normal
@@ -9,111 +9,67 @@ package "Common" {
     Critical
   }
 
-  enum InterruptLevel {
-    None
-    Low
-    High
-    Atomic
-  }
-}
-
-package "Standalone Tasks" {
-  enum TaskStatus {
-    Queued
-    Active
-    Completed
-    Cancelled
-  }
-
-  class Task <<component>> {
-    status: TaskStatus
-    priority: Priority
-    interrupt_level: InterruptLevel
-  }
-
-  class AssignedTo <<component>> {
-    worker: Entity
-  }
-
-  class CurrentTask <<component>> {
-    task: Entity
-  }
-
-  note bottom of AssignedTo
-    Added to task entity
-  end note
-
-  note bottom of CurrentTask
-    Added to worker entity
-  end note
-}
-
-package "Task Groups" {
-  enum TaskGroupStatus {
-    Blocked
-    Queued
-    Active
-  }
-
-  class TaskGroup <<component>> {
-    status: TaskGroupStatus
-    priority: Priority
-    interrupt_level: InterruptLevel
-  }
-
-  class GroupSteps <<component>> {
-    steps: []const StepDef
-    current_index: u8
-  }
-
-  class StepDef <<struct>> {
-    type: StepType
-  }
-
   enum StepType {
     Pickup
     Cook
     Store
     Craft
-    ...
   }
 
-  class GroupAssignedTo <<component>> {
-    worker: Entity
+  class StepDef <<struct>> {
+    type: StepType
   }
-
-  class CurrentGroup <<component>> {
-    group: Entity
-  }
-
-  GroupSteps --> StepDef : contains
-  StepDef --> StepType : has
-
-  note bottom of GroupAssignedTo
-    Added to group entity
-  end note
-
-  note bottom of CurrentGroup
-    Added to worker entity
-  end note
 }
 
-package "Reservations" {
-  class ReservedBy <<component>> {
-    task: Entity
+package "Engine" {
+  enum WorkerState {
+    Idle
+    Working
+    Blocked
   }
 
-  class Reserves <<component>> {
-    resources: []Entity
+  enum WorkstationStatus {
+    Blocked
+    Queued
+    Active
   }
 
-  note bottom of ReservedBy
-    Added to resource entity
+  class Worker <<internal>> {
+    game_id: GameId
+    state: WorkerState
+    assigned_to: ?WorkstationId
+    skills: ?SkillSet
+  }
+
+  class Workstation <<internal>> {
+    game_id: GameId
+    status: WorkstationStatus
+    priority: Priority
+    steps: []const StepDef
+    current_step: u8
+    assigned_worker: ?WorkerId
+    room: ?[]const u8
+  }
+
+  class SkillSet <<struct>> {
+    bits: u32
+    --
+    has(skill): bool
+    add(skill): void
+  }
+
+  note bottom of Worker
+    Registered via addWorker()
+    with game entity ID
   end note
 
-  note bottom of Reserves
-    Added to task/group entity
+  note bottom of Workstation
+    Registered via addWorkstation()
+    with steps and priority
   end note
+
+  Workstation --> StepDef : contains
+  Worker --> SkillSet : optional
 }
 
 @enduml
