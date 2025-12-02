@@ -1,18 +1,18 @@
-//! Event-Driven Task Runner Example
+//! Fully Event-Driven Task Runner Example
 //!
 //! Demonstrates the event-driven TaskRunner that uses zig-ecs signals
-//! instead of polling for step completion.
+//! with NO polling whatsoever.
 //!
-//! **Key difference from polling:**
-//! - `startStep` is called once when a step begins
-//! - Your game logic (timers, movement) calls `completeStep` when done
-//! - No iteration over workers every tick to check "are you done yet?"
+//! **Key features:**
+//! - `signalResourcesAvailable()` triggers Blocked → Queued → assignment
+//! - `signalWorkerIdle()` triggers worker → group assignment
+//! - `completeStep()` advances to next step
+//! - `tick()` does NOTHING - all transitions are event-driven!
 //!
 //! Uses standard components from the library:
 //! - tasks.Worker (with Idle/Working/Blocked states)
 //! - tasks.AssignedToGroup
 //! - tasks.GroupAssignedWorker
-//! - tasks.StepComplete (marker component for signaling)
 
 const std = @import("std");
 const ecs = @import("ecs");
@@ -65,18 +65,10 @@ const KitchenGroup = struct {
     }
 };
 
-// Resource tracking (simplified)
-const Resources = struct {
-    ingredients_available: bool = true,
-    stove_available: bool = true,
-    storage_available: bool = true,
-};
-
 // ============================================================================
 // Simulation State
 // ============================================================================
 
-var g_resources: Resources = .{};
 var g_tick: u32 = 0;
 
 // Track pending work (in real game, this would be timers/movement system)
@@ -87,15 +79,7 @@ var g_step_ticks_remaining: u32 = 0;
 // Callbacks
 // ============================================================================
 
-fn canUnblock(reg: *Registry, entity: Entity) bool {
-    _ = reg;
-    _ = entity;
-    return g_resources.ingredients_available and
-        g_resources.stove_available and
-        g_resources.storage_available;
-}
-
-/// Called once when a step BEGINS (not every tick!)
+/// Called once when a step BEGINS (not every tick!).
 /// In a real game, this would start a timer, movement, or animation.
 fn startStep(reg: *Registry, worker_entity: Entity, group_entity: Entity, step: StepDef) void {
     const worker_name = reg.get(Name, worker_entity);
@@ -146,7 +130,6 @@ fn onReleased(reg: *Registry, worker_entity: Entity, group_entity: Entity) void 
 
 const KitchenRunner = tasks.TaskRunner(
     KitchenGroup,
-    canUnblock,
     startStep,
     shouldContinue,
     onReleased,
@@ -187,13 +170,14 @@ fn simulateWorkCompletion(reg: *Registry) void {
 pub fn main() !void {
     std.debug.print("\n", .{});
     std.debug.print("========================================\n", .{});
-    std.debug.print("  EVENT-DRIVEN TASK RUNNER EXAMPLE      \n", .{});
+    std.debug.print("  FULLY EVENT-DRIVEN TASK RUNNER        \n", .{});
     std.debug.print("========================================\n\n", .{});
 
-    std.debug.print("This example demonstrates EVENT-DRIVEN step completion:\n", .{});
+    std.debug.print("This example demonstrates FULLY EVENT-DRIVEN execution:\n", .{});
+    std.debug.print("- signalResourcesAvailable() triggers Blocked -> assignment\n", .{});
     std.debug.print("- startStep() called ONCE when step begins\n", .{});
-    std.debug.print("- completeStep() called when work is done\n", .{});
-    std.debug.print("- NO polling every tick!\n\n", .{});
+    std.debug.print("- completeStep() advances to next step\n", .{});
+    std.debug.print("- tick() does NOTHING - completely event-driven!\n\n", .{});
 
     std.debug.print("Step durations: Pickup=1, Cook=2, Store=1\n\n", .{});
 
@@ -221,20 +205,36 @@ pub fn main() !void {
     std.debug.print("- Chef Mario (max 2 cycles)\n", .{});
     std.debug.print("- Kitchen group (3 steps: Pickup -> Cook -> Store)\n\n", .{});
 
+    // IMPORTANT: Signal that resources are available to start the workflow
+    // This is the event that kicks everything off!
+    std.debug.print("[Tick   0] Signaling resources available...\n", .{});
+    KitchenRunner.signalResourcesAvailable(&reg, group);
+
     // Run simulation
     const max_ticks = 30;
     while (g_tick < max_ticks) {
         g_tick += 1;
 
-        // 1. Run task systems (no step polling!)
+        // tick() does NOTHING in event-driven mode!
+        // We call it here just to show it's safe to call, but it's not needed.
         KitchenRunner.tick(&reg);
 
-        // 2. Simulate work completion (timer/movement system)
+        // Simulate work completion (timer/movement system)
         simulateWorkCompletion(&reg);
+
+        // If a cycle completed and worker continues, signal resources available again
+        const group_comp = reg.get(KitchenGroup, group);
+        const chef_data = reg.get(ChefData, chef);
+        if (group_comp.status == .Blocked and
+            reg.tryGet(GroupAssignedWorker, group) != null and
+            chef_data.cycles_completed < chef_data.max_cycles)
+        {
+            std.debug.print("[Tick {d:3}] Cycle done, signaling resources for next cycle...\n", .{g_tick});
+            KitchenRunner.signalResourcesAvailable(&reg, group);
+        }
 
         // Check if done
         const worker = reg.get(Worker, chef);
-        const chef_data = reg.get(ChefData, chef);
         if (worker.state == .Idle and chef_data.cycles_completed >= chef_data.max_cycles) {
             std.debug.print("\n[Tick {d:3}] Simulation complete!\n", .{g_tick});
             break;
