@@ -452,7 +452,10 @@ fn getWorkstationStatus(state: *GameState) []const u8 {
     }
     const status = state.engine.getWorkstationStatus(KITCHEN_WORKSTATION_ID);
     return switch (status orelse .Blocked) {
-        .Blocked => "Blocked (need ingredients)",
+        .Blocked => if (state.canStartCooking())
+            "Blocked (waiting for chef)"
+        else
+            "Blocked (need 2 veg + 1 meat)",
         .Queued => "Queued (waiting for chef)",
         .Active => "Active",
     };
@@ -460,7 +463,10 @@ fn getWorkstationStatus(state: *GameState) []const u8 {
 
 fn getChefStatus(state: *GameState) []const u8 {
     return switch (state.chef_state) {
-        .Idle => "Idle",
+        .Idle => if (state.garden_vegetables > 0 or state.butcher_meat > 0 or state.canStartCooking())
+            "Idle (waiting for assignment)"
+        else
+            "Idle (nothing to do)",
         .Interrupted => "INTERRUPTED!",
         .Walking => switch (state.chef_location) {
             .WalkingToGarden => "Walking to garden...",
