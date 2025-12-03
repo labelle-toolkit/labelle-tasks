@@ -141,6 +141,24 @@ pub fn build(b: *std.Build) void {
     const multiworker_step = b.step("multiworker", "Run the multi-worker example");
     multiworker_step.dependOn(&run_multiworker.step);
 
+    // Kitchen simulator - interactive game demo
+    const kitchensim_mod = b.createModule(.{
+        .root_source_file = b.path("usage/kitchen-sim/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kitchensim_mod.addImport("labelle_tasks", lib_mod);
+
+    const kitchensim_example = b.addExecutable(.{
+        .name = "kitchen_sim",
+        .root_module = kitchensim_mod,
+    });
+    b.installArtifact(kitchensim_example);
+
+    const run_kitchensim = b.addRunArtifact(kitchensim_example);
+    const kitchensim_step = b.step("kitchen-sim", "Run the interactive kitchen simulator");
+    kitchensim_step.dependOn(&run_kitchensim.step);
+
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_simple.step);
