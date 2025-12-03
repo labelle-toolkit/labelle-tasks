@@ -20,20 +20,8 @@ jobs:
       - name: Run tests
         run: zig build test
 
-      - name: Run simple example
-        run: zig build simple
-
-      - name: Run kitchen example
-        run: zig build kitchen
-
-      - name: Run abandonment example
-        run: zig build abandonment
-
-      - name: Run multicycle example
-        run: zig build multicycle
-
-      - name: Run multiworker example
-        run: zig build multiworker
+      - name: Run kitchen-sim example
+        run: zig build kitchen-sim
 
   build:
     runs-on: ubuntu-latest
