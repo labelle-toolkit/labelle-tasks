@@ -11,6 +11,8 @@
 //! IOS capacity defines the output recipe.
 
 const std = @import("std");
+const log_mod = @import("log.zig");
+const log = log_mod.storage;
 
 /// Storage management parameterized by game's entity ID and Item types.
 pub fn Storage(comptime GameId: type, comptime Item: type) type {
@@ -35,6 +37,15 @@ pub fn Storage(comptime GameId: type, comptime Item: type) type {
             /// Current quantities for each slot (same order as slots)
             quantities: []u32,
             allocator: std.mem.Allocator,
+
+            // Logging helpers
+            fn fmtGameId(id: GameId) u64 {
+                return log_mod.fmtGameId(GameId, id);
+            }
+
+            fn fmtItem(item: Item) []const u8 {
+                return log_mod.fmtItem(Item, item);
+            }
 
             pub fn deinit(self: *Data) void {
                 self.allocator.free(self.quantities);
@@ -97,6 +108,15 @@ pub fn Storage(comptime GameId: type, comptime Item: type) type {
                         const available = slot.capacity - self.quantities[i];
                         const to_add = @min(quantity, available);
                         self.quantities[i] += to_add;
+                        if (to_add > 0) {
+                            log.debug("storage add: storage={d}, item={s}, added={d}, new_qty={d}/{d}", .{
+                                fmtGameId(self.game_id),
+                                fmtItem(item),
+                                to_add,
+                                self.quantities[i],
+                                slot.capacity,
+                            });
+                        }
                         return to_add;
                     }
                 }
@@ -109,6 +129,15 @@ pub fn Storage(comptime GameId: type, comptime Item: type) type {
                     if (slot.item == item) {
                         const to_remove = @min(quantity, self.quantities[i]);
                         self.quantities[i] -= to_remove;
+                        if (to_remove > 0) {
+                            log.debug("storage remove: storage={d}, item={s}, removed={d}, new_qty={d}/{d}", .{
+                                fmtGameId(self.game_id),
+                                fmtItem(item),
+                                to_remove,
+                                self.quantities[i],
+                                slot.capacity,
+                            });
+                        }
                         return to_remove;
                     }
                 }
@@ -144,6 +173,11 @@ pub fn Storage(comptime GameId: type, comptime Item: type) type {
                 if (!self.canFulfillRecipe(recipe_slots)) {
                     return false;
                 }
+
+                log.debug("storage transfer: from={d}, to={d}", .{
+                    fmtGameId(self.game_id),
+                    fmtGameId(target.game_id),
+                });
 
                 // Transfer each item
                 for (recipe_slots) |recipe_slot| {

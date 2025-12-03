@@ -30,6 +30,21 @@
 //! // Add items and engine automatically manages state
 //! _ = engine.addToStorage(EIS_ID, .Vegetable, 5);
 //! ```
+//!
+//! ## Logging
+//!
+//! The engine uses Zig's standard library scoped logging. Configure log levels
+//! in your root file:
+//!
+//! ```zig
+//! pub const std_options: std.Options = .{
+//!     .log_level = .debug,
+//!     .log_scope_levels = &.{
+//!         .{ .scope = .labelle_tasks_engine, .level = .info },
+//!         .{ .scope = .labelle_tasks_storage, .level = .warn },
+//!     },
+//! };
+//! ```
 
 const std = @import("std");
 
@@ -38,6 +53,12 @@ const std = @import("std");
 // ============================================================================
 
 pub const Engine = @import("engine.zig").Engine;
+
+// ============================================================================
+// Logging
+// ============================================================================
+
+pub const log = @import("log.zig");
 
 // ============================================================================
 // Common Types
