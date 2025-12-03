@@ -1,26 +1,34 @@
 //! labelle-tasks: Task orchestration engine for Zig games
 //!
-//! A self-contained task orchestration engine. Games interact via:
-//! - Registering workers and workstations with game entity IDs
-//! - Providing callbacks for game-specific logic (pathfinding, animations)
-//! - Notifying the engine of game events (step complete, worker idle)
+//! A self-contained task orchestration engine with storage management.
+//! Games interact via:
+//! - Creating storages (EIS, IIS, IOS, EOS) as separate entities
+//! - Creating workstations that reference storages
+//! - Providing callbacks for game-specific logic (movement, animations)
+//! - Notifying the engine of game events (pickup complete, store complete)
 //!
 //! Example:
 //! ```zig
-//! var engine = tasks.Engine(u32).init(allocator);
+//! const Item = enum { Vegetable, Meat, Meal };
+//! var engine = tasks.Engine(u32, Item).init(allocator);
 //! defer engine.deinit();
 //!
-//! // Register callbacks
-//! engine.setFindBestWorker(myFindWorkerFn);
-//! engine.setOnStepStarted(myStepStartedFn);
+//! // Create storages
+//! _ = engine.addStorage(EIS_ID, .{ .slots = &.{
+//!     .{ .item = .Vegetable, .capacity = 10 },
+//! }});
 //!
-//! // Register game entities
-//! engine.addWorker(chef_id, .{});
-//! engine.addWorkstation(stove_id, .{ .steps = &cooking_steps, .priority = .High });
+//! // Create workstation referencing storages
+//! _ = engine.addWorkstation(KITCHEN_ID, .{
+//!     .eis = EIS_ID,
+//!     .iis = IIS_ID,
+//!     .ios = IOS_ID,
+//!     .eos = EOS_ID,
+//!     .process_duration = 40,
+//! });
 //!
-//! // Game events
-//! engine.notifyResourcesAvailable(stove_id);
-//! engine.notifyStepComplete(chef_id);
+//! // Add items and engine automatically manages state
+//! _ = engine.addToStorage(EIS_ID, .Vegetable, 5);
 //! ```
 
 const std = @import("std");
@@ -42,13 +50,4 @@ pub const Priority = enum {
     Critical,
 };
 
-pub const StepType = enum {
-    Pickup,
-    Cook,
-    Store,
-    Craft,
-};
-
-pub const StepDef = struct {
-    type: StepType,
-};
+pub const StepType = @import("engine.zig").StepType;
