@@ -218,6 +218,25 @@ zig build kitchen-sim
 zig build test
 ```
 
+## Logging
+
+The engine uses Zig's `std.log` with scoped loggers for debugging and monitoring:
+
+- `labelle_tasks_engine` - Task orchestration, worker assignments, cycle events
+- `labelle_tasks_storage` - Item additions, removals, and transfers
+
+Configure log levels in your root file:
+
+```zig
+pub const std_options: std.Options = .{
+    .log_level = .debug,
+    .log_scope_levels = &.{
+        .{ .scope = .labelle_tasks_engine, .level = .info },
+        .{ .scope = .labelle_tasks_storage, .level = .warn },
+    },
+};
+```
+
 ## Design Philosophy
 
 - **Self-contained engine** - No external ECS dependency, manages state internally
