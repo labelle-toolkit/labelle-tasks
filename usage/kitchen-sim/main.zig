@@ -98,9 +98,7 @@ const GameState = struct {
     chef_timer: u32 = 0,
     chef_carrying: ?Item = null,
 
-    // Current cooking step
-    cooking_timer: u32 = 0,
-    condensing_timer: u32 = 0,
+    // Track condenser store vs transport
     doing_condenser_store: bool = false, // True when storing condenser output
 
     // Time tracking
@@ -177,13 +175,11 @@ fn onProcessStarted(
         // Start cooking
         g_state.chef_state = .Working;
         g_state.chef_location = .AtWorkstation;
-        g_state.cooking_timer = COOK_TIME;
         g_state.last_event = "Chef started cooking";
     } else if (workstation_id == CONDENSER_WORKSTATION_ID) {
         // Start condensing water
         g_state.chef_state = .Working;
         g_state.chef_location = .AtCondenser;
-        g_state.condensing_timer = CONDENSE_TIME;
         g_state.last_event = "Chef started condensing water";
     }
 }
@@ -303,21 +299,6 @@ fn updateGame(state: *GameState) void {
         return;
     }
 
-    if (state.cooking_timer > 0) {
-        state.cooking_timer -= 1;
-        if (state.cooking_timer == 0) {
-            handleCookingComplete(state);
-        }
-        return;
-    }
-
-    if (state.condensing_timer > 0) {
-        state.condensing_timer -= 1;
-        if (state.condensing_timer == 0) {
-            handleCondensingComplete(state);
-        }
-        return;
-    }
 }
 
 fn handleTimerComplete(state: *GameState) void {
@@ -397,18 +378,6 @@ fn handleTimerComplete(state: *GameState) void {
     }
 }
 
-fn handleCookingComplete(state: *GameState) void {
-    // Engine handles IIS -> IOS transformation during update()
-    // We just need to clear our local timer
-    state.cooking_timer = 0;
-    // Engine will call onProcessComplete and then start Store step automatically
-}
-
-fn handleCondensingComplete(state: *GameState) void {
-    // Engine handles IOS production during update()
-    state.condensing_timer = 0;
-    // Engine will call onProcessComplete and then start Store step automatically
-}
 
 fn handleInterrupt(state: *GameState) void {
     if (state.chef_state == .Interrupted) return;
@@ -529,21 +498,15 @@ fn render(state: *GameState) void {
 }
 
 fn getCondenserStatus(state: *GameState) []const u8 {
-    if (state.condensing_timer > 0) {
-        return "Condensing...";
-    }
     const status = state.engine.getWorkstationStatus(CONDENSER_WORKSTATION_ID);
     return switch (status orelse .Blocked) {
         .Blocked => "Blocked",
         .Queued => "Queued",
-        .Active => "Active",
+        .Active => "Condensing...",
     };
 }
 
 fn getWorkstationStatus(state: *GameState) []const u8 {
-    if (state.cooking_timer > 0) {
-        return "Cooking...";
-    }
     const eos_meals = state.engine.getStorageQuantity(KITCHEN_EOS_ID, .Meal);
     const status = state.engine.getWorkstationStatus(KITCHEN_WORKSTATION_ID);
     return switch (status orelse .Blocked) {
@@ -554,7 +517,7 @@ fn getWorkstationStatus(state: *GameState) []const u8 {
         else
             "Blocked (need 2v + 1m + 1w)",
         .Queued => "Queued (waiting for chef)",
-        .Active => "Active",
+        .Active => "Cooking...",
     };
 }
 

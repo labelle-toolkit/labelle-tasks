@@ -465,6 +465,9 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 .priority = options.priority,
             }) catch @panic("OOM");
 
+            // Try to assign idle workers to this transport if items are available
+            self.tryAssignAllIdleWorkersToTransports();
+
             return id;
         }
 
@@ -511,12 +514,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                     const ios = self.storages.getPtr(ios_id) orelse return;
                     const eos = self.storages.getPtr(eos_id) orelse return;
 
-                    // Transfer all items from IOS to EOS
+                    // Transfer all items from IOS to EOS (only what fits)
                     for (ios.slots, 0..) |slot, i| {
                         const qty = ios.quantities[i];
                         if (qty > 0) {
-                            _ = eos.add(slot.item, qty);
-                            ios.quantities[i] = 0;
+                            const added = eos.add(slot.item, qty);
+                            ios.quantities[i] -= added;
                         }
                     }
                 }
@@ -539,7 +542,11 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 
             const removed = from.remove(transport.item, 1);
             if (removed > 0) {
-                _ = to.add(transport.item, removed);
+                const added = to.add(transport.item, removed);
+                // Return any items that didn't fit back to source
+                if (added < removed) {
+                    _ = from.add(transport.item, removed - added);
+                }
             }
 
             // Release worker
