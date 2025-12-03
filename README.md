@@ -4,16 +4,31 @@ Task orchestration engine for Zig games. Part of the [labelle-toolkit](https://g
 
 ## Overview
 
-A self-contained task orchestration engine for managing workers and workstations in games. The engine handles task assignment and progression internally, while games provide callbacks for game-specific logic (pathfinding, animations, etc.).
+A self-contained task orchestration engine with storage management for games. The engine handles task assignment, resource tracking, and workflow progression internally, while games provide callbacks for game-specific logic (pathfinding, animations, etc.).
 
 ## Features
 
-- **Priority-based assignment** - Workstations have priorities (Low, Normal, High, Critical)
-- **Multi-step workflows** - Workstations define sequences of steps (Pickup, Cook, Store, Craft)
-- **Worker management** - Workers are assigned to workstations automatically
+- **Storage management** - Engine tracks items in storages with capacity limits
+- **Automatic step derivation** - Steps derived from storage configuration (Pickup, Process, Store)
+- **Priority-based assignment** - Workstations and transports have priorities (Low, Normal, High, Critical)
+- **Producer workstations** - Workstations that produce items without inputs (e.g., water condenser)
+- **Recurring transports** - Automatic item movement between storages
+- **Worker management** - Workers assigned to workstations and transports automatically
 - **Cycle tracking** - Track how many times a workstation has completed its workflow
-- **Step preservation** - When workers abandon work, step progress is preserved
 - **Callback-driven** - Game controls execution via callbacks, engine manages state
+
+## Storage Model
+
+The engine uses a four-storage model for workstations:
+
+```
+EIS (External Input) → IIS (Internal Input) → [Process] → IOS (Internal Output) → EOS (External Output)
+```
+
+- **EIS** - Where raw materials are stored (e.g., ingredients shelf)
+- **IIS** - Recipe definition - capacity defines what's consumed per cycle
+- **IOS** - Output definition - capacity defines what's produced per cycle
+- **EOS** - Where finished products go (e.g., serving counter)
 
 ## Concepts
 
@@ -21,249 +36,195 @@ A self-contained task orchestration engine for managing workers and workstations
 
 Entities that perform work at workstations. Workers have three states:
 - **Idle** - Available for assignment
-- **Working** - Executing steps at a workstation
+- **Working** - Executing steps at a workstation or transport
 - **Blocked** - Temporarily unavailable (fighting, sleeping, etc.)
 
 ### Workstations
 
-Locations where work happens. Each workstation defines a sequence of steps. Workstations have three statuses:
-- **Blocked** - Waiting for resources/conditions
-- **Queued** - Ready for work, waiting for a worker
+Locations where work happens. Steps are derived automatically from storage configuration:
+- Has IIS → **Pickup** step (transfer EIS → IIS)
+- Has process_duration → **Process** step (timed, transforms IIS → IOS)
+- Has IOS → **Store** step (transfer IOS → EOS)
+
+Workstation statuses:
+- **Blocked** - EIS doesn't have recipe requirements, or EOS is full
+- **Queued** - Has resources and space, waiting for worker
 - **Active** - Worker assigned and executing steps
 
-### Steps
+### Transports
 
-Units of work within a workstation workflow:
-- **Pickup** - Get items from a source
-- **Cook** - Process at the workstation
-- **Store** - Put items to a destination
-- **Craft** - Create new items
-
-## Worker Lifecycle
-
-![Worker Lifecycle](uml/worker_lifecycle.png)
-
-## Workstation Lifecycle
-
-![Workstation Lifecycle](uml/workstation_lifecycle.png)
-
-Workstations cycle indefinitely. When all steps complete, the workstation returns to Blocked, waiting for conditions to be met again.
-
-## Components
-
-![Components](uml/components.png)
+Recurring tasks that move items between any two storages. Activate when source has items AND destination has space.
 
 ## Engine API
-
-![Engine API](uml/engine_api.png)
 
 ```zig
 const tasks = @import("labelle_tasks");
 
-// Create engine with your game's entity ID type
-var engine = tasks.Engine(u32).init(allocator);
+// Define your item types
+const Item = enum { Vegetable, Meat, Water, Meal };
+
+// Create engine with game's entity ID and Item types
+var engine = tasks.Engine(u32, Item).init(allocator);
 defer engine.deinit();
 
 // Register callbacks
 engine.setFindBestWorker(findBestWorker);
-engine.setOnStepStarted(onStepStarted);
-engine.setOnStepCompleted(onStepCompleted);
+engine.setOnPickupStarted(onPickupStarted);
+engine.setOnProcessStarted(onProcessStarted);
+engine.setOnProcessComplete(onProcessComplete);
+engine.setOnStoreStarted(onStoreStarted);
 engine.setOnWorkerReleased(onWorkerReleased);
-engine.setShouldContinue(shouldContinue);
+engine.setOnTransportStarted(onTransportStarted);
 
-// Register workers
-_ = engine.addWorker(chef_id, .{});
-
-// Register workstations
-const steps = [_]tasks.StepDef{
-    .{ .type = .Pickup },
-    .{ .type = .Cook },
-    .{ .type = .Store },
+// Create storages
+const eis_slots = [_]tasks.Engine(u32, Item).Slot{
+    .{ .item = .Vegetable, .capacity = 10 },
+    .{ .item = .Meat, .capacity = 10 },
 };
-_ = engine.addWorkstation(kitchen_id, .{
-    .steps = &steps,
+_ = engine.addStorage(KITCHEN_EIS_ID, .{ .slots = &eis_slots });
+
+const iis_slots = [_]tasks.Engine(u32, Item).Slot{
+    .{ .item = .Vegetable, .capacity = 2 },  // Recipe: 2 vegetables
+    .{ .item = .Meat, .capacity = 1 },       // Recipe: 1 meat
+};
+_ = engine.addStorage(KITCHEN_IIS_ID, .{ .slots = &iis_slots });
+
+const ios_slots = [_]tasks.Engine(u32, Item).Slot{
+    .{ .item = .Meal, .capacity = 1 },  // Produces: 1 meal
+};
+_ = engine.addStorage(KITCHEN_IOS_ID, .{ .slots = &ios_slots });
+
+const eos_slots = [_]tasks.Engine(u32, Item).Slot{
+    .{ .item = .Meal, .capacity = 4 },
+};
+_ = engine.addStorage(KITCHEN_EOS_ID, .{ .slots = &eos_slots });
+
+// Create workstation referencing storages
+_ = engine.addWorkstation(KITCHEN_ID, .{
+    .eis = KITCHEN_EIS_ID,
+    .iis = KITCHEN_IIS_ID,
+    .ios = KITCHEN_IOS_ID,
+    .eos = KITCHEN_EOS_ID,
+    .process_duration = 40,
     .priority = .High,
 });
 
+// Register workers
+_ = engine.addWorker(CHEF_ID, .{});
+
+// Add items to storage - engine automatically manages state transitions
+_ = engine.addToStorage(KITCHEN_EIS_ID, .Vegetable, 5);
+_ = engine.addToStorage(KITCHEN_EIS_ID, .Meat, 2);
+
+// Call update() each game tick to advance process timers
+engine.update();
+
 // Game events
-engine.notifyResourcesAvailable(kitchen_id);  // Resources ready
-engine.notifyStepComplete(chef_id);           // Step finished
-engine.notifyWorkerIdle(chef_id);             // Worker available
-engine.notifyWorkerBusy(chef_id);             // Worker unavailable
-engine.abandonWork(chef_id);                  // Worker abandons task
+engine.notifyPickupComplete(CHEF_ID);     // Worker arrived at EIS
+engine.notifyStoreComplete(CHEF_ID);      // Worker arrived at EOS
+engine.notifyTransportComplete(CHEF_ID);  // Worker completed transport
+engine.notifyWorkerIdle(CHEF_ID);         // Worker available
+engine.notifyWorkerBusy(CHEF_ID);         // Worker unavailable
+engine.abandonWork(CHEF_ID);              // Worker abandons task
 ```
 
 ## Callbacks
 
-The engine uses callbacks to integrate with game-specific logic:
-
 ```zig
-/// Find the best worker for a workstation
-/// Return null if no suitable worker available
+/// Find the best worker for a workstation or transport
 fn findBestWorker(
-    workstation_id: u32,
-    step: tasks.StepType,
+    workstation_id: ?u32,  // null for transport tasks
     available_workers: []const u32,
 ) ?u32 {
     // Use pathfinding, skills, etc. to pick best worker
-    return available_workers[0];
+    if (available_workers.len > 0) return available_workers[0];
+    return null;
 }
 
-/// Called when a step starts - trigger movement/animation
-fn onStepStarted(
-    worker_id: u32,
-    workstation_id: u32,
-    step: tasks.StepDef,
-) void {
-    // Start worker movement, animation, etc.
+/// Called when Pickup step starts - worker should move to EIS
+fn onPickupStarted(worker_id: u32, workstation_id: u32, eis_id: u32) void {
+    // Start worker movement to EIS location
 }
 
-/// Called when a step completes
-fn onStepCompleted(
-    worker_id: u32,
-    workstation_id: u32,
-    step: tasks.StepDef,
-) void {
-    // Update UI, play sounds, etc.
+/// Called when Process step starts - engine handles timing
+fn onProcessStarted(worker_id: u32, workstation_id: u32) void {
+    // Play cooking animation, etc.
+}
+
+/// Called when Process step completes
+fn onProcessComplete(worker_id: u32, workstation_id: u32) void {
+    // Play completion sound, etc.
+}
+
+/// Called when Store step starts - worker should move to EOS
+fn onStoreStarted(worker_id: u32, workstation_id: u32, eos_id: u32) void {
+    // Start worker movement to EOS location
 }
 
 /// Called when worker is released from workstation
-fn onWorkerReleased(
-    worker_id: u32,
-    workstation_id: u32,
-) void {
-    // Reassign worker, update UI, etc.
+fn onWorkerReleased(worker_id: u32, workstation_id: u32) void {
+    // Update UI, etc.
 }
 
-/// Called when cycle completes - should worker continue?
-fn shouldContinue(
-    workstation_id: u32,
-    worker_id: u32,
-    cycles_completed: u32,
-) bool {
-    // Return true to keep worker assigned for next cycle
-    return cycles_completed < 5;
+/// Called when transport starts
+fn onTransportStarted(worker_id: u32, from_id: u32, to_id: u32, item: Item) void {
+    // Start worker movement from source to destination
 }
 ```
 
-## Usage Examples
+## Producer Workstations
 
-### Kitchen Workflow
-
-![Kitchen Example](uml/kitchen_example.png)
+Workstations without EIS/IIS produce items from nothing (e.g., water condenser, mine):
 
 ```zig
-const tasks = @import("labelle_tasks");
+// Water condenser - produces water without inputs
+const ios_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+const eos_slots = [_]Slot{.{ .item = .Water, .capacity = 4 }};
 
-var engine = tasks.Engine(u32).init(allocator);
-defer engine.deinit();
+_ = engine.addStorage(CONDENSER_IOS_ID, .{ .slots = &ios_slots });
+_ = engine.addStorage(CONDENSER_EOS_ID, .{ .slots = &eos_slots });
 
-// Setup callbacks
-engine.setFindBestWorker(findBestWorker);
-engine.setOnStepStarted(onStepStarted);
-
-// Register chef
-_ = engine.addWorker(CHEF_ID, .{});
-
-// Register kitchen with cooking workflow
-const cooking_steps = [_]tasks.StepDef{
-    .{ .type = .Pickup },  // Get ingredients
-    .{ .type = .Cook },    // Cook at stove
-    .{ .type = .Store },   // Store finished food
-};
-_ = engine.addWorkstation(KITCHEN_ID, .{
-    .steps = &cooking_steps,
-    .priority = .High,
-});
-
-// When ingredients become available
-engine.notifyResourcesAvailable(KITCHEN_ID);
-// Engine calls findBestWorker, assigns chef, calls onStepStarted
-
-// When chef completes each step (from game animation/timer)
-engine.notifyStepComplete(CHEF_ID);
-// Engine advances to next step, calls onStepStarted
-
-// After all steps complete, engine calls shouldContinue
-// If true: kitchen goes to Blocked, chef stays assigned
-// If false: chef released, can work elsewhere
-```
-
-### Worker Abandonment
-
-![Abandonment Flow](uml/interrupt_flow.png)
-
-```zig
-// Chef is cooking when enemy appears
-engine.abandonWork(CHEF_ID);
-// Chef becomes Idle, kitchen goes to Blocked
-// Kitchen preserves current step progress
-
-// Handle fight outside of task engine...
-
-// After fight, chef is available again
-engine.notifyWorkerIdle(CHEF_ID);
-
-// When kitchen has resources again
-engine.notifyResourcesAvailable(KITCHEN_ID);
-// Another worker (or same chef) can resume from preserved step
-```
-
-### Priority-Based Assignment
-
-```zig
-// Low priority farm
-_ = engine.addWorkstation(FARM_ID, .{
-    .steps = &farming_steps,
+_ = engine.addWorkstation(CONDENSER_ID, .{
+    .ios = CONDENSER_IOS_ID,
+    .eos = CONDENSER_EOS_ID,
+    .process_duration = 30,
     .priority = .Low,
 });
-
-// High priority kitchen
-_ = engine.addWorkstation(KITCHEN_ID, .{
-    .steps = &cooking_steps,
-    .priority = .High,
-});
-
-// When worker is released, engine assigns to highest priority
-// queued workstation first
+// Condenser starts immediately (Queued) - no inputs needed
 ```
 
-### Multi-Cycle Workflows
+## Transports
+
+Recurring tasks that move items between storages:
 
 ```zig
-fn shouldContinue(ws_id: u32, worker_id: u32, cycles: u32) bool {
-    // Keep worker at kitchen for up to 5 cycles
-    if (ws_id == KITCHEN_ID) {
-        return cycles < 5;
-    }
-    // One cycle for other workstations
-    return false;
-}
-
-engine.setShouldContinue(shouldContinue);
+// Transport vegetables from garden to kitchen
+_ = engine.addTransport(.{
+    .from = GARDEN_STORAGE_ID,
+    .to = KITCHEN_EIS_ID,
+    .item = .Vegetable,
+    .priority = .Normal,
+});
+// Transport activates when garden has vegetables AND kitchen EIS has space
 ```
 
 ## Running Examples
 
 ```bash
-# Run all examples
-zig build examples
+# Run the interactive kitchen simulator
+zig build kitchen-sim
 
-# Run individual examples
-zig build simple        # Priority-based workstation selection
-zig build kitchen       # Multi-step workflow with priority
-zig build abandonment   # Worker abandonment with step preservation
-zig build multicycle    # Multi-cycle workflows with shouldContinue
-zig build multiworker   # Multiple workers on multiple workstations
+# Run tests
+zig build test
 ```
 
 ## Design Philosophy
 
 - **Self-contained engine** - No external ECS dependency, manages state internally
-- **Callback-driven** - Engine handles orchestration, game handles execution
+- **Storage-aware** - Engine tracks resources and validates recipes automatically
+- **Callback-driven** - Engine handles orchestration, game handles movement/animations
 - **Game entity IDs** - Engine is generic over ID type (u32, u64, custom struct)
-- **Step preservation** - Abandoned work can be resumed by any worker
-- **Workstations cycle** - They represent ongoing workflows, not one-off tasks
+- **Automatic state management** - Workstations transition based on storage state
 
 ## License
 
