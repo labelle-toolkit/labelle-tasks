@@ -52,6 +52,10 @@ pub const Priority = root.Priority;
 // Import storage module
 const storage_mod = @import("storage.zig");
 
+// Import logging
+const log_mod = @import("log.zig");
+const log = log_mod.engine;
+
 /// Step types for workstation workflows
 pub const StepType = enum {
     Pickup, // Transfer EIS -> IIS
@@ -220,6 +224,18 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
         cycles: std.AutoHashMap(WorkstationId, u32),
 
         // ====================================================================
+        // Logging Helpers
+        // ====================================================================
+
+        fn fmtGameId(id: GameId) u64 {
+            return log_mod.fmtGameId(GameId, id);
+        }
+
+        fn fmtItem(item: Item) []const u8 {
+            return log_mod.fmtItem(Item, item);
+        }
+
+        // ====================================================================
         // Initialization
         // ====================================================================
 
@@ -312,6 +328,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 
             self.storage_by_game_id.put(game_id, id) catch @panic("OOM");
 
+            log.debug("storage added: game_id={d}, storage_id={d}, slots={d}", .{
+                fmtGameId(game_id),
+                id,
+                options.slots.len,
+            });
+
             return id;
         }
 
@@ -365,6 +387,8 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             }) catch @panic("OOM");
 
             self.worker_by_game_id.put(game_id, id) catch @panic("OOM");
+
+            log.debug("worker added: game_id={d}, worker_id={d}", .{ fmtGameId(game_id), id });
 
             // Try to assign this worker to any queued work
             self.tryAssignIdleWorker(id);
@@ -420,6 +444,13 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             self.workstation_by_game_id.put(game_id, id) catch @panic("OOM");
             self.cycles.put(id, 0) catch @panic("OOM");
 
+            log.debug("workstation added: game_id={d}, workstation_id={d}, priority={s}, first_step={s}", .{
+                fmtGameId(game_id),
+                id,
+                @tagName(options.priority),
+                @tagName(first_step),
+            });
+
             // Check if this workstation can start immediately (e.g., producer with no inputs)
             self.checkWorkstationsReadiness();
 
@@ -465,6 +496,14 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 .priority = options.priority,
             }) catch @panic("OOM");
 
+            log.debug("transport added: transport_id={d}, item={s}, from={d}, to={d}, priority={s}", .{
+                id,
+                fmtItem(options.item),
+                fmtGameId(options.from),
+                fmtGameId(options.to),
+                @tagName(options.priority),
+            });
+
             // Try to assign idle workers to this transport if items are available
             self.tryAssignAllIdleWorkersToTransports();
 
@@ -484,6 +523,11 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const ws = self.workstations.getPtr(ws_id) orelse return;
 
             if (ws.current_step != .Pickup) return;
+
+            log.info("pickup complete: worker={d}, workstation={d}", .{
+                fmtGameId(worker.game_id),
+                fmtGameId(ws.game_id),
+            });
 
             // Transfer EIS -> IIS
             if (ws.eis) |eis_id| {
@@ -507,6 +551,11 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const ws = self.workstations.getPtr(ws_id) orelse return;
 
             if (ws.current_step != .Store) return;
+
+            log.info("store complete: worker={d}, workstation={d}", .{
+                fmtGameId(worker.game_id),
+                fmtGameId(ws.game_id),
+            });
 
             // Transfer IOS -> EOS
             if (ws.ios) |ios_id| {
@@ -547,6 +596,14 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 if (added < removed) {
                     _ = from.add(transport.item, removed - added);
                 }
+
+                log.info("transport complete: worker={d}, item={s}, from={d}, to={d}, transferred={d}", .{
+                    fmtGameId(worker.game_id),
+                    fmtItem(transport.item),
+                    fmtGameId(from.game_id),
+                    fmtGameId(to.game_id),
+                    added,
+                });
             }
 
             // Release worker
@@ -566,6 +623,8 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const worker_id = self.worker_by_game_id.get(game_id) orelse return;
             const worker = self.workers.getPtr(worker_id) orelse return;
 
+            log.debug("worker idle: worker={d}", .{fmtGameId(game_id)});
+
             worker.state = .Idle;
 
             if (worker.assigned_to == null and worker.assigned_transport == null) {
@@ -579,6 +638,8 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
         pub fn notifyWorkerBusy(self: *Self, game_id: GameId) void {
             const worker_id = self.worker_by_game_id.get(game_id) orelse return;
             const worker = self.workers.getPtr(worker_id) orelse return;
+
+            log.debug("worker blocked: worker={d}", .{fmtGameId(game_id)});
 
             worker.state = .Blocked;
 
@@ -609,6 +670,10 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 
             if (worker.assigned_to) |ws_id| {
                 const ws = self.workstations.getPtr(ws_id) orelse return;
+                log.info("worker abandoned workstation: worker={d}, workstation={d}", .{
+                    fmtGameId(game_id),
+                    fmtGameId(ws.game_id),
+                });
                 ws.assigned_worker = null;
                 ws.status = .Blocked;
                 worker.assigned_to = null;
@@ -617,6 +682,10 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 
             if (worker.assigned_transport) |transport_id| {
                 const transport = self.transports.getPtr(transport_id) orelse return;
+                log.info("worker abandoned transport: worker={d}, transport_id={d}", .{
+                    fmtGameId(game_id),
+                    transport_id,
+                });
                 transport.assigned_worker = null;
                 worker.assigned_transport = null;
                 worker.state = .Idle;
@@ -798,6 +867,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const worker = self.workers.getPtr(worker_id) orelse return;
             const ws = self.workstations.getPtr(ws_id) orelse return;
 
+            log.info("worker assigned to workstation: worker={d}, workstation={d}, step={s}", .{
+                fmtGameId(worker.game_id),
+                fmtGameId(ws.game_id),
+                @tagName(ws.current_step),
+            });
+
             worker.state = .Working;
             worker.assigned_to = ws_id;
             ws.assigned_worker = worker_id;
@@ -810,14 +885,22 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const worker = self.workers.getPtr(worker_id) orelse return;
             const transport = self.transports.getPtr(transport_id) orelse return;
 
+            const from = self.storages.get(transport.from_storage) orelse return;
+            const to = self.storages.get(transport.to_storage) orelse return;
+
+            log.info("worker assigned to transport: worker={d}, item={s}, from={d}, to={d}", .{
+                fmtGameId(worker.game_id),
+                fmtItem(transport.item),
+                fmtGameId(from.game_id),
+                fmtGameId(to.game_id),
+            });
+
             worker.state = .Working;
             worker.assigned_transport = transport_id;
             transport.assigned_worker = worker_id;
 
             // Notify game
             if (self.on_transport_started) |callback| {
-                const from = self.storages.get(transport.from_storage) orelse return;
-                const to = self.storages.get(transport.to_storage) orelse return;
                 callback(worker.game_id, from.game_id, to.game_id, transport.item);
             }
         }
@@ -855,6 +938,7 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 
         fn advanceToNextStep(self: *Self, ws_id: WorkstationId) void {
             const ws = self.workstations.getPtr(ws_id) orelse return;
+            const prev_step = ws.current_step;
 
             switch (ws.current_step) {
                 .Pickup => {
@@ -880,6 +964,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                     return;
                 },
             }
+
+            log.debug("step transition: workstation={d}, from={s}, to={s}", .{
+                fmtGameId(ws.game_id),
+                @tagName(prev_step),
+                @tagName(ws.current_step),
+            });
 
             self.startCurrentStep(ws_id);
         }
@@ -910,11 +1000,17 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 
         fn handleCycleComplete(self: *Self, ws_id: WorkstationId, worker_id: WorkerId) void {
             const ws = self.workstations.getPtr(ws_id) orelse return;
-            _ = self.workers.getPtr(worker_id) orelse return;
+            const worker = self.workers.getPtr(worker_id) orelse return;
 
             // Increment cycle count
             const cycle_count = self.cycles.getPtr(ws_id) orelse return;
             cycle_count.* += 1;
+
+            log.info("cycle complete: workstation={d}, worker={d}, cycle={d}", .{
+                fmtGameId(ws.game_id),
+                fmtGameId(worker.game_id),
+                cycle_count.*,
+            });
 
             // Reset to first step
             ws.current_step = if (ws.iis != null) .Pickup else if (ws.process_duration > 0) .Process else .Store;
