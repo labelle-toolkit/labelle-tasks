@@ -26,6 +26,9 @@ const INTERRUPT_DURATION = INTERRUPT_DURATION_SECS * TICKS_PER_SECOND;
 const VEGETABLES_NEEDED = 2;
 const MEAT_NEEDED = 1;
 
+// Storage limits
+const EOS_MAX_MEALS = 4;
+
 // Entity IDs
 const CHEF_ID: u32 = 1;
 const GARDEN_WORKSTATION_ID: u32 = 10;
@@ -45,7 +48,7 @@ const Location = enum {
     WalkingToButcher,
     WalkingFromButcher,
     WalkingToEIS,
-    WalkingFromEIS,
+    WalkingToIIS,
     AtWorkstation,
 };
 
@@ -93,7 +96,9 @@ const GameState = struct {
     engine: *tasks.Engine(u32),
 
     fn canStartCooking(self: *const GameState) bool {
-        return self.eis_vegetables >= VEGETABLES_NEEDED and self.eis_meat >= MEAT_NEEDED;
+        return self.eis_vegetables >= VEGETABLES_NEEDED and
+            self.eis_meat >= MEAT_NEEDED and
+            self.eos_meals < EOS_MAX_MEALS;
     }
 
     fn ticksToSecs(ticks: u32) f32 {
@@ -135,6 +140,14 @@ fn onStepStarted(
     if (workstation_id == KITCHEN_WORKSTATION_ID) {
         switch (step.type) {
             .Pickup => {
+                // Safety check: only proceed if EIS has ingredients
+                if (!g_state.canStartCooking()) {
+                    // EIS doesn't have enough ingredients - this is a state inconsistency
+                    // Complete step immediately so engine can re-evaluate
+                    g_state.last_event = "ERROR: Pickup started but EIS empty!";
+                    g_state.engine.notifyStepComplete(CHEF_ID);
+                    return;
+                }
                 // Walk to EIS to pickup ingredients
                 g_state.chef_state = .Walking;
                 g_state.chef_location = .WalkingToEIS;
@@ -142,6 +155,14 @@ fn onStepStarted(
                 g_state.last_event = "Chef walking to EIS for ingredients";
             },
             .Cook => {
+                // Safety check: only proceed if IIS has ingredients
+                if (g_state.iis_vegetables < VEGETABLES_NEEDED or g_state.iis_meat < MEAT_NEEDED) {
+                    // IIS doesn't have enough ingredients - this is a state inconsistency
+                    // Complete step immediately so engine can re-evaluate
+                    g_state.last_event = "ERROR: Cook started but IIS empty!";
+                    g_state.engine.notifyStepComplete(CHEF_ID);
+                    return;
+                }
                 // Start cooking
                 g_state.chef_state = .Working;
                 g_state.chef_location = .AtWorkstation;
@@ -149,11 +170,17 @@ fn onStepStarted(
                 g_state.last_event = "Chef started cooking";
             },
             .Store => {
-                // Take meal from IOS immediately
-                if (g_state.ios_meals > 0) {
-                    g_state.ios_meals -= 1;
-                    g_state.chef_carrying = .Meal;
+                // Safety check: only proceed if IOS has a meal
+                if (g_state.ios_meals == 0) {
+                    // No meal in IOS - this is a state inconsistency
+                    // Complete step immediately so engine can re-evaluate
+                    g_state.last_event = "ERROR: Store started but IOS empty!";
+                    g_state.engine.notifyStepComplete(CHEF_ID);
+                    return;
                 }
+                // Take meal from IOS immediately
+                g_state.ios_meals -= 1;
+                g_state.chef_carrying = .Meal;
                 // Walk to EOS to drop it
                 g_state.chef_state = .Walking;
                 g_state.chef_location = .WalkingToEIS; // Reuse for simplicity
@@ -318,23 +345,32 @@ fn handleTimerComplete(state: *GameState) void {
                 state.last_event = "Chef stored meal in EOS";
                 state.engine.notifyStepComplete(CHEF_ID);
             } else {
-                // Picking up ingredients
-                if (state.eis_vegetables > 0) {
-                    state.eis_vegetables -= 1;
-                    state.iis_vegetables += 1;
+                // Picking up ingredients - only if ALL requirements are met
+                if (state.canStartCooking()) {
+                    // Take from EIS (chef is now carrying ingredients)
+                    state.eis_vegetables -= VEGETABLES_NEEDED;
+                    state.eis_meat -= MEAT_NEEDED;
+                    state.chef_carrying = .Vegetable; // Represents carrying ingredients
+                    state.chef_location = .WalkingToIIS;
+                    state.chef_timer = WALK_TO_EIS; // Same distance back to IIS
+                    state.last_event = "Chef picked ingredients from EIS";
+                } else {
+                    // Not enough ingredients anymore (thief stole something?)
+                    // Abandon the pickup and return to kitchen
+                    state.chef_location = .Kitchen;
+                    state.chef_state = .Idle;
+                    state.last_event = "Chef found EIS missing ingredients!";
+                    state.engine.abandonWork(CHEF_ID);
                 }
-                if (state.eis_meat > 0) {
-                    state.eis_meat -= 1;
-                    state.iis_meat += 1;
-                }
-                state.chef_location = .WalkingFromEIS;
-                state.chef_timer = WALK_TO_EIS;
-                state.last_event = "Chef picked ingredients from EIS";
             }
         },
-        .WalkingFromEIS => {
+        .WalkingToIIS => {
+            // Arrived at IIS with ingredients
+            state.iis_vegetables += VEGETABLES_NEEDED;
+            state.iis_meat += MEAT_NEEDED;
+            state.chef_carrying = null;
             state.chef_location = .AtWorkstation;
-            state.last_event = "Chef at workstation with ingredients";
+            state.last_event = "Chef delivered ingredients to IIS";
             state.engine.notifyStepComplete(CHEF_ID);
         },
         else => {},
@@ -356,9 +392,15 @@ fn handleCookingComplete(state: *GameState) void {
 }
 
 fn checkAndAssignWork(state: *GameState) void {
-    // Priority: Kitchen (with meal to store or ready to cook) > Butcher > Garden
-    if (state.ios_meals > 0 or state.canStartCooking()) {
-        // Kitchen has work: either a meal to store or ingredients to cook
+    // Priority: Kitchen (Store) > Kitchen (full cycle) > Butcher > Garden
+    //
+    // If there's a meal in IOS, we need to store it first (continue interrupted Store step)
+    // Otherwise, only start a new kitchen cycle if we have all ingredients
+    if (state.ios_meals > 0) {
+        // There's a meal waiting to be stored - kitchen should continue Store step
+        state.engine.notifyResourcesAvailable(KITCHEN_WORKSTATION_ID);
+    } else if (state.canStartCooking()) {
+        // Have all ingredients, can start a full cooking cycle
         state.engine.notifyResourcesAvailable(KITCHEN_WORKSTATION_ID);
     } else if (state.butcher_meat > 0) {
         state.engine.notifyResourcesAvailable(BUTCHER_WORKSTATION_ID);
@@ -427,16 +469,11 @@ fn render(state: *GameState) void {
     // Clear screen
     std.debug.print("\x1b[2J\x1b[H", .{});
 
-    const total_secs = state.total_ticks / TICKS_PER_SECOND;
-    const mins = total_secs / 60;
-    const secs = total_secs % 60;
-
     const ready_str: []const u8 = if (state.canStartCooking()) "Ready!" else "";
 
     std.debug.print(
         \\
         \\=== Kitchen Simulator ===
-        \\Time: {d:0>2}:{d:0>2}
         \\
         \\[Garden]       Vegetables: {d}
         \\[Butcher]      Meat: {d}
@@ -445,7 +482,7 @@ fn render(state: *GameState) void {
         \\[Kitchen IIS]  Vegetables: {d}  Meat: {d}
         \\[Workstation]  {s}
         \\[Kitchen IOS]  Meals: {d}
-        \\[Kitchen EOS]  Meals: {d}
+        \\[Kitchen EOS]  Meals: {d}/{d}
         \\
         \\Chef: {s}
         \\
@@ -454,8 +491,6 @@ fn render(state: *GameState) void {
         \\Controls: [M] Add meat  [V] Add vegetable  [I] Interrupt  [S] Steal  [Q] Quit
         \\
     , .{
-        mins,
-        secs,
         state.garden_vegetables,
         state.butcher_meat,
         state.eis_vegetables,
@@ -466,6 +501,7 @@ fn render(state: *GameState) void {
         getWorkstationStatus(state),
         state.ios_meals,
         state.eos_meals,
+        EOS_MAX_MEALS,
         getChefStatus(state),
         state.last_event,
     });
@@ -477,7 +513,9 @@ fn getWorkstationStatus(state: *GameState) []const u8 {
     }
     const status = state.engine.getWorkstationStatus(KITCHEN_WORKSTATION_ID);
     return switch (status orelse .Blocked) {
-        .Blocked => if (state.canStartCooking())
+        .Blocked => if (state.eos_meals >= EOS_MAX_MEALS)
+            "Blocked (EOS full)"
+        else if (state.canStartCooking())
             "Blocked (waiting for chef)"
         else
             "Blocked (need 2 veg + 1 meat)",
@@ -499,7 +537,7 @@ fn getChefStatus(state: *GameState) []const u8 {
             .WalkingToButcher => "Walking to butcher...",
             .WalkingFromButcher => "Returning from butcher...",
             .WalkingToEIS => "Walking to EIS...",
-            .WalkingFromEIS => "Walking to workstation...",
+            .WalkingToIIS => "Carrying ingredients to IIS...",
             else => "Walking...",
         },
         .Working => "Cooking...",
@@ -640,8 +678,23 @@ pub fn main() !void {
         return;
     }
 
-    // Interactive game loop
+    // Interactive game loop - only render when state changes
     var running = true;
+    var last_event: []const u8 = "";
+    var last_chef_state: ChefState = .Idle;
+    var last_chef_location: Location = .Kitchen;
+    var last_garden: u32 = 0;
+    var last_butcher: u32 = 0;
+    var last_eis_veg: u32 = 0;
+    var last_eis_meat: u32 = 0;
+    var last_iis_veg: u32 = 0;
+    var last_iis_meat: u32 = 0;
+    var last_ios: u32 = 0;
+    var last_eos: u32 = 0;
+
+    // Initial render
+    render(&state);
+
     while (running) {
         // Handle input
         if (pollInput()) |key| {
@@ -670,8 +723,35 @@ pub fn main() !void {
         // Update game
         updateGame(&state);
 
-        // Render
-        render(&state);
+        // Check if state changed
+        const state_changed = !std.mem.eql(u8, state.last_event, last_event) or
+            state.chef_state != last_chef_state or
+            state.chef_location != last_chef_location or
+            state.garden_vegetables != last_garden or
+            state.butcher_meat != last_butcher or
+            state.eis_vegetables != last_eis_veg or
+            state.eis_meat != last_eis_meat or
+            state.iis_vegetables != last_iis_veg or
+            state.iis_meat != last_iis_meat or
+            state.ios_meals != last_ios or
+            state.eos_meals != last_eos;
+
+        if (state_changed) {
+            render(&state);
+
+            // Update last state
+            last_event = state.last_event;
+            last_chef_state = state.chef_state;
+            last_chef_location = state.chef_location;
+            last_garden = state.garden_vegetables;
+            last_butcher = state.butcher_meat;
+            last_eis_veg = state.eis_vegetables;
+            last_eis_meat = state.eis_meat;
+            last_iis_veg = state.iis_vegetables;
+            last_iis_meat = state.iis_meat;
+            last_ios = state.ios_meals;
+            last_eos = state.eos_meals;
+        }
 
         // Sleep for tick duration
         std.Thread.sleep(TICK_MS * std.time.ns_per_ms);
