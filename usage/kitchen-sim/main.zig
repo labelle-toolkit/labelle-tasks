@@ -149,11 +149,15 @@ fn onStepStarted(
                 g_state.last_event = "Chef started cooking";
             },
             .Store => {
-                // Move meal from IOS to EOS
+                // Take meal from IOS immediately
+                if (g_state.ios_meals > 0) {
+                    g_state.ios_meals -= 1;
+                    g_state.chef_carrying = .Meal;
+                }
+                // Walk to EOS to drop it
                 g_state.chef_state = .Walking;
                 g_state.chef_location = .WalkingToEIS; // Reuse for simplicity
                 g_state.chef_timer = WALK_TO_EIS;
-                g_state.chef_carrying = .Meal;
                 g_state.last_event = "Chef moving meal to storage";
             },
             else => {},
@@ -352,8 +356,9 @@ fn handleCookingComplete(state: *GameState) void {
 }
 
 fn checkAndAssignWork(state: *GameState) void {
-    // Priority: Kitchen > Butcher > Garden
-    if (state.canStartCooking()) {
+    // Priority: Kitchen (with meal to store or ready to cook) > Butcher > Garden
+    if (state.ios_meals > 0 or state.canStartCooking()) {
+        // Kitchen has work: either a meal to store or ingredients to cook
         state.engine.notifyResourcesAvailable(KITCHEN_WORKSTATION_ID);
     } else if (state.butcher_meat > 0) {
         state.engine.notifyResourcesAvailable(BUTCHER_WORKSTATION_ID);
@@ -365,12 +370,32 @@ fn checkAndAssignWork(state: *GameState) void {
 fn handleInterrupt(state: *GameState) void {
     if (state.chef_state == .Interrupted) return;
 
+    // If chef was carrying something, put it back
+    if (state.chef_carrying) |item| {
+        switch (item) {
+            .Meal => {
+                // Put meal back in IOS so next worker can store it
+                state.ios_meals += 1;
+                state.last_event = "Chef interrupted! Meal returned to IOS";
+            },
+            .Vegetable => {
+                // Drop vegetable back to garden (lost in transit)
+                state.last_event = "Chef interrupted! Dropped vegetable";
+            },
+            .Meat => {
+                // Drop meat back to butcher (lost in transit)
+                state.last_event = "Chef interrupted! Dropped meat";
+            },
+        }
+        state.chef_carrying = null;
+    } else {
+        state.last_event = "Chef interrupted! Blocked for 4 seconds";
+    }
+
     state.engine.abandonWork(CHEF_ID);
     state.engine.notifyWorkerBusy(CHEF_ID);
     state.chef_state = .Interrupted;
     state.chef_timer = INTERRUPT_DURATION;
-    state.chef_carrying = null;
-    state.last_event = "Chef interrupted! Blocked for 4 seconds";
 }
 
 fn handleSteal(state: *GameState) void {
