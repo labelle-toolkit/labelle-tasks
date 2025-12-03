@@ -18,12 +18,6 @@
 
 const std = @import("std");
 
-/// Log scopes for different subsystems
-pub const Scope = enum {
-    engine,
-    storage,
-};
-
 /// Engine logger - for task orchestration, worker assignments, workstation state changes
 pub const engine = std.log.scoped(.labelle_tasks_engine);
 
