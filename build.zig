@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Main library module
-    const lib_mod = b.addModule("labelle-tasks", .{
+    const lib_mod = b.addModule("labelle_tasks", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -69,7 +69,45 @@ pub fn build(b: *std.Build) void {
     const kitchensim_step = b.step("kitchen-sim", "Run the interactive kitchen simulator");
     kitchensim_step.dependOn(&run_kitchensim.step);
 
+    // Components example - demonstrates ECS component usage with game-defined enums
+    const components_mod = b.createModule(.{
+        .root_source_file = b.path("usage/components/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    components_mod.addImport("labelle_tasks", lib_mod);
+
+    const components_example = b.addExecutable(.{
+        .name = "components",
+        .root_module = components_mod,
+    });
+    b.installArtifact(components_example);
+
+    const run_components = b.addRunArtifact(components_example);
+    const components_step = b.step("components", "Run the components usage example");
+    components_step.dependOn(&run_components.step);
+
+    // Farm game example - demonstrates full engine workflow
+    const farm_mod = b.createModule(.{
+        .root_source_file = b.path("usage/engine/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    farm_mod.addImport("labelle_tasks", lib_mod);
+
+    const farm_example = b.addExecutable(.{
+        .name = "farm",
+        .root_module = farm_mod,
+    });
+    b.installArtifact(farm_example);
+
+    const run_farm = b.addRunArtifact(farm_example);
+    const farm_step = b.step("farm", "Run the farm game example");
+    farm_step.dependOn(&run_farm.step);
+
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_kitchensim.step);
+    examples_step.dependOn(&run_components.step);
+    examples_step.dependOn(&run_farm.step);
 }
