@@ -18,6 +18,14 @@ const ProjectConfig = engine.ProjectConfig;
 
 const labelle_tasks = @import("labelle-tasks");
 const main_module = @This();
+
+/// Game-specific item types
+pub const ItemType = enum {
+    wheat,
+    carrot,
+    flour,
+};
+
 pub const Prefabs = engine.PrefabRegistry(.{});
 pub const Components = engine.ComponentRegistryMulti(.{
     struct {
@@ -27,7 +35,7 @@ pub const Components = engine.ComponentRegistryMulti(.{
         pub const Shape = engine.Shape;
         pub const Text = engine.Text;
     },
-    labelle_tasks.Components,
+    labelle_tasks.Components(ItemType),
 });
 pub const Scripts = engine.ScriptRegistry(struct {});
 pub const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
