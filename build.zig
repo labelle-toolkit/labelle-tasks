@@ -1,5 +1,34 @@
 const std = @import("std");
 
+/// Helper to add an example executable with a run step.
+fn addExample(
+    b: *std.Build,
+    lib_mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    name: []const u8,
+    root_path: []const u8,
+    description: []const u8,
+) *std.Build.Step.Run {
+    const mod = b.createModule(.{
+        .root_source_file = b.path(root_path),
+        .target = target,
+        .optimize = optimize,
+    });
+    mod.addImport("labelle_tasks", lib_mod);
+
+    const exe = b.addExecutable(.{
+        .name = name,
+        .root_module = mod,
+    });
+    b.installArtifact(exe);
+
+    const run_exe = b.addRunArtifact(exe);
+    const step = b.step(name, description);
+    step.dependOn(&run_exe.step);
+    return run_exe;
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -11,7 +40,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Main library module
-    const lib_mod = b.addModule("labelle-tasks", .{
+    const lib_mod = b.addModule("labelle_tasks", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -69,7 +98,15 @@ pub fn build(b: *std.Build) void {
     const kitchensim_step = b.step("kitchen-sim", "Run the interactive kitchen simulator");
     kitchensim_step.dependOn(&run_kitchensim.step);
 
+    // Components example - demonstrates ECS component usage with game-defined enums
+    const run_components = addExample(b, lib_mod, target, optimize, "components", "usage/components/main.zig", "Run the components usage example");
+
+    // Farm game example - demonstrates full engine workflow
+    const run_farm = addExample(b, lib_mod, target, optimize, "farm", "usage/engine/main.zig", "Run the farm game example");
+
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_kitchensim.step);
+    examples_step.dependOn(&run_components.step);
+    examples_step.dependOn(&run_farm.step);
 }
