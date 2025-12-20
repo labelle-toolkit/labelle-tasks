@@ -112,7 +112,7 @@ pub const Components = struct {
 
     /// Marks an entity as a worker that can perform tasks.
     pub const TaskWorker = struct {
-        /// Worker priority for task assignment (0-9, higher = more important).
+        /// Worker priority for task assignment (0-15, higher = more important).
         priority: u4 = 5,
     };
 
@@ -120,11 +120,11 @@ pub const Components = struct {
     pub const TaskWorkstation = struct {
         /// Duration in ticks for the processing step.
         process_duration: u32 = 0,
-        /// Workstation priority for worker assignment (0-9, higher = more important).
+        /// Workstation priority for worker assignment (0-15, higher = more important).
         priority: u4 = 5,
     };
 
-    /// Marks an entity as a storage that holds a single item.
+    /// Marks an entity as a storage location that can hold items of specified categories.
     pub const TaskStorage = struct {
         /// Bitmask of item categories this storage accepts.
         accepts: u16 = ItemCategory.all,
@@ -138,7 +138,7 @@ pub const Components = struct {
 
     /// Configures a transport route between two storages.
     pub const TaskTransport = struct {
-        /// Priority for transport task assignment (0-9, higher = more important).
+        /// Priority for transport task assignment (0-15, higher = more important).
         priority: u4 = 5,
     };
 };

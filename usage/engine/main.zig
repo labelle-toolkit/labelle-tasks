@@ -107,13 +107,12 @@ fn findBestWorker(_: ?EntityId, available: []const EntityId) ?EntityId {
     return if (available.len > 0) available[0] else null;
 }
 
-fn onPickupStarted(worker_id: EntityId, _: EntityId, eis_id: EntityId) void {
+fn onPickupStarted(worker_id: EntityId, _: EntityId, _: EntityId) void {
     const worker = g_workers.getPtr(worker_id) orelse return;
     worker.location = .walking;
     worker.timer = WALK_TIME;
 
     log("{s} walking to pick up ingredients", .{workerName(worker_id)});
-    _ = eis_id;
 }
 
 fn onProcessStarted(worker_id: EntityId, workstation_id: EntityId) void {
