@@ -6,7 +6,7 @@
 //! This shows the pattern for:
 //! - Defining game-specific item types
 //! - Creating Components parameterized by the item type
-//! - Configuring storages to accept specific item types
+//! - Configuring storages to accept specific item types (single or multiple)
 //! - Creating items with their type
 
 const std = @import("std");
@@ -34,6 +34,7 @@ pub const ItemType = enum {
 
 // Create components parameterized by our item type
 const Components = tasks.Components(ItemType);
+const ItemSet = Components.ItemSet;
 
 // ============================================================================
 // Example: How components would be used in prefabs
@@ -41,13 +42,16 @@ const Components = tasks.Components(ItemType);
 
 /// Example prefab for a wheat-only storage.
 const wheat_silo_prefab = Components.TaskStorage{
-    .accepts = .wheat,
+    .accepts = ItemSet.initOne(.wheat),
 };
 
-/// Example prefab for a general storage (accepts everything).
-const general_storage_prefab = Components.TaskStorage{
-    .accepts = null, // null = accepts all
+/// Example prefab for a vegetable storage (accepts multiple types).
+const vegetable_crate_prefab = Components.TaskStorage{
+    .accepts = ItemSet.initMany(&.{ .carrot, .potato }),
 };
+
+/// Example prefab for a general storage (accepts everything - default).
+const general_storage_prefab = Components.TaskStorage{};
 
 /// Example prefab for a carrot item.
 const carrot_prefab = Components.TaskItem{
@@ -71,18 +75,13 @@ const kitchen_prefab = Components.TaskWorkstation{
 };
 
 // ============================================================================
-// Helper: Check if storage accepts item
+// Helper to test and print storage acceptance
 // ============================================================================
 
-pub fn storageAccepts(storage: Components.TaskStorage, item: Components.TaskItem) bool {
-    return storage.accepts == null or storage.accepts == item.item_type;
-}
-
-/// Helper to test and print storage acceptance.
 fn testStorage(name: []const u8, storage: Components.TaskStorage, carrot: Components.TaskItem, wheat: Components.TaskItem) void {
     std.debug.print("{s}:\n", .{name});
-    std.debug.print("  accepts carrot: {}\n", .{storageAccepts(storage, carrot)});
-    std.debug.print("  accepts wheat:  {}\n\n", .{storageAccepts(storage, wheat)});
+    std.debug.print("  accepts carrot: {}\n", .{storage.canAccept(carrot.item_type)});
+    std.debug.print("  accepts wheat:  {}\n\n", .{storage.canAccept(wheat.item_type)});
 }
 
 // ============================================================================
@@ -102,6 +101,7 @@ pub fn main() !void {
     std.debug.print("--- Storage Acceptance Tests ---\n\n", .{});
 
     testStorage("Wheat Silo (wheat only)", wheat_silo_prefab, carrot_prefab, wheat_prefab);
+    testStorage("Vegetable Crate (carrot, potato)", vegetable_crate_prefab, carrot_prefab, wheat_prefab);
     testStorage("General Storage (accepts all)", general_storage_prefab, carrot_prefab, wheat_prefab);
 
     // Show component values

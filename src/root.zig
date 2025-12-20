@@ -83,10 +83,18 @@ pub const StepType = @import("engine.zig").StepType;
 /// ```zig
 /// const ItemType = enum { wheat, carrot, flour };
 /// const C = labelle_tasks.Components(ItemType);
-/// // Use C.TaskStorage, C.TaskItem, etc.
+///
+/// // Storage accepting specific items
+/// .TaskStorage = .{ .accepts = C.ItemSet.initMany(&.{ .wheat, .carrot }) },
+///
+/// // Storage accepting all items (default)
+/// .TaskStorage = .{},
 /// ```
 pub fn Components(comptime ItemType: type) type {
     return struct {
+        /// Set type for combining multiple item types.
+        pub const ItemSet = std.EnumSet(ItemType);
+
         /// Marks an entity as a worker that can perform tasks.
         pub const TaskWorker = struct {
             /// Worker priority for task assignment (0-15, higher = more important).
@@ -103,8 +111,13 @@ pub fn Components(comptime ItemType: type) type {
 
         /// Marks an entity as a storage location.
         pub const TaskStorage = struct {
-            /// Item type this storage accepts. If null, accepts all items.
-            accepts: ?ItemType = null,
+            /// Set of item types this storage accepts. Defaults to all items.
+            accepts: ItemSet = ItemSet.initFull(),
+
+            /// Check if this storage accepts the given item type.
+            pub fn canAccept(self: TaskStorage, item_type: ItemType) bool {
+                return self.accepts.contains(item_type);
+            }
         };
 
         /// Marks an entity as an item that can be stored or carried.
