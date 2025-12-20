@@ -103,6 +103,13 @@ pub fn storageAccepts(storage: Components.TaskStorage, item: Components.TaskItem
     return (storage.accepts & item.category) != 0;
 }
 
+/// Helper to test and print storage acceptance for carrot and bread items.
+fn testStorage(name: []const u8, storage: Components.TaskStorage, carrot: Components.TaskItem, bread: Components.TaskItem) void {
+    std.debug.print("{s}:\n", .{name});
+    std.debug.print("  accepts carrot: {}\n", .{storageAccepts(storage, carrot)});
+    std.debug.print("  accepts bread:  {}\n\n", .{storageAccepts(storage, bread)});
+}
+
 // ============================================================================
 // Main: Demonstrate the pattern
 // ============================================================================
@@ -122,25 +129,10 @@ pub fn main() !void {
     const carrot = carrot_prefab;
     const bread = bread_prefab;
 
-    // Vegetable crate
-    std.debug.print("Vegetable Crate:\n", .{});
-    std.debug.print("  accepts carrot: {}\n", .{storageAccepts(vegetable_crate_prefab, carrot)});
-    std.debug.print("  accepts bread:  {}\n\n", .{storageAccepts(vegetable_crate_prefab, bread)});
-
-    // Pantry
-    std.debug.print("Pantry (all food):\n", .{});
-    std.debug.print("  accepts carrot: {}\n", .{storageAccepts(pantry_prefab, carrot)});
-    std.debug.print("  accepts bread:  {}\n\n", .{storageAccepts(pantry_prefab, bread)});
-
-    // Tool rack
-    std.debug.print("Tool Rack:\n", .{});
-    std.debug.print("  accepts carrot: {}\n", .{storageAccepts(tool_rack_prefab, carrot)});
-    std.debug.print("  accepts bread:  {}\n\n", .{storageAccepts(tool_rack_prefab, bread)});
-
-    // General storage
-    std.debug.print("General Storage:\n", .{});
-    std.debug.print("  accepts carrot: {}\n", .{storageAccepts(general_storage_prefab, carrot)});
-    std.debug.print("  accepts bread:  {}\n\n", .{storageAccepts(general_storage_prefab, bread)});
+    testStorage("Vegetable Crate", vegetable_crate_prefab, carrot, bread);
+    testStorage("Pantry (all food)", pantry_prefab, carrot, bread);
+    testStorage("Tool Rack", tool_rack_prefab, carrot, bread);
+    testStorage("General Storage", general_storage_prefab, carrot, bread);
 
     // Show component values
     std.debug.print("--- Component Values ---\n\n", .{});

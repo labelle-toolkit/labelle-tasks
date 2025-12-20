@@ -41,6 +41,7 @@
                 .color = .{ .r = 220, .g = 180, .b = 50, .a = 255 },
             },
             .components = .{
+                // accepts = ItemCategory.category_1 (wheat only)
                 .TaskStorage = .{ .accepts = 1 },
             },
         },
@@ -56,6 +57,7 @@
                 .color = .{ .r = 139, .g = 69, .b = 19, .a = 255 },
             },
             .components = .{
+                // accepts = ItemCategory.all (0xFFFF - accepts everything)
                 .TaskStorage = .{ .accepts = 65535 },
             },
         },
@@ -85,6 +87,7 @@
                 .color = .{ .r = 255, .g = 220, .b = 100, .a = 255 },
             },
             .components = .{
+                // category = ItemCategory.category_1 (wheat)
                 .TaskItem = .{ .category = 1 },
             },
         },
@@ -98,6 +101,7 @@
                 .color = .{ .r = 255, .g = 220, .b = 100, .a = 255 },
             },
             .components = .{
+                // category = ItemCategory.category_1 (wheat)
                 .TaskItem = .{ .category = 1 },
             },
         },
@@ -111,6 +115,7 @@
                 .color = .{ .r = 255, .g = 220, .b = 100, .a = 255 },
             },
             .components = .{
+                // category = ItemCategory.category_1 (wheat)
                 .TaskItem = .{ .category = 1 },
             },
         },
