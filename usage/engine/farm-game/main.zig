@@ -16,8 +16,7 @@ const engine = @import("labelle-engine");
 const Game = engine.Game;
 const ProjectConfig = engine.ProjectConfig;
 
-const labelle_tasks = @import("labelle-tasks");
-const main_module = @This();
+const labelle_tasks = @import("labelle_tasks");
 
 /// Game-specific item types
 pub const ItemType = enum {

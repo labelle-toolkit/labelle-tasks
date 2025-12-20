@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "labelle-engine", .module = engine_mod },
-                .{ .name = "labelle-tasks", .module = labelle_tasks_mod },
+                .{ .name = "labelle_tasks", .module = labelle_tasks_mod },
             },
         }),
     });
