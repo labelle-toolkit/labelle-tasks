@@ -16,6 +16,7 @@ A self-contained task orchestration engine with storage management for games. Th
 - **Worker management** - Workers assigned to workstations and transports automatically
 - **Cycle tracking** - Track how many times a workstation has completed its workflow
 - **Callback-driven** - Game controls execution via callbacks, engine manages state
+- **ECS Components** - Generic components for labelle-engine integration
 
 ## Storage Model
 
@@ -208,11 +209,63 @@ _ = engine.addTransport(.{
 // Transport activates when garden has vegetables AND kitchen EIS has space
 ```
 
+## ECS Components
+
+For integration with labelle-engine, the library provides generic ECS components parameterized by your game's item type:
+
+```zig
+const tasks = @import("labelle_tasks");
+
+// Define your game's item types
+const ItemType = enum { wheat, carrot, flour, bread };
+
+// Create components for your item type
+const Components = tasks.Components(ItemType);
+
+// Use the components
+const worker = Components.TaskWorker{ .priority = 7 };
+const workstation = Components.TaskWorkstation{ .process_duration = 60, .priority = 5 };
+
+// Storage with item filtering using EnumSet
+const wheat_silo = Components.TaskStorage{
+    .accepts = Components.ItemSet.initOne(.wheat),
+};
+const pantry = Components.TaskStorage{
+    .accepts = Components.ItemSet.initMany(&.{ .wheat, .flour, .bread }),
+};
+const general_storage = Components.TaskStorage{}; // accepts all (default)
+
+// Items
+const wheat_item = Components.TaskItem{ .item_type = .wheat };
+
+// Check if storage accepts item
+if (wheat_silo.canAccept(wheat_item.item_type)) {
+    // ...
+}
+```
+
+### Available Components
+
+- **TaskWorker** - Marks an entity as a worker with priority (0-15)
+- **TaskWorkstation** - Configures processing duration and priority
+- **TaskStorage** - Storage with item type filtering via `EnumSet`
+- **TaskItem** - Item with its type
+- **TaskTransport** - Transport route with priority
+
 ## Running Examples
 
 ```bash
 # Run the interactive kitchen simulator
 zig build kitchen-sim
+
+# Run the components usage example
+zig build components
+
+# Run the farm game example
+zig build farm
+
+# Run all examples
+zig build examples
 
 # Run tests
 zig build test
