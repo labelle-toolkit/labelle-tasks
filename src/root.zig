@@ -77,3 +77,64 @@ pub const Components = struct {
 
     pub const StepType = @import("engine.zig").StepType;
 };
+
+// ============================================================================
+// ECS Components (for plugin integration)
+// ============================================================================
+
+/// Creates component types parameterized by the game's item type.
+///
+/// Example:
+/// ```zig
+/// const ItemType = enum { wheat, carrot, flour };
+/// const C = labelle_tasks.EcsComponents(ItemType);
+///
+/// // Storage accepting specific items
+/// .TaskStorage = .{ .accepts = C.ItemSet.initMany(&.{ .wheat, .carrot }) },
+///
+/// // Storage accepting all items (default)
+/// .TaskStorage = .{},
+/// ```
+pub fn EcsComponents(comptime ItemType: type) type {
+    return struct {
+        /// Set type for combining multiple item types.
+        pub const ItemSet = std.EnumSet(ItemType);
+
+        /// Marks an entity as a worker that can perform tasks.
+        pub const TaskWorker = struct {
+            /// Worker priority for task assignment (0-15, higher = more important).
+            priority: u4 = 5,
+        };
+
+        /// Configures an entity as a workstation that processes items.
+        pub const TaskWorkstation = struct {
+            /// Duration in ticks for the processing step.
+            process_duration: u32 = 0,
+            /// Workstation priority for worker assignment (0-15, higher = more important).
+            priority: u4 = 5,
+        };
+
+        /// Marks an entity as a storage location.
+        pub const TaskStorage = struct {
+            /// Set of item types this storage accepts. Defaults to all items.
+            accepts: ItemSet = ItemSet.initFull(),
+
+            /// Check if this storage accepts the given item type.
+            pub fn canAccept(self: TaskStorage, item_type: ItemType) bool {
+                return self.accepts.contains(item_type);
+            }
+        };
+
+        /// Marks an entity as an item that can be stored or carried.
+        pub const TaskItem = struct {
+            /// The type of this item.
+            item_type: ItemType,
+        };
+
+        /// Configures a transport route between two storages.
+        pub const TaskTransport = struct {
+            /// Priority for transport task assignment (0-15, higher = more important).
+            priority: u4 = 5,
+        };
+    };
+}
