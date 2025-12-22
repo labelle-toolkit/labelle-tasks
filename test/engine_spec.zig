@@ -3,7 +3,7 @@ const zspec = @import("zspec");
 const expect = zspec.expect;
 const tasks = @import("labelle_tasks");
 
-const Priority = tasks.Priority;
+const Priority = tasks.Components.Priority;
 
 // Test Item type
 const Item = enum { Vegetable, Meat, Meal, Water };

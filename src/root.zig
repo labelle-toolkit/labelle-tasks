@@ -61,17 +61,22 @@ pub const Engine = @import("engine.zig").Engine;
 pub const log = @import("log.zig");
 
 // ============================================================================
-// Common Types
+// Components (for plugin integration)
 // ============================================================================
 
-pub const Priority = enum {
-    Low,
-    Normal,
-    High,
-    Critical,
-};
+/// Component types exported for labelle-engine plugin integration.
+/// When used as a plugin, these types are automatically registered
+/// with ComponentRegistryMulti.
+pub const Components = struct {
+    pub const Priority = enum {
+        Low,
+        Normal,
+        High,
+        Critical,
+    };
 
-pub const StepType = @import("engine.zig").StepType;
+    pub const StepType = @import("engine.zig").StepType;
+};
 
 // ============================================================================
 // ECS Components (for plugin integration)
@@ -82,7 +87,7 @@ pub const StepType = @import("engine.zig").StepType;
 /// Example:
 /// ```zig
 /// const ItemType = enum { wheat, carrot, flour };
-/// const C = labelle_tasks.Components(ItemType);
+/// const C = labelle_tasks.EcsComponents(ItemType);
 ///
 /// // Storage accepting specific items
 /// .TaskStorage = .{ .accepts = C.ItemSet.initMany(&.{ .wheat, .carrot }) },
@@ -90,7 +95,7 @@ pub const StepType = @import("engine.zig").StepType;
 /// // Storage accepting all items (default)
 /// .TaskStorage = .{},
 /// ```
-pub fn Components(comptime ItemType: type) type {
+pub fn EcsComponents(comptime ItemType: type) type {
     return struct {
         /// Set type for combining multiple item types.
         pub const ItemSet = std.EnumSet(ItemType);

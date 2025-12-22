@@ -47,7 +47,7 @@ const Allocator = std.mem.Allocator;
 
 // Import core types from root
 const root = @import("root.zig");
-pub const Priority = root.Priority;
+pub const Priority = root.Components.Priority;
 
 // Import storage module
 const storage_mod = @import("storage.zig");

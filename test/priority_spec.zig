@@ -3,7 +3,7 @@ const expect = zspec.expect;
 const tasks = @import("labelle_tasks");
 
 pub const @"Priority" = struct {
-    const Pri = tasks.Priority;
+    const Pri = tasks.Components.Priority;
     pub const @"enum values" = struct {
         test "has four levels" {
             const priorities = [_]Pri{ .Low, .Normal, .High, .Critical };

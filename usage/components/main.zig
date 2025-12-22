@@ -33,7 +33,7 @@ pub const ItemType = enum {
 };
 
 // Create components parameterized by our item type
-const Components = tasks.Components(ItemType);
+const Components = tasks.EcsComponents(ItemType);
 const ItemSet = Components.ItemSet;
 
 // ============================================================================
