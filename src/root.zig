@@ -61,14 +61,19 @@ pub const Engine = @import("engine.zig").Engine;
 pub const log = @import("log.zig");
 
 // ============================================================================
-// Common Types
+// Components (for plugin integration)
 // ============================================================================
 
-pub const Priority = enum {
-    Low,
-    Normal,
-    High,
-    Critical,
-};
+/// Component types exported for labelle-engine plugin integration.
+/// When used as a plugin, these types are automatically registered
+/// with ComponentRegistryMulti.
+pub const Components = struct {
+    pub const Priority = enum {
+        Low,
+        Normal,
+        High,
+        Critical,
+    };
 
-pub const StepType = @import("engine.zig").StepType;
+    pub const StepType = @import("engine.zig").StepType;
+};

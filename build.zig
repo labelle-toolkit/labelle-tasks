@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Main library module
-    const lib_mod = b.addModule("labelle-tasks", .{
+    const lib_mod = b.addModule("labelle_tasks", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,

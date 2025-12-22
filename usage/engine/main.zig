@@ -11,9 +11,8 @@
 const std = @import("std");
 const tasks = @import("labelle_tasks");
 
-const StepType = tasks.StepType;
-const StepDef = tasks.StepDef;
-const Priority = tasks.Priority;
+const StepType = tasks.Components.StepType;
+const Priority = tasks.Components.Priority;
 
 // ============================================================================
 // Game Entity IDs (whatever your game uses)
