@@ -220,7 +220,7 @@ const tasks = @import("labelle_tasks");
 const ItemType = enum { wheat, carrot, flour, bread };
 
 // Create components for your item type
-const Components = tasks.Components(ItemType);
+const Components = tasks.EcsComponents(ItemType);
 
 // Use the components
 const worker = Components.TaskWorker{ .priority = 7 };
