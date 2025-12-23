@@ -690,17 +690,17 @@ pub fn main() !void {
     // Low priority so transporting ingredients takes precedence
     _ = engine.addWorkstation(CONDENSER_WORKSTATION_ID, .{
         .ios = CONDENSER_IOS_ID,
-        .eos = CONDENSER_EOS_ID,
+        .eos = &.{CONDENSER_EOS_ID},
         .process_duration = CONDENSE_TIME,
         .priority = .Low,
     });
 
     // Kitchen workstation - full cycle with all storages
     _ = engine.addWorkstation(KITCHEN_WORKSTATION_ID, .{
-        .eis = KITCHEN_EIS_ID,
+        .eis = &.{KITCHEN_EIS_ID},
         .iis = KITCHEN_IIS_ID,
         .ios = KITCHEN_IOS_ID,
-        .eos = KITCHEN_EOS_ID,
+        .eos = &.{KITCHEN_EOS_ID},
         .process_duration = COOK_TIME,
         .priority = .High,
     });

@@ -311,10 +311,10 @@ pub fn main() !void {
 
     // Mill workstation
     _ = engine.addWorkstation(Entities.mill, .{
-        .eis = Entities.mill_input,
+        .eis = &.{Entities.mill_input},
         .iis = Entities.mill_input,
         .ios = Entities.mill_output,
-        .eos = Entities.flour_storage,
+        .eos = &.{Entities.flour_storage},
         .process_duration = MILL_TIME,
         .priority = .High,
     });

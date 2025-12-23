@@ -101,11 +101,12 @@ const eos_slots = [_]tasks.Engine(u32, Item).Slot{
 _ = engine.addStorage(KITCHEN_EOS_ID, .{ .slots = &eos_slots });
 
 // Create workstation referencing storages
+// EIS and EOS support multiple storages for flexible input/output routing
 _ = engine.addWorkstation(KITCHEN_ID, .{
-    .eis = KITCHEN_EIS_ID,
+    .eis = &.{KITCHEN_EIS_ID},  // Multiple input storages supported
     .iis = KITCHEN_IIS_ID,
     .ios = KITCHEN_IOS_ID,
-    .eos = KITCHEN_EOS_ID,
+    .eos = &.{KITCHEN_EOS_ID},  // Multiple output storages supported
     .process_duration = 40,
     .priority = .High,
 });
@@ -187,12 +188,34 @@ _ = engine.addStorage(CONDENSER_EOS_ID, .{ .slots = &eos_slots });
 
 _ = engine.addWorkstation(CONDENSER_ID, .{
     .ios = CONDENSER_IOS_ID,
-    .eos = CONDENSER_EOS_ID,
+    .eos = &.{CONDENSER_EOS_ID},
     .process_duration = 30,
     .priority = .Low,
 });
 // Condenser starts immediately (Queued) - no inputs needed
 ```
+
+## Multiple Input/Output Storages
+
+Workstations can reference multiple EIS (External Input Storages) and EOS (External Output Storages) for flexible routing:
+
+```zig
+// Kitchen with multiple ingredient sources and serving counters
+_ = engine.addWorkstation(KITCHEN_ID, .{
+    .eis = &.{ PANTRY_ID, FRIDGE_ID, SHELF_ID },  // Pick from any that has ingredients
+    .iis = KITCHEN_IIS_ID,
+    .ios = KITCHEN_IOS_ID,
+    .eos = &.{ COUNTER_1_ID, COUNTER_2_ID },      // Store to first with space
+    .process_duration = 40,
+    .priority = .High,
+});
+```
+
+The engine automatically:
+- Checks all EIS storages when looking for available ingredients
+- Picks from the first EIS that can fulfill the recipe
+- Stores outputs to the first EOS that has space
+- Blocks only when NO EIS has ingredients OR ALL EOS are full
 
 ## Transports
 

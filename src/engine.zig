@@ -106,11 +106,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             status: WorkstationStatus = .Blocked,
             priority: Priority = .Normal,
 
-            // Storage references (optional - null means not used)
-            eis: ?StorageId = null,
+            // Storage references (empty slice means not used)
+            // Multiple EIS/EOS supported for flexible input/output routing
+            eis: []const StorageId = &.{},
             iis: ?StorageId = null,
             ios: ?StorageId = null,
-            eos: ?StorageId = null,
+            eos: []const StorageId = &.{},
 
             // Processing
             process_duration: u32 = 0, // 0 means no Process step
@@ -119,6 +120,10 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             // Step tracking
             current_step: StepType = .Pickup,
             assigned_worker: ?WorkerId = null,
+
+            // Track which EIS/EOS was selected for current cycle
+            selected_eis: ?StorageId = null,
+            selected_eos: ?StorageId = null,
         };
 
         const Transport = struct {
@@ -258,6 +263,18 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             var storage_iter = self.storages.iterator();
             while (storage_iter.next()) |entry| {
                 entry.value_ptr.deinit();
+            }
+
+            // Free workstation EIS/EOS arrays
+            var ws_iter = self.workstations.iterator();
+            while (ws_iter.next()) |entry| {
+                const ws = entry.value_ptr;
+                if (ws.eis.len > 0) {
+                    self.allocator.free(ws.eis);
+                }
+                if (ws.eos.len > 0) {
+                    self.allocator.free(ws.eos);
+                }
             }
 
             self.workers.deinit();
@@ -408,10 +425,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
         // ====================================================================
 
         pub const AddWorkstationOptions = struct {
-            eis: ?GameId = null,
+            /// External Input Storages - multiple sources for ingredients
+            eis: []const GameId = &.{},
             iis: ?GameId = null,
             ios: ?GameId = null,
-            eos: ?GameId = null,
+            /// External Output Storages - multiple destinations for outputs
+            eos: []const GameId = &.{},
             process_duration: u32 = 0,
             priority: Priority = .Normal,
         };
@@ -421,21 +440,37 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const id = self.next_workstation_id;
             self.next_workstation_id += 1;
 
-            // Resolve storage IDs
-            const eis_id = if (options.eis) |eis_game_id| self.storage_by_game_id.get(eis_game_id) else null;
+            // Resolve EIS storage IDs (allocate array for multiple storages)
+            const eis_ids: []const StorageId = if (options.eis.len > 0) blk: {
+                const ids = self.allocator.alloc(StorageId, options.eis.len) catch @panic("OOM");
+                for (options.eis, 0..) |eis_game_id, i| {
+                    ids[i] = self.storage_by_game_id.get(eis_game_id) orelse @panic("Invalid EIS storage");
+                }
+                break :blk ids;
+            } else &.{};
+
+            // Resolve single IIS/IOS storage IDs
             const iis_id = if (options.iis) |iis_game_id| self.storage_by_game_id.get(iis_game_id) else null;
             const ios_id = if (options.ios) |ios_game_id| self.storage_by_game_id.get(ios_game_id) else null;
-            const eos_id = if (options.eos) |eos_game_id| self.storage_by_game_id.get(eos_game_id) else null;
+
+            // Resolve EOS storage IDs (allocate array for multiple storages)
+            const eos_ids: []const StorageId = if (options.eos.len > 0) blk: {
+                const ids = self.allocator.alloc(StorageId, options.eos.len) catch @panic("OOM");
+                for (options.eos, 0..) |eos_game_id, i| {
+                    ids[i] = self.storage_by_game_id.get(eos_game_id) orelse @panic("Invalid EOS storage");
+                }
+                break :blk ids;
+            } else &.{};
 
             // Determine first step based on storages
             const first_step: StepType = if (iis_id != null) .Pickup else if (options.process_duration > 0) .Process else .Store;
 
             self.workstations.put(id, .{
                 .game_id = game_id,
-                .eis = eis_id,
+                .eis = eis_ids,
                 .iis = iis_id,
                 .ios = ios_id,
-                .eos = eos_id,
+                .eos = eos_ids,
                 .process_duration = options.process_duration,
                 .priority = options.priority,
                 .current_step = first_step,
@@ -444,11 +479,13 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             self.workstation_by_game_id.put(game_id, id) catch @panic("OOM");
             self.cycles.put(id, 0) catch @panic("OOM");
 
-            log.debug("workstation added: game_id={d}, workstation_id={d}, priority={s}, first_step={s}", .{
+            log.debug("workstation added: game_id={d}, workstation_id={d}, priority={s}, first_step={s}, eis_count={d}, eos_count={d}", .{
                 fmtGameId(game_id),
                 id,
                 @tagName(options.priority),
                 @tagName(first_step),
+                eis_ids.len,
+                eos_ids.len,
             });
 
             // Check if this workstation can start immediately (e.g., producer with no inputs)
@@ -529,8 +566,8 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 fmtGameId(ws.game_id),
             });
 
-            // Transfer EIS -> IIS
-            if (ws.eis) |eis_id| {
+            // Transfer selected EIS -> IIS
+            if (ws.selected_eis) |eis_id| {
                 if (ws.iis) |iis_id| {
                     const eis = self.storages.getPtr(eis_id) orelse return;
                     const iis = self.storages.getPtr(iis_id) orelse return;
@@ -557,9 +594,9 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 fmtGameId(ws.game_id),
             });
 
-            // Transfer IOS -> EOS
+            // Transfer IOS -> selected EOS
             if (ws.ios) |ios_id| {
-                if (ws.eos) |eos_id| {
+                if (ws.selected_eos) |eos_id| {
                     const ios = self.storages.getPtr(ios_id) orelse return;
                     const eos = self.storages.getPtr(eos_id) orelse return;
 
@@ -736,30 +773,74 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
         fn canWorkstationStart(self: *Self, ws_id: WorkstationId) bool {
             const ws = self.workstations.get(ws_id) orelse return false;
 
-            // Check if EIS has enough for IIS recipe (if IIS exists)
+            // Check if any EIS has enough for IIS recipe (if IIS exists)
             if (ws.iis) |iis_id| {
                 const iis = self.storages.get(iis_id) orelse return false;
 
-                if (ws.eis) |eis_id| {
-                    const eis = self.storages.get(eis_id) orelse return false;
-                    if (!eis.canFulfillRecipe(iis.slots)) {
+                if (ws.eis.len > 0) {
+                    // Check if ANY EIS can fulfill the recipe
+                    var any_can_fulfill = false;
+                    for (ws.eis) |eis_id| {
+                        const eis = self.storages.get(eis_id) orelse continue;
+                        if (eis.canFulfillRecipe(iis.slots)) {
+                            any_can_fulfill = true;
+                            break;
+                        }
+                    }
+                    if (!any_can_fulfill) {
                         return false;
                     }
                 }
             }
 
-            // Check if EOS has space for IOS output (if both exist)
+            // Check if any EOS has space for IOS output (if both exist)
             if (ws.ios) |ios_id| {
-                if (ws.eos) |eos_id| {
+                if (ws.eos.len > 0) {
                     const ios = self.storages.get(ios_id) orelse return false;
-                    const eos = self.storages.get(eos_id) orelse return false;
-                    if (!eos.hasSpaceForOutput(ios.slots)) {
+                    // Check if ANY EOS has space for the output
+                    var any_has_space = false;
+                    for (ws.eos) |eos_id| {
+                        const eos = self.storages.get(eos_id) orelse continue;
+                        if (eos.hasSpaceForOutput(ios.slots)) {
+                            any_has_space = true;
+                            break;
+                        }
+                    }
+                    if (!any_has_space) {
                         return false;
                     }
                 }
             }
 
             return true;
+        }
+
+        /// Find an EIS that can fulfill the recipe for a workstation
+        fn findSuitableEis(self: *Self, ws: *const Workstation) ?StorageId {
+            const iis_id = ws.iis orelse return null;
+            const iis = self.storages.get(iis_id) orelse return null;
+
+            for (ws.eis) |eis_id| {
+                const eis = self.storages.get(eis_id) orelse continue;
+                if (eis.canFulfillRecipe(iis.slots)) {
+                    return eis_id;
+                }
+            }
+            return null;
+        }
+
+        /// Find an EOS that has space for the output
+        fn findSuitableEos(self: *Self, ws: *const Workstation) ?StorageId {
+            const ios_id = ws.ios orelse return null;
+            const ios = self.storages.get(ios_id) orelse return null;
+
+            for (ws.eos) |eos_id| {
+                const eos = self.storages.get(eos_id) orelse continue;
+                if (eos.hasSpaceForOutput(ios.slots)) {
+                    return eos_id;
+                }
+            }
+            return null;
         }
 
         fn tryAssignWorkerToWorkstation(self: *Self, ws_id: WorkstationId) void {
@@ -867,10 +948,16 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const worker = self.workers.getPtr(worker_id) orelse return;
             const ws = self.workstations.getPtr(ws_id) orelse return;
 
-            log.info("worker assigned to workstation: worker={d}, workstation={d}, step={s}", .{
+            // Select the EIS/EOS to use for this cycle
+            ws.selected_eis = self.findSuitableEis(ws);
+            ws.selected_eos = self.findSuitableEos(ws);
+
+            log.info("worker assigned to workstation: worker={d}, workstation={d}, step={s}, eis={?d}, eos={?d}", .{
                 fmtGameId(worker.game_id),
                 fmtGameId(ws.game_id),
                 @tagName(ws.current_step),
+                ws.selected_eis,
+                ws.selected_eos,
             });
 
             worker.state = .Working;
@@ -913,7 +1000,7 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             switch (ws.current_step) {
                 .Pickup => {
                     if (self.on_pickup_started) |callback| {
-                        if (ws.eis) |eis_id| {
+                        if (ws.selected_eis) |eis_id| {
                             const eis = self.storages.get(eis_id) orelse return;
                             callback(worker.game_id, ws.game_id, eis.game_id);
                         }
@@ -927,7 +1014,7 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 },
                 .Store => {
                     if (self.on_store_started) |callback| {
-                        if (ws.eos) |eos_id| {
+                        if (ws.selected_eos) |eos_id| {
                             const eos = self.storages.get(eos_id) orelse return;
                             callback(worker.game_id, ws.game_id, eos.game_id);
                         }
@@ -1012,8 +1099,10 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 cycle_count.*,
             });
 
-            // Reset to first step
+            // Reset to first step and clear selected storages
             ws.current_step = if (ws.iis != null) .Pickup else if (ws.process_duration > 0) .Process else .Store;
+            ws.selected_eis = null;
+            ws.selected_eos = null;
 
             // Release worker
             self.releaseWorker(worker_id, ws_id);
