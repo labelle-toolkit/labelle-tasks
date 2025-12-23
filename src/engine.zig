@@ -436,42 +436,38 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             priority: Priority = .Normal,
         };
 
+        /// Resolve an array of game IDs to storage IDs, allocating memory for the result.
+        /// Returns empty slice if input is empty, otherwise allocates and resolves each ID.
+        fn resolveStorageIds(self: *Self, game_ids: []const GameId, comptime name: []const u8) []const StorageId {
+            if (game_ids.len == 0) return &.{};
+
+            const ids = self.allocator.alloc(StorageId, game_ids.len) catch @panic("OOM");
+            for (game_ids, 0..) |gid, i| {
+                ids[i] = self.storage_by_game_id.get(gid) orelse @panic("Invalid " ++ name ++ " storage");
+            }
+            return ids;
+        }
+
         /// Register a workstation with the engine.
         pub fn addWorkstation(self: *Self, game_id: GameId, options: AddWorkstationOptions) WorkstationId {
             const id = self.next_workstation_id;
             self.next_workstation_id += 1;
 
-            // Resolve EIS storage IDs (allocate array for multiple storages)
-            const eis_ids: []const StorageId = if (options.eis.len > 0) blk: {
-                const ids = self.allocator.alloc(StorageId, options.eis.len) catch @panic("OOM");
-                for (options.eis, 0..) |eis_game_id, i| {
-                    ids[i] = self.storage_by_game_id.get(eis_game_id) orelse @panic("Invalid EIS storage");
-                }
-                break :blk ids;
-            } else &.{};
-
-            // Resolve single IIS/IOS storage IDs
+            // Resolve single IIS/IOS storage IDs first (for validation)
             const iis_id = if (options.iis) |iis_game_id| self.storage_by_game_id.get(iis_game_id) else null;
             const ios_id = if (options.ios) |ios_game_id| self.storage_by_game_id.get(ios_game_id) else null;
 
-            // Validate configuration: if IIS exists, EIS must be provided for input routing
+            // Validate configuration before allocating
             if (iis_id != null and options.eis.len == 0) {
                 @panic("Workstation has IIS but no EIS - cannot route inputs");
             }
-
-            // Resolve EOS storage IDs (allocate array for multiple storages)
-            const eos_ids: []const StorageId = if (options.eos.len > 0) blk: {
-                const ids = self.allocator.alloc(StorageId, options.eos.len) catch @panic("OOM");
-                for (options.eos, 0..) |eos_game_id, i| {
-                    ids[i] = self.storage_by_game_id.get(eos_game_id) orelse @panic("Invalid EOS storage");
-                }
-                break :blk ids;
-            } else &.{};
-
-            // Validate configuration: if IOS exists, EOS must be provided for output routing
             if (ios_id != null and options.eos.len == 0) {
                 @panic("Workstation has IOS but no EOS - cannot route outputs");
             }
+
+            // Resolve storage ID arrays (allocates memory)
+            const eis_ids = self.resolveStorageIds(options.eis, "EIS");
+            const eos_ids = self.resolveStorageIds(options.eos, "EOS");
 
             // Determine first step based on storages
             const first_step: StepType = if (iis_id != null) .Pickup else if (options.process_duration > 0) .Process else .Store;

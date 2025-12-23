@@ -1017,7 +1017,7 @@ pub const @"Engine" = struct {
     // ========================================================================
 
     pub const @"integration: multiple EIS" = struct {
-        test "workstation picks from first EIS with recipe" {
+        test "workstation picks from any EIS with recipe" {
             resetCallbacks();
             var eng = TestEngine.init(std.testing.allocator);
             defer eng.deinit();
