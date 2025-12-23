@@ -209,10 +209,10 @@ pub const @"Engine" = struct {
             _ = eng.addStorage(13, .{ .slots = &eos_slots });
 
             _ = eng.addWorkstation(100, .{
-                .eis = 10,
+                .eis = &.{10},
                 .iis = 11,
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
             });
 
@@ -236,10 +236,10 @@ pub const @"Engine" = struct {
             _ = eng.addStorage(13, .{ .slots = &eos_slots });
 
             _ = eng.addWorkstation(100, .{
-                .eis = 10,
+                .eis = &.{10},
                 .iis = 11,
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
             });
 
@@ -261,7 +261,7 @@ pub const @"Engine" = struct {
 
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
             });
 
@@ -295,10 +295,10 @@ pub const @"Engine" = struct {
             _ = eng.addStorage(13, .{ .slots = &eos_slots });
 
             _ = eng.addWorkstation(100, .{
-                .eis = 10,
+                .eis = &.{10},
                 .iis = 11,
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
             });
 
@@ -333,7 +333,7 @@ pub const @"Engine" = struct {
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
             });
 
@@ -378,10 +378,10 @@ pub const @"Engine" = struct {
 
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
-                .eis = 10,
+                .eis = &.{10},
                 .iis = 11,
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 5,
             });
 
@@ -504,10 +504,10 @@ pub const @"Engine" = struct {
 
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
-                .eis = 10,
+                .eis = &.{10},
                 .iis = 11,
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
             });
 
@@ -543,14 +543,14 @@ pub const @"Engine" = struct {
 
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
                 .priority = .Low,
             });
 
             _ = eng.addWorkstation(200, .{
                 .ios = 22,
-                .eos = 23,
+                .eos = &.{23},
                 .process_duration = 10,
                 .priority = .High,
             });
@@ -589,7 +589,7 @@ pub const @"Engine" = struct {
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 3,
             });
 
@@ -652,10 +652,10 @@ pub const @"Engine" = struct {
 
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
-                .eis = 10,
+                .eis = &.{10},
                 .iis = 11,
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 5,
             });
 
@@ -694,7 +694,7 @@ pub const @"Engine" = struct {
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 1,
             });
 
@@ -729,7 +729,7 @@ pub const @"Engine" = struct {
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 1,
             });
 
@@ -855,10 +855,10 @@ pub const @"Engine" = struct {
 
             // Kitchen workstation
             _ = eng.addWorkstation(100, .{
-                .eis = 10,
+                .eis = &.{10},
                 .iis = 11,
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 5,
             });
 
@@ -905,13 +905,13 @@ pub const @"Engine" = struct {
 
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 10,
             });
 
             _ = eng.addWorkstation(200, .{
                 .ios = 22,
-                .eos = 23,
+                .eos = &.{23},
                 .process_duration = 10,
             });
 
@@ -944,13 +944,13 @@ pub const @"Engine" = struct {
 
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 1,
             });
 
             _ = eng.addWorkstation(200, .{
                 .ios = 22,
-                .eos = 23,
+                .eos = &.{23},
                 .process_duration = 1,
             });
 
@@ -991,7 +991,7 @@ pub const @"Engine" = struct {
             _ = eng.addWorker(1, .{});
             _ = eng.addWorkstation(100, .{
                 .ios = 12,
-                .eos = 13,
+                .eos = &.{13},
                 .process_duration = 1,
             });
 
@@ -1009,6 +1009,355 @@ pub const @"Engine" = struct {
 
             // Should be blocked now
             try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
+        }
+    };
+
+    // ========================================================================
+    // Multiple EIS/EOS Tests
+    // ========================================================================
+
+    pub const @"integration: multiple EIS" = struct {
+        test "workstation picks from any EIS with recipe" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+            eng.setOnPickupStarted(testOnPickupStarted);
+
+            // Two EIS storages
+            const eis_slots = [_]Slot{.{ .item = .Vegetable, .capacity = 10 }};
+            const iis_slots = [_]Slot{.{ .item = .Vegetable, .capacity = 2 }};
+            const ios_slots = [_]Slot{.{ .item = .Meal, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Meal, .capacity = 4 }};
+
+            _ = eng.addStorage(10, .{ .slots = &eis_slots }); // EIS 1
+            _ = eng.addStorage(20, .{ .slots = &eis_slots }); // EIS 2
+            _ = eng.addStorage(11, .{ .slots = &iis_slots });
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots });
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .eis = &.{ 10, 20 }, // Multiple EIS
+                .iis = 11,
+                .ios = 12,
+                .eos = &.{13},
+                .process_duration = 1,
+            });
+
+            // Add items only to second EIS
+            _ = eng.addToStorage(20, .Vegetable, 2);
+
+            // Workstation should start (second EIS has recipe)
+            try expect.equal(eng.getWorkstationStatus(100).?, .Active);
+            try expect.equal(g_pickup_started_calls, 1);
+
+            // Complete pickup - items from EIS 2 should transfer to IIS
+            eng.notifyPickupComplete(1);
+            try expect.equal(eng.getStorageQuantity(20, .Vegetable), 0);
+            try expect.equal(eng.getStorageQuantity(11, .Vegetable), 2);
+        }
+
+        test "workstation blocked when no EIS has recipe" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+
+            // Two EIS storages
+            const eis_slots = [_]Slot{.{ .item = .Vegetable, .capacity = 10 }};
+            const iis_slots = [_]Slot{.{ .item = .Vegetable, .capacity = 2 }};
+            const ios_slots = [_]Slot{.{ .item = .Meal, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Meal, .capacity = 4 }};
+
+            _ = eng.addStorage(10, .{ .slots = &eis_slots }); // EIS 1
+            _ = eng.addStorage(20, .{ .slots = &eis_slots }); // EIS 2
+            _ = eng.addStorage(11, .{ .slots = &iis_slots });
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots });
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .eis = &.{ 10, 20 }, // Multiple EIS
+                .iis = 11,
+                .ios = 12,
+                .eos = &.{13},
+                .process_duration = 1,
+            });
+
+            // Add items to both EIS, but not enough in either
+            _ = eng.addToStorage(10, .Vegetable, 1); // Only 1, need 2
+            _ = eng.addToStorage(20, .Vegetable, 1); // Only 1, need 2
+
+            // Workstation should be blocked (neither EIS has full recipe)
+            try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
+
+            // Add one more to first EIS
+            _ = eng.addToStorage(10, .Vegetable, 1);
+
+            // Now should be queued/active (first EIS has recipe)
+            try expect.notEqual(eng.getWorkstationStatus(100).?, .Blocked);
+        }
+    };
+
+    pub const @"integration: multiple EOS" = struct {
+        test "workstation stores to first EOS with space" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+            eng.setOnStoreStarted(testOnStoreStarted);
+
+            // Two EOS storages
+            const ios_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Water, .capacity = 2 }};
+
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots }); // EOS 1
+            _ = eng.addStorage(23, .{ .slots = &eos_slots }); // EOS 2
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .ios = 12,
+                .eos = &.{ 13, 23 }, // Multiple EOS
+                .process_duration = 1,
+            });
+
+            // Complete first cycle
+            eng.update();
+            eng.notifyStoreComplete(1);
+
+            // Water should be in first EOS
+            try expect.equal(eng.getStorageQuantity(13, .Water), 1);
+            try expect.equal(eng.getStorageQuantity(23, .Water), 0);
+        }
+
+        test "workstation uses second EOS when first is full" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+
+            // Two EOS storages with small capacity
+            const ios_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }}; // Only 1 slot each
+
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots }); // EOS 1
+            _ = eng.addStorage(23, .{ .slots = &eos_slots }); // EOS 2
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .ios = 12,
+                .eos = &.{ 13, 23 }, // Multiple EOS
+                .process_duration = 1,
+            });
+
+            // Complete first cycle - fills EOS 1
+            eng.update();
+            eng.notifyStoreComplete(1);
+            try expect.equal(eng.getStorageQuantity(13, .Water), 1);
+            try expect.equal(eng.getStorageQuantity(23, .Water), 0);
+
+            // Complete second cycle - should use EOS 2
+            eng.update();
+            eng.notifyStoreComplete(1);
+            try expect.equal(eng.getStorageQuantity(13, .Water), 1);
+            try expect.equal(eng.getStorageQuantity(23, .Water), 1);
+
+            // Now both are full - should be blocked
+            try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
+        }
+
+        test "workstation blocked when all EOS are full" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+
+            // Two EOS storages, pre-fill them
+            const ios_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots }); // EOS 1
+            _ = eng.addStorage(23, .{ .slots = &eos_slots }); // EOS 2
+
+            // Pre-fill both EOS
+            _ = eng.addToStorage(13, .Water, 1);
+            _ = eng.addToStorage(23, .Water, 1);
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .ios = 12,
+                .eos = &.{ 13, 23 }, // Multiple EOS
+                .process_duration = 1,
+            });
+
+            // Workstation should be blocked (all EOS full)
+            try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
+
+            // Free up second EOS
+            _ = eng.removeFromStorage(23, .Water, 1);
+            eng.notifyWorkerIdle(1);
+
+            // Now should start
+            try expect.equal(eng.getWorkstationStatus(100).?, .Active);
+        }
+    };
+
+    // ========================================================================
+    // Transfer Failure Tests
+    // ========================================================================
+
+    pub const @"integration: transfer failure handling" = struct {
+        test "blocks workstation when EIS loses items before pickup complete" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+            eng.setOnPickupStarted(testOnPickupStarted);
+
+            // Setup kitchen
+            const eis_slots = [_]Slot{.{ .item = .Vegetable, .capacity = 10 }};
+            const iis_slots = [_]Slot{.{ .item = .Vegetable, .capacity = 2 }};
+            const ios_slots = [_]Slot{.{ .item = .Meal, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Meal, .capacity = 4 }};
+
+            _ = eng.addStorage(10, .{ .slots = &eis_slots });
+            _ = eng.addStorage(11, .{ .slots = &iis_slots });
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots });
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .eis = &.{10},
+                .iis = 11,
+                .ios = 12,
+                .eos = &.{13},
+                .process_duration = 5,
+            });
+
+            // Add ingredients to start
+            _ = eng.addToStorage(10, .Vegetable, 2);
+            try expect.equal(eng.getWorkstationStatus(100).?, .Active);
+            try expect.equal(g_pickup_started_calls, 1);
+
+            // Simulate items being removed while worker is en route
+            _ = eng.removeFromStorage(10, .Vegetable, 2);
+
+            // Notify pickup complete - transfer should fail
+            eng.notifyPickupComplete(1);
+
+            // Workstation should be blocked, worker released
+            try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
+            try expect.equal(eng.getWorkerState(1).?, .Idle);
+
+            // IIS should still be empty (no partial transfer)
+            try expect.equal(eng.getStorageQuantity(11, .Vegetable), 0);
+        }
+    };
+
+    // ========================================================================
+    // Store-time EOS Selection Tests
+    // ========================================================================
+
+    pub const @"integration: store-time EOS selection" = struct {
+        test "selects different EOS when first becomes full during process" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+            eng.setOnStoreStarted(testOnStoreStarted);
+
+            // Producer with two EOS
+            const ios_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots }); // EOS 1
+            _ = eng.addStorage(23, .{ .slots = &eos_slots }); // EOS 2
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .ios = 12,
+                .eos = &.{ 13, 23 },
+                .process_duration = 5,
+            });
+
+            // Start process
+            try expect.equal(eng.getWorkstationStatus(100).?, .Active);
+
+            // Fill EOS 1 during process (simulating another source)
+            _ = eng.addToStorage(13, .Water, 1);
+
+            // Complete process
+            var i: u32 = 0;
+            while (i < 5) : (i += 1) {
+                eng.update();
+            }
+
+            // Store should use EOS 2 (first is now full)
+            try expect.equal(g_store_started_calls, 1);
+
+            // Complete store
+            eng.notifyStoreComplete(1);
+
+            // Water should be in EOS 2
+            try expect.equal(eng.getStorageQuantity(13, .Water), 1); // Still 1 from our fill
+            try expect.equal(eng.getStorageQuantity(23, .Water), 1); // From the cycle
+        }
+
+        test "blocks when all EOS become full during process" {
+            resetCallbacks();
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            eng.setFindBestWorker(testFindBestWorker);
+            eng.setOnWorkerReleased(testOnWorkerReleased);
+
+            // Producer with two small EOS
+            const ios_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+            const eos_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
+
+            _ = eng.addStorage(12, .{ .slots = &ios_slots });
+            _ = eng.addStorage(13, .{ .slots = &eos_slots }); // EOS 1
+            _ = eng.addStorage(23, .{ .slots = &eos_slots }); // EOS 2
+
+            _ = eng.addWorker(1, .{});
+            _ = eng.addWorkstation(100, .{
+                .ios = 12,
+                .eos = &.{ 13, 23 },
+                .process_duration = 5,
+            });
+
+            // Start process
+            try expect.equal(eng.getWorkstationStatus(100).?, .Active);
+
+            // Fill both EOS during process
+            _ = eng.addToStorage(13, .Water, 1);
+            _ = eng.addToStorage(23, .Water, 1);
+
+            // Complete process
+            var i: u32 = 0;
+            while (i < 5) : (i += 1) {
+                eng.update();
+            }
+
+            // At store time, no EOS available - workstation should block
+            try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
+            try expect.equal(eng.getWorkerState(1).?, .Idle);
+            try expect.equal(g_worker_released_calls, 1);
+
+            // IOS should still have the produced item (couldn't store)
+            try expect.equal(eng.getStorageQuantity(12, .Water), 1);
         }
     };
 };
