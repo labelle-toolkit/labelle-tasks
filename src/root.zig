@@ -19,11 +19,12 @@
 //! }});
 //!
 //! // Create workstation referencing storages
+//! // EIS and EOS support multiple storages for flexible routing
 //! _ = engine.addWorkstation(KITCHEN_ID, .{
-//!     .eis = EIS_ID,
+//!     .eis = &.{EIS_ID},
 //!     .iis = IIS_ID,
 //!     .ios = IOS_ID,
-//!     .eos = EOS_ID,
+//!     .eos = &.{EOS_ID},
 //!     .process_duration = 40,
 //! });
 //!

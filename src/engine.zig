@@ -32,11 +32,12 @@
 //! }});
 //!
 //! // Create workstation referencing storages
+//! // EIS and EOS accept slices for flexible multi-storage routing
 //! _ = engine.addWorkstation(KITCHEN_ID, .{
-//!     .eis = KITCHEN_EIS_ID,
+//!     .eis = &.{KITCHEN_EIS_ID},
 //!     .iis = KITCHEN_IIS_ID,
 //!     .ios = KITCHEN_IOS_ID,
-//!     .eos = KITCHEN_EOS_ID,
+//!     .eos = &.{KITCHEN_EOS_ID},
 //!     .process_duration = 40,
 //!     .priority = .High,
 //! });
@@ -453,6 +454,11 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const iis_id = if (options.iis) |iis_game_id| self.storage_by_game_id.get(iis_game_id) else null;
             const ios_id = if (options.ios) |ios_game_id| self.storage_by_game_id.get(ios_game_id) else null;
 
+            // Validate configuration: if IIS exists, EIS must be provided for input routing
+            if (iis_id != null and options.eis.len == 0) {
+                @panic("Workstation has IIS but no EIS - cannot route inputs");
+            }
+
             // Resolve EOS storage IDs (allocate array for multiple storages)
             const eos_ids: []const StorageId = if (options.eos.len > 0) blk: {
                 const ids = self.allocator.alloc(StorageId, options.eos.len) catch @panic("OOM");
@@ -461,6 +467,11 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                 }
                 break :blk ids;
             } else &.{};
+
+            // Validate configuration: if IOS exists, EOS must be provided for output routing
+            if (ios_id != null and options.eos.len == 0) {
+                @panic("Workstation has IOS but no EOS - cannot route outputs");
+            }
 
             // Determine first step based on storages
             const first_step: StepType = if (iis_id != null) .Pickup else if (options.process_duration > 0) .Process else .Store;
@@ -553,6 +564,7 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 
         /// Notify that Pickup step is complete (worker arrived at EIS with items).
         /// Engine transfers EIS -> IIS and advances to Process step.
+        /// If transfer fails (EIS no longer has recipe), workstation is blocked.
         pub fn notifyPickupComplete(self: *Self, worker_game_id: GameId) void {
             const worker_id = self.worker_by_game_id.get(worker_game_id) orelse return;
             const worker = self.workers.getPtr(worker_id) orelse return;
@@ -567,12 +579,27 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             });
 
             // Transfer selected EIS -> IIS
+            var transfer_success = false;
             if (ws.selected_eis) |eis_id| {
                 if (ws.iis) |iis_id| {
                     const eis = self.storages.getPtr(eis_id) orelse return;
                     const iis = self.storages.getPtr(iis_id) orelse return;
-                    _ = eis.transferRecipeTo(iis, iis.slots);
+                    transfer_success = eis.transferRecipeTo(iis, iis.slots);
                 }
+            }
+
+            if (!transfer_success) {
+                // Transfer failed - EIS no longer has recipe or IIS can't accept
+                // Block workstation and release worker
+                log.warn("pickup transfer failed: worker={d}, workstation={d}", .{
+                    fmtGameId(worker.game_id),
+                    fmtGameId(ws.game_id),
+                });
+                ws.status = .Blocked;
+                ws.selected_eis = null;
+                ws.selected_eos = null;
+                self.releaseWorker(worker_id, ws_id);
+                return;
             }
 
             // Advance to next step
@@ -948,16 +975,14 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             const worker = self.workers.getPtr(worker_id) orelse return;
             const ws = self.workstations.getPtr(ws_id) orelse return;
 
-            // Select the EIS/EOS to use for this cycle
+            // Select the EIS to use for this cycle (EOS is selected at Store time)
             ws.selected_eis = self.findSuitableEis(ws);
-            ws.selected_eos = self.findSuitableEos(ws);
 
-            log.info("worker assigned to workstation: worker={d}, workstation={d}, step={s}, eis={?d}, eos={?d}", .{
+            log.info("worker assigned to workstation: worker={d}, workstation={d}, step={s}, eis={?d}", .{
                 fmtGameId(worker.game_id),
                 fmtGameId(ws.game_id),
                 @tagName(ws.current_step),
                 ws.selected_eis,
-                ws.selected_eos,
             });
 
             worker.state = .Working;
@@ -1013,6 +1038,21 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
                     }
                 },
                 .Store => {
+                    // Select EOS at Store time (not at assignment) so we get current availability
+                    ws.selected_eos = self.findSuitableEos(ws);
+
+                    if (ws.selected_eos == null) {
+                        // No EOS available - block workstation and release worker
+                        log.warn("no suitable EOS at store time: worker={d}, workstation={d}", .{
+                            fmtGameId(worker.game_id),
+                            fmtGameId(ws.game_id),
+                        });
+                        ws.status = .Blocked;
+                        ws.selected_eis = null;
+                        self.releaseWorker(worker_id, ws_id);
+                        return;
+                    }
+
                     if (self.on_store_started) |callback| {
                         if (ws.selected_eos) |eos_id| {
                             const eos = self.storages.get(eos_id) orelse return;
