@@ -421,6 +421,49 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
             return worker.state;
         }
 
+        /// Remove a worker from the engine.
+        /// If the worker is assigned to a workstation or transport, they are released first.
+        pub fn removeWorker(self: *Self, game_id: GameId) void {
+            const worker_id = self.worker_by_game_id.get(game_id) orelse return;
+            const worker = self.workers.getPtr(worker_id) orelse return;
+
+            // Release from workstation if assigned
+            if (worker.assigned_to) |ws_id| {
+                const ws = self.workstations.getPtr(ws_id) orelse return;
+                ws.assigned_worker = null;
+                ws.status = .Blocked;
+                ws.selected_eis = null;
+                ws.selected_eos = null;
+
+                if (self.on_worker_released) |callback| {
+                    callback(worker.game_id, ws.game_id);
+                }
+            }
+
+            // Release from transport if assigned
+            if (worker.assigned_transport) |transport_id| {
+                if (self.transports.getPtr(transport_id)) |transport| {
+                    transport.assigned_worker = null;
+                }
+            }
+
+            log.debug("worker removed: game_id={d}, worker_id={d}", .{ fmtGameId(game_id), worker_id });
+
+            // Remove from maps
+            _ = self.workers.remove(worker_id);
+            _ = self.worker_by_game_id.remove(game_id);
+        }
+
+        /// Get the workstation game ID that a worker is assigned to.
+        /// Returns null if worker is not assigned to any workstation.
+        pub fn getWorkerAssignment(self: *Self, worker_game_id: GameId) ?GameId {
+            const worker_id = self.worker_by_game_id.get(worker_game_id) orelse return null;
+            const worker = self.workers.get(worker_id) orelse return null;
+            const ws_id = worker.assigned_to orelse return null;
+            const ws = self.workstations.get(ws_id) orelse return null;
+            return ws.game_id;
+        }
+
         // ====================================================================
         // Workstation Management
         // ====================================================================
@@ -512,6 +555,49 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
         pub fn getCyclesCompleted(self: *Self, game_id: GameId) u32 {
             const ws_id = self.workstation_by_game_id.get(game_id) orelse return 0;
             return self.cycles.get(ws_id) orelse 0;
+        }
+
+        /// Remove a workstation from the engine.
+        /// If a worker is assigned, they are released first.
+        pub fn removeWorkstation(self: *Self, game_id: GameId) void {
+            const ws_id = self.workstation_by_game_id.get(game_id) orelse return;
+            const ws = self.workstations.getPtr(ws_id) orelse return;
+
+            // Release assigned worker if any
+            if (ws.assigned_worker) |worker_id| {
+                if (self.workers.getPtr(worker_id)) |worker| {
+                    if (self.on_worker_released) |callback| {
+                        callback(worker.game_id, ws.game_id);
+                    }
+                    worker.state = .Idle;
+                    worker.assigned_to = null;
+                }
+            }
+
+            log.debug("workstation removed: game_id={d}, workstation_id={d}", .{ fmtGameId(game_id), ws_id });
+
+            // Free allocated EIS/EOS arrays
+            if (ws.eis.len > 0) {
+                self.allocator.free(ws.eis);
+            }
+            if (ws.eos.len > 0) {
+                self.allocator.free(ws.eos);
+            }
+
+            // Remove from maps
+            _ = self.workstations.remove(ws_id);
+            _ = self.workstation_by_game_id.remove(game_id);
+            _ = self.cycles.remove(ws_id);
+        }
+
+        /// Get the worker game ID assigned to a workstation.
+        /// Returns null if no worker is assigned.
+        pub fn getAssignedWorker(self: *Self, workstation_game_id: GameId) ?GameId {
+            const ws_id = self.workstation_by_game_id.get(workstation_game_id) orelse return null;
+            const ws = self.workstations.get(ws_id) orelse return null;
+            const worker_id = ws.assigned_worker orelse return null;
+            const worker = self.workers.get(worker_id) orelse return null;
+            return worker.game_id;
         }
 
         // ====================================================================
