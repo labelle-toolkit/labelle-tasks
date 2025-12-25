@@ -104,9 +104,13 @@ pub fn build(b: *std.Build) void {
     // Farm game example - demonstrates full engine workflow
     const run_farm = addExample(b, lib_mod, target, optimize, "farm", "usage/engine/main.zig", "Run the farm game example");
 
+    // Hooks example - demonstrates hook-based event observation
+    const run_hooks = addExample(b, lib_mod, target, optimize, "hooks", "usage/hooks/main.zig", "Run the hooks example");
+
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_kitchensim.step);
     examples_step.dependOn(&run_components.step);
     examples_step.dependOn(&run_farm.step);
+    examples_step.dependOn(&run_hooks.step);
 }

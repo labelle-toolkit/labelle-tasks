@@ -1171,3 +1171,354 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
         }
     };
 }
+
+// ============================================================================
+// Engine with Hooks
+// ============================================================================
+
+const hooks = @import("hooks.zig");
+
+/// Task orchestration engine with hook support.
+///
+/// This is an extension of `Engine` that emits hooks for lifecycle events.
+/// Use this when you want to observe engine events without using callbacks,
+/// or when integrating with labelle-engine's hook system.
+///
+/// The `Dispatcher` parameter should be a type created by `hooks.HookDispatcher`
+/// or `hooks.MergeTasksHooks`.
+///
+/// Example:
+/// ```zig
+/// const MyHooks = struct {
+///     pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+///         const info = payload.pickup_started;
+///         std.log.info("Pickup started!", .{});
+///     }
+/// };
+///
+/// const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+/// var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+/// ```
+pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Dispatcher: type) type {
+    const BaseEngine = Engine(GameId, Item);
+
+    return struct {
+        const Self = @This();
+
+        // Re-export types from base engine
+        pub const Storage = BaseEngine.Storage;
+        pub const Slot = BaseEngine.Slot;
+        pub const StorageData = BaseEngine.StorageData;
+        pub const WorkerId = BaseEngine.WorkerId;
+        pub const WorkstationId = BaseEngine.WorkstationId;
+        pub const StorageId = BaseEngine.StorageId;
+        pub const TransportId = BaseEngine.TransportId;
+        pub const WorkerState = BaseEngine.WorkerState;
+        pub const WorkstationStatus = BaseEngine.WorkstationStatus;
+        pub const FindBestWorkerFn = BaseEngine.FindBestWorkerFn;
+        pub const AddWorkerOptions = BaseEngine.AddWorkerOptions;
+        pub const AddWorkstationOptions = BaseEngine.AddWorkstationOptions;
+        pub const AddStorageOptions = BaseEngine.AddStorageOptions;
+        pub const AddTransportOptions = BaseEngine.AddTransportOptions;
+
+        /// The underlying base engine.
+        base: BaseEngine,
+
+        // ====================================================================
+        // Initialization
+        // ====================================================================
+
+        pub fn init(allocator: Allocator) Self {
+            var base = BaseEngine.init(allocator);
+
+            // Wire up internal callbacks to emit hooks
+            base.on_pickup_started = emitPickupStarted;
+            base.on_process_started = emitProcessStarted;
+            base.on_process_complete = emitProcessComplete;
+            base.on_store_started = emitStoreStarted;
+            base.on_worker_released = emitWorkerReleased;
+            base.on_transport_started = emitTransportStarted;
+
+            return .{ .base = base };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.base.deinit();
+        }
+
+        // ====================================================================
+        // Callback Registration (for decision callbacks)
+        // ====================================================================
+
+        /// Set custom FindBestWorker callback.
+        /// This callback is still required for worker selection logic.
+        pub fn setFindBestWorker(self: *Self, callback: FindBestWorkerFn) void {
+            self.base.find_best_worker = callback;
+        }
+
+        // ====================================================================
+        // Worker Management
+        // ====================================================================
+
+        pub fn addWorker(self: *Self, game_id: GameId, options: AddWorkerOptions) WorkerId {
+            return self.base.addWorker(game_id, options);
+        }
+
+        pub fn removeWorker(self: *Self, game_id: GameId) void {
+            self.base.removeWorker(game_id);
+        }
+
+        pub fn getWorkerState(self: *Self, game_id: GameId) ?WorkerState {
+            return self.base.getWorkerState(game_id);
+        }
+
+        // ====================================================================
+        // Storage Management
+        // ====================================================================
+
+        pub fn addStorage(self: *Self, game_id: GameId, options: AddStorageOptions) StorageId {
+            return self.base.addStorage(game_id, options);
+        }
+
+        pub fn addToStorage(self: *Self, game_id: GameId, item: Item, quantity: u32) u32 {
+            return self.base.addToStorage(game_id, item, quantity);
+        }
+
+        pub fn removeFromStorage(self: *Self, game_id: GameId, item: Item, quantity: u32) u32 {
+            return self.base.removeFromStorage(game_id, item, quantity);
+        }
+
+        pub fn getStorageQuantity(self: *Self, game_id: GameId, item: Item) u32 {
+            return self.base.getStorageQuantity(game_id, item);
+        }
+
+        // ====================================================================
+        // Workstation Management
+        // ====================================================================
+
+        pub fn addWorkstation(self: *Self, game_id: GameId, options: AddWorkstationOptions) WorkstationId {
+            const ws_id = self.base.addWorkstation(game_id, options);
+
+            // Check if workstation is immediately ready
+            if (self.base.canWorkstationStart(ws_id)) {
+                const ws = self.base.workstations.get(ws_id) orelse return ws_id;
+                Dispatcher.emit(.{ .workstation_queued = .{
+                    .workstation_id = game_id,
+                    .priority = ws.priority,
+                } });
+            }
+
+            return ws_id;
+        }
+
+        pub fn removeWorkstation(self: *Self, game_id: GameId) void {
+            self.base.removeWorkstation(game_id);
+        }
+
+        pub fn getWorkstationStatus(self: *Self, game_id: GameId) ?WorkstationStatus {
+            return self.base.getWorkstationStatus(game_id);
+        }
+
+        // ====================================================================
+        // Transport Management
+        // ====================================================================
+
+        pub fn addTransport(self: *Self, options: AddTransportOptions) TransportId {
+            return self.base.addTransport(options);
+        }
+
+        // ====================================================================
+        // Event Notifications (Game -> Engine)
+        // ====================================================================
+
+        /// Notify that a worker completed their pickup step.
+        pub fn notifyPickupComplete(self: *Self, worker_game_id: GameId) void {
+            self.base.notifyPickupComplete(worker_game_id);
+        }
+
+        /// Notify that a worker completed their store step.
+        /// Emits: cycle_completed hook
+        pub fn notifyStoreComplete(self: *Self, worker_game_id: GameId) void {
+            // Get cycle count before
+            const worker_id = self.base.worker_by_game_id.get(worker_game_id) orelse return;
+            const worker = self.base.workers.get(worker_id) orelse return;
+            const ws_id = worker.assigned_to orelse return;
+            const old_cycles = self.base.cycles.get(ws_id) orelse 0;
+
+            self.base.notifyStoreComplete(worker_game_id);
+
+            // Check if cycle completed
+            const new_cycles = self.base.cycles.get(ws_id) orelse 0;
+            if (new_cycles > old_cycles) {
+                const ws = self.base.workstations.get(ws_id) orelse return;
+                Dispatcher.emit(.{ .cycle_completed = .{
+                    .workstation_id = ws.game_id,
+                    .worker_id = worker_game_id,
+                    .cycles_completed = new_cycles,
+                } });
+            }
+        }
+
+        /// Notify that a transport is complete.
+        /// Emits: transport_completed hook
+        pub fn notifyTransportComplete(self: *Self, worker_game_id: GameId) void {
+            // Get transport info before completion
+            const worker_id = self.base.worker_by_game_id.get(worker_game_id) orelse return;
+            const worker = self.base.workers.get(worker_id) orelse return;
+            const transport_id = worker.assigned_transport orelse return;
+            const transport = self.base.transports.get(transport_id) orelse return;
+
+            // Get storage game IDs
+            const from_storage = self.base.storages.get(transport.from_storage) orelse return;
+            const to_storage = self.base.storages.get(transport.to_storage) orelse return;
+
+            self.base.notifyTransportComplete(worker_game_id);
+
+            // Emit transport completed
+            Dispatcher.emit(.{ .transport_completed = .{
+                .worker_id = worker_game_id,
+                .from_storage_id = from_storage.game_id,
+                .to_storage_id = to_storage.game_id,
+                .item = transport.item,
+            } });
+        }
+
+        /// Notify that a worker has become idle.
+        /// Emits: worker_assigned, workstation_activated (if assigned)
+        pub fn notifyWorkerIdle(self: *Self, game_id: GameId) void {
+            // Get worker state before
+            const worker_id = self.base.worker_by_game_id.get(game_id) orelse return;
+            const worker_before = self.base.workers.get(worker_id) orelse return;
+            const was_assigned = worker_before.assigned_to != null or worker_before.assigned_transport != null;
+
+            self.base.notifyWorkerIdle(game_id);
+
+            // Check if worker got assigned to workstation
+            const worker_after = self.base.workers.get(worker_id) orelse return;
+            if (!was_assigned) {
+                if (worker_after.assigned_to) |ws_id| {
+                    const ws = self.base.workstations.get(ws_id) orelse return;
+                    Dispatcher.emit(.{ .worker_assigned = .{
+                        .worker_id = game_id,
+                        .workstation_id = ws.game_id,
+                    } });
+                    Dispatcher.emit(.{ .workstation_activated = .{
+                        .workstation_id = ws.game_id,
+                        .priority = ws.priority,
+                    } });
+                } else if (worker_after.assigned_transport != null) {
+                    Dispatcher.emit(.{ .worker_assigned = .{
+                        .worker_id = game_id,
+                        .workstation_id = null, // Transport assignment
+                    } });
+                }
+            }
+        }
+
+        /// Notify that a worker has become busy.
+        /// Emits: workstation_blocked
+        pub fn notifyWorkerBusy(self: *Self, game_id: GameId) void {
+            const ws_id = self.getWorkerAssignedWorkstation(game_id);
+            self.base.notifyWorkerBusy(game_id);
+            self.emitWorkstationBlockedIfAssigned(ws_id);
+        }
+
+        /// Worker abandons their current work.
+        /// Emits: workstation_blocked
+        pub fn abandonWork(self: *Self, game_id: GameId) void {
+            const ws_id = self.getWorkerAssignedWorkstation(game_id);
+            self.base.abandonWork(game_id);
+            self.emitWorkstationBlockedIfAssigned(ws_id);
+        }
+
+        /// Update process timers. Call once per game tick.
+        pub fn update(self: *Self) void {
+            self.base.update();
+        }
+
+        // ====================================================================
+        // Query Methods
+        // ====================================================================
+
+        pub fn getCyclesCompleted(self: *Self, game_id: GameId) u32 {
+            return self.base.getCyclesCompleted(game_id);
+        }
+
+        pub fn getWorkerAssignment(self: *Self, worker_game_id: GameId) ?GameId {
+            return self.base.getWorkerAssignment(worker_game_id);
+        }
+
+        pub fn getAssignedWorker(self: *Self, workstation_game_id: GameId) ?GameId {
+            return self.base.getAssignedWorker(workstation_game_id);
+        }
+
+        // ====================================================================
+        // Internal Helpers
+        // ====================================================================
+
+        fn getWorkerAssignedWorkstation(self: *Self, game_id: GameId) ?WorkstationId {
+            const worker_id = self.base.worker_by_game_id.get(game_id) orelse return null;
+            const worker = self.base.workers.get(worker_id) orelse return null;
+            return worker.assigned_to;
+        }
+
+        fn emitWorkstationBlockedIfAssigned(self: *Self, ws_id: ?WorkstationId) void {
+            const id = ws_id orelse return;
+            const ws = self.base.workstations.get(id) orelse return;
+            Dispatcher.emit(.{ .workstation_blocked = .{
+                .workstation_id = ws.game_id,
+                .priority = ws.priority,
+            } });
+        }
+
+        // ====================================================================
+        // Internal Callbacks (emit hooks)
+        // ====================================================================
+
+        fn emitPickupStarted(worker_game_id: GameId, workstation_game_id: GameId, eis_game_id: GameId) void {
+            Dispatcher.emit(.{ .pickup_started = .{
+                .worker_id = worker_game_id,
+                .workstation_id = workstation_game_id,
+                .eis_id = eis_game_id,
+            } });
+        }
+
+        fn emitProcessStarted(worker_game_id: GameId, workstation_game_id: GameId) void {
+            Dispatcher.emit(.{ .process_started = .{
+                .worker_id = worker_game_id,
+                .workstation_id = workstation_game_id,
+            } });
+        }
+
+        fn emitProcessComplete(worker_game_id: GameId, workstation_game_id: GameId) void {
+            Dispatcher.emit(.{ .process_completed = .{
+                .worker_id = worker_game_id,
+                .workstation_id = workstation_game_id,
+            } });
+        }
+
+        fn emitStoreStarted(worker_game_id: GameId, workstation_game_id: GameId, eos_game_id: GameId) void {
+            Dispatcher.emit(.{ .store_started = .{
+                .worker_id = worker_game_id,
+                .workstation_id = workstation_game_id,
+                .eos_id = eos_game_id,
+            } });
+        }
+
+        fn emitWorkerReleased(worker_game_id: GameId, workstation_game_id: GameId) void {
+            Dispatcher.emit(.{ .worker_released = .{
+                .worker_id = worker_game_id,
+                .workstation_id = workstation_game_id,
+            } });
+        }
+
+        fn emitTransportStarted(worker_game_id: GameId, from_game_id: GameId, to_game_id: GameId, item: Item) void {
+            Dispatcher.emit(.{ .transport_started = .{
+                .worker_id = worker_game_id,
+                .from_storage_id = from_game_id,
+                .to_storage_id = to_game_id,
+                .item = item,
+            } });
+        }
+    };
+}
