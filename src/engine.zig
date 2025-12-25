@@ -8,11 +8,23 @@
 //! - Automatic step derivation based on storage configuration
 //! - Process timing with configurable duration
 //! - Recurring transport tasks between storages
+//! - Hook-based event emission for lifecycle events
 //!
 //! Example:
 //! ```zig
+//! const tasks = @import("labelle_tasks");
 //! const Item = enum { Vegetable, Meat, Meal };
-//! var engine = Engine(u32, Item).init(allocator);
+//!
+//! // Define hook handlers (optional)
+//! const MyHooks = struct {
+//!     pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+//!         const info = payload.cycle_completed;
+//!         std.log.info("Cycle {d} completed!", .{info.cycles_completed});
+//!     }
+//! };
+//!
+//! const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+//! var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 //! defer engine.deinit();
 //!
 //! // Create storages (each storage holds one item type)
@@ -24,7 +36,6 @@
 //! _ = engine.addStorage(KITCHEN_EOS_ID, .{ .item = .Meal });
 //!
 //! // Create workstation referencing storages
-//! // All storage references are slices for flexible routing
 //! _ = engine.addWorkstation(KITCHEN_ID, .{
 //!     .eis = &.{ VEG_EIS_ID, MEAT_EIS_ID },
 //!     .iis = &.{ VEG_IIS_ID, MEAT_IIS_ID },  // Recipe: 1 veg + 1 meat
@@ -56,8 +67,9 @@ pub const StepType = enum {
     Store, // Transfer IOS -> EOS
 };
 
-/// Task orchestration engine parameterized by game's entity ID and Item types.
-pub fn Engine(comptime GameId: type, comptime Item: type) type {
+/// Internal base engine implementation.
+/// Use `Engine` which wraps this with hook support.
+fn BaseEngine(comptime GameId: type, comptime Item: type) type {
     return struct {
         const Self = @This();
 
@@ -1362,16 +1374,16 @@ pub fn Engine(comptime GameId: type, comptime Item: type) type {
 // Engine with Hooks
 // ============================================================================
 
-const hooks = @import("hooks.zig");
+const hooks_mod = @import("hooks.zig");
 
 /// Task orchestration engine with hook support.
 ///
-/// This is an extension of `Engine` that emits hooks for lifecycle events.
-/// Use this when you want to observe engine events without using callbacks,
-/// or when integrating with labelle-engine's hook system.
+/// The engine manages workers, workstations, storages, and transports,
+/// emitting hooks for lifecycle events. Use hooks to observe engine events
+/// without using callbacks, ideal for labelle-engine integration.
 ///
 /// The `Dispatcher` parameter should be a type created by `hooks.HookDispatcher`
-/// or `hooks.MergeTasksHooks`.
+/// or `hooks.MergeTasksHooks`. Use `hooks.NoOpDispatcher` if you don't need hooks.
 ///
 /// Example:
 /// ```zig
@@ -1383,37 +1395,37 @@ const hooks = @import("hooks.zig");
 /// };
 ///
 /// const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-/// var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+/// var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 /// ```
-pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Dispatcher: type) type {
-    const BaseEngine = Engine(GameId, Item);
+pub fn Engine(comptime GameId: type, comptime Item: type, comptime Dispatcher: type) type {
+    const Base = BaseEngine(GameId, Item);
 
     return struct {
         const Self = @This();
 
         // Re-export types from base engine
-        pub const Storage = BaseEngine.Storage;
-        pub const WorkerId = BaseEngine.WorkerId;
-        pub const WorkstationId = BaseEngine.WorkstationId;
-        pub const StorageId = BaseEngine.StorageId;
-        pub const TransportId = BaseEngine.TransportId;
-        pub const WorkerState = BaseEngine.WorkerState;
-        pub const WorkstationStatus = BaseEngine.WorkstationStatus;
-        pub const FindBestWorkerFn = BaseEngine.FindBestWorkerFn;
-        pub const AddWorkerOptions = BaseEngine.AddWorkerOptions;
-        pub const AddWorkstationOptions = BaseEngine.AddWorkstationOptions;
-        pub const AddStorageOptions = BaseEngine.AddStorageOptions;
-        pub const AddTransportOptions = BaseEngine.AddTransportOptions;
+        pub const Storage = Base.Storage;
+        pub const WorkerId = Base.WorkerId;
+        pub const WorkstationId = Base.WorkstationId;
+        pub const StorageId = Base.StorageId;
+        pub const TransportId = Base.TransportId;
+        pub const WorkerState = Base.WorkerState;
+        pub const WorkstationStatus = Base.WorkstationStatus;
+        pub const FindBestWorkerFn = Base.FindBestWorkerFn;
+        pub const AddWorkerOptions = Base.AddWorkerOptions;
+        pub const AddWorkstationOptions = Base.AddWorkstationOptions;
+        pub const AddStorageOptions = Base.AddStorageOptions;
+        pub const AddTransportOptions = Base.AddTransportOptions;
 
         /// The underlying base engine.
-        base: BaseEngine,
+        base: Base,
 
         // ====================================================================
         // Initialization
         // ====================================================================
 
         pub fn init(allocator: Allocator) Self {
-            var base = BaseEngine.init(allocator);
+            var base = Base.init(allocator);
 
             // Wire up internal callbacks to emit hooks
             base.on_pickup_started = emitPickupStarted;

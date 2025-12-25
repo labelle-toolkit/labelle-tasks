@@ -8,11 +8,8 @@ const Priority = tasks.Components.Priority;
 // Test Item type
 const Item = enum { Vegetable, Meat, Meal, Water };
 
-// Engine type alias
-const TestEngine = tasks.Engine(u32, Item);
-
 // ============================================================================
-// Test Callbacks
+// Test Hook Handlers
 // ============================================================================
 
 var g_pickup_started_calls: u32 = 0;
@@ -31,6 +28,37 @@ fn resetCallbacks() void {
     g_transport_started_calls = 0;
 }
 
+const TestHooks = struct {
+    pub fn pickup_started(_: tasks.hooks.HookPayload(u32, Item)) void {
+        g_pickup_started_calls += 1;
+    }
+
+    pub fn process_started(_: tasks.hooks.HookPayload(u32, Item)) void {
+        g_process_started_calls += 1;
+    }
+
+    pub fn process_completed(_: tasks.hooks.HookPayload(u32, Item)) void {
+        g_process_complete_calls += 1;
+    }
+
+    pub fn store_started(_: tasks.hooks.HookPayload(u32, Item)) void {
+        g_store_started_calls += 1;
+    }
+
+    pub fn worker_released(_: tasks.hooks.HookPayload(u32, Item)) void {
+        g_worker_released_calls += 1;
+    }
+
+    pub fn transport_started(_: tasks.hooks.HookPayload(u32, Item)) void {
+        g_transport_started_calls += 1;
+    }
+};
+
+const TestDispatcher = tasks.hooks.HookDispatcher(u32, Item, TestHooks);
+
+// Engine type alias
+const TestEngine = tasks.Engine(u32, Item, TestDispatcher);
+
 fn testFindBestWorker(
     workstation_id: ?u32,
     available_workers: []const u32,
@@ -40,68 +68,6 @@ fn testFindBestWorker(
         return available_workers[0];
     }
     return null;
-}
-
-fn testOnPickupStarted(
-    worker_id: u32,
-    workstation_id: u32,
-    eis_id: u32,
-) void {
-    _ = worker_id;
-    _ = workstation_id;
-    _ = eis_id;
-    g_pickup_started_calls += 1;
-}
-
-fn testOnProcessStarted(
-    worker_id: u32,
-    workstation_id: u32,
-) void {
-    _ = worker_id;
-    _ = workstation_id;
-    g_process_started_calls += 1;
-}
-
-fn testOnProcessComplete(
-    worker_id: u32,
-    workstation_id: u32,
-) void {
-    _ = worker_id;
-    _ = workstation_id;
-    g_process_complete_calls += 1;
-}
-
-fn testOnStoreStarted(
-    worker_id: u32,
-    workstation_id: u32,
-    eos_id: u32,
-) void {
-    _ = worker_id;
-    _ = workstation_id;
-    _ = eos_id;
-    g_store_started_calls += 1;
-}
-
-fn testOnWorkerReleased(
-    worker_id: u32,
-    workstation_id: u32,
-) void {
-    _ = worker_id;
-    _ = workstation_id;
-    g_worker_released_calls += 1;
-}
-
-fn testOnTransportStarted(
-    worker_id: u32,
-    from_id: u32,
-    to_id: u32,
-    item: Item,
-) void {
-    _ = worker_id;
-    _ = from_id;
-    _ = to_id;
-    _ = item;
-    g_transport_started_calls += 1;
 }
 
 // ============================================================================
@@ -269,7 +235,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnProcessStarted(testOnProcessStarted);
 
             // Create simple producer (no EIS/IIS)
             _ = eng.addStorage(12, .{ .item = .Water }); // IOS
@@ -298,11 +263,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnPickupStarted(testOnPickupStarted);
-            eng.setOnProcessStarted(testOnProcessStarted);
-            eng.setOnProcessComplete(testOnProcessComplete);
-            eng.setOnStoreStarted(testOnStoreStarted);
-            eng.setOnWorkerReleased(testOnWorkerReleased);
 
             // Create storages for kitchen (single ingredient recipe)
             _ = eng.addStorage(10, .{ .item = .Vegetable }); // EIS
@@ -374,7 +334,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnTransportStarted(testOnTransportStarted);
 
             // Source storage
             _ = eng.addStorage(10, .{ .item = .Meal });
@@ -417,7 +376,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnPickupStarted(testOnPickupStarted);
 
             // Create storages
             _ = eng.addStorage(10, .{ .item = .Vegetable }); // EIS
@@ -494,10 +452,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnProcessStarted(testOnProcessStarted);
-            eng.setOnProcessComplete(testOnProcessComplete);
-            eng.setOnStoreStarted(testOnStoreStarted);
-            eng.setOnWorkerReleased(testOnWorkerReleased);
 
             // Producer workstation (no EIS/IIS)
             _ = eng.addStorage(12, .{ .item = .Water }); // IOS
@@ -586,7 +540,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnTransportStarted(testOnTransportStarted);
 
             // Source with items
             _ = eng.addStorage(10, .{ .item = .Water });
@@ -617,8 +570,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnPickupStarted(testOnPickupStarted);
-            eng.setOnTransportStarted(testOnTransportStarted);
 
             // Garden (source)
             _ = eng.addStorage(1, .{ .item = .Vegetable });
@@ -675,7 +626,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnProcessStarted(testOnProcessStarted);
 
             // Two producer workstations
             _ = eng.addStorage(12, .{ .item = .Water }); // IOS 1
@@ -711,7 +661,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnProcessStarted(testOnProcessStarted);
 
             // Two producer workstations
             _ = eng.addStorage(12, .{ .item = .Water }); // IOS 1
@@ -756,7 +705,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnProcessStarted(testOnProcessStarted);
 
             // Producer with room for multiple items
             _ = eng.addStorage(12, .{ .item = .Water }); // IOS
@@ -797,7 +745,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnPickupStarted(testOnPickupStarted);
 
             // Two EIS storages for same item type
             _ = eng.addStorage(10, .{ .item = .Vegetable }); // EIS 1
@@ -873,7 +820,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnStoreStarted(testOnStoreStarted);
 
             // Two EOS storages
             _ = eng.addStorage(12, .{ .item = .Water }); // IOS
@@ -909,7 +855,6 @@ pub const @"Engine" = struct {
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
-            eng.setOnPickupStarted(testOnPickupStarted);
 
             // Setup kitchen
             _ = eng.addStorage(10, .{ .item = .Vegetable }); // EIS

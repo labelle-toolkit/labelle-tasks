@@ -4,7 +4,7 @@ Task orchestration engine for Zig games. Part of the [labelle-toolkit](https://g
 
 ## Overview
 
-A self-contained task orchestration engine with storage management for games. The engine handles task assignment, resource tracking, and workflow progression internally, while games provide callbacks for game-specific logic (pathfinding, animations, etc.).
+A self-contained task orchestration engine with storage management for games. The engine handles task assignment, resource tracking, and workflow progression internally, emitting hooks for game-specific logic (pathfinding, animations, etc.).
 
 ## Features
 
@@ -15,8 +15,7 @@ A self-contained task orchestration engine with storage management for games. Th
 - **Recurring transports** - Automatic item movement between storages
 - **Worker management** - Workers assigned to workstations and transports automatically
 - **Cycle tracking** - Track how many times a workstation has completed its workflow
-- **Callback-driven** - Game controls execution via callbacks, engine manages state
-- **Hook system** - Comptime-resolved event hooks compatible with labelle-engine
+- **Hook-based events** - Comptime-resolved event hooks with zero runtime overhead
 - **ECS Components** - Generic components for labelle-engine integration
 
 ## Storage Model
@@ -68,18 +67,31 @@ const tasks = @import("labelle_tasks");
 // Define your item types (can be enum or tagged union)
 const Item = enum { Vegetable, Meat, Water, Meal };
 
-// Create engine with game's entity ID and Item types
-var engine = tasks.Engine(u32, Item).init(allocator);
+// Define hook handlers (optional - only implement the hooks you need)
+const MyHooks = struct {
+    pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.pickup_started;
+        // Start worker movement to EIS location
+    }
+
+    pub fn process_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.process_started;
+        // Play cooking animation, etc.
+    }
+
+    pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.cycle_completed;
+        std.log.info("Cycle {d} completed!", .{info.cycles_completed});
+    }
+};
+
+// Create dispatcher and engine
+const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 defer engine.deinit();
 
-// Register callbacks
+// Set worker selection callback (required)
 engine.setFindBestWorker(findBestWorker);
-engine.setOnPickupStarted(onPickupStarted);
-engine.setOnProcessStarted(onProcessStarted);
-engine.setOnProcessComplete(onProcessComplete);
-engine.setOnStoreStarted(onStoreStarted);
-engine.setOnWorkerReleased(onWorkerReleased);
-engine.setOnTransportStarted(onTransportStarted);
 
 // Create storages (each storage holds ONE item type)
 _ = engine.addStorage(VEG_EIS_ID, .{ .item = .Vegetable });
@@ -119,10 +131,11 @@ engine.notifyWorkerBusy(CHEF_ID);         // Worker unavailable
 engine.abandonWork(CHEF_ID);              // Worker abandons task
 ```
 
-## Callbacks
+## findBestWorker Callback
+
+The only required callback selects which worker to assign:
 
 ```zig
-/// Find the best worker for a workstation or transport
 fn findBestWorker(
     workstation_id: ?u32,  // null for transport tasks
     available_workers: []const u32,
@@ -131,41 +144,12 @@ fn findBestWorker(
     if (available_workers.len > 0) return available_workers[0];
     return null;
 }
-
-/// Called when Pickup step starts - worker should move to EIS
-fn onPickupStarted(worker_id: u32, workstation_id: u32, eis_id: u32) void {
-    // Start worker movement to EIS location
-}
-
-/// Called when Process step starts - engine handles timing
-fn onProcessStarted(worker_id: u32, workstation_id: u32) void {
-    // Play cooking animation, etc.
-}
-
-/// Called when Process step completes
-fn onProcessComplete(worker_id: u32, workstation_id: u32) void {
-    // Play completion sound, etc.
-}
-
-/// Called when Store step starts - worker should move to EOS
-fn onStoreStarted(worker_id: u32, workstation_id: u32, eos_id: u32) void {
-    // Start worker movement to EOS location
-}
-
-/// Called when worker is released from workstation
-fn onWorkerReleased(worker_id: u32, workstation_id: u32) void {
-    // Update UI, etc.
-}
-
-/// Called when transport starts
-fn onTransportStarted(worker_id: u32, from_id: u32, to_id: u32, item: Item) void {
-    // Start worker movement from source to destination
-}
 ```
 
 ## Hook System
 
-In addition to callbacks, the engine provides a hook system with zero runtime overhead, compatible with labelle-engine:
+The engine emits hooks for lifecycle events with zero runtime overhead.
+Only implement the hooks you need - unhandled hooks are no-ops at comptime.
 
 ```zig
 const tasks = @import("labelle_tasks");
@@ -183,15 +167,14 @@ const MyHooks = struct {
     }
 };
 
-// Create dispatcher and engine with hooks
+// Create dispatcher and engine
 const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 defer engine.deinit();
 
-// Use the same API as the regular engine
 engine.setFindBestWorker(findBestWorker);
 _ = engine.addWorker(WORKER_ID, .{});
-// ... hooks are emitted automatically
+// Hooks are emitted automatically during engine operations
 ```
 
 ### Available Hooks
@@ -237,7 +220,7 @@ const AnalyticsHooks = struct {
 
 // Both handlers will be called
 const AllHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ GameHooks, AnalyticsHooks });
-var engine = tasks.EngineWithHooks(u32, Item, AllHooks).init(allocator);
+var engine = tasks.Engine(u32, Item, AllHooks).init(allocator);
 ```
 
 ## Producer Workstations

@@ -41,12 +41,12 @@ Workflow: `EIS → IIS (Pickup) → IOS (Process) → EOS (Store)`
 
 ### Key Design Principles
 
-1. **Generic over GameId and Item types** - `Engine(u32, MyItemEnum)`
+1. **Generic over GameId, Item, and Dispatcher types** - `Engine(u32, MyItemEnum, MyDispatcher)`
 2. **Storage-based workflow** - Items flow through defined storage paths
 3. **Single-item storages** - Each storage holds one item type
 4. **Multiple storage support** - All storage references are slices for flexible routing
 5. **Transport tasks** - Recurring item movement between any storages
-6. **Callback-driven** - Games control movement/animations
+6. **Hook-driven** - Games receive events via comptime hooks with zero overhead
 
 ### Core Types
 
@@ -59,28 +59,14 @@ Workflow: `EIS → IIS (Pickup) → IOS (Process) → EOS (Store)`
 ### Main Files
 
 - `src/root.zig` - Public API exports
-- `src/engine.zig` - Core Engine and EngineWithHooks implementation
+- `src/engine.zig` - Core Engine implementation with hook support
 - `src/storage.zig` - Storage management (item type definition only, quantities in engine)
 - `src/hooks.zig` - Hook system for event observation
 - `src/log.zig` - Scoped logging utilities
 
-### Callback System
-
-Seven callback types (all optional):
-
-```zig
-FindBestWorkerFn: fn(workstation_game_id: ?GameId, available_workers: []const GameId) ?GameId
-OnPickupStartedFn: fn(worker_id: GameId, workstation_id: GameId, eis_id: GameId) void
-OnProcessStartedFn: fn(worker_id: GameId, workstation_id: GameId) void
-OnProcessCompleteFn: fn(worker_id: GameId, workstation_id: GameId) void
-OnStoreStartedFn: fn(worker_id: GameId, workstation_id: GameId, eos_id: GameId) void
-OnWorkerReleasedFn: fn(worker_id: GameId, workstation_id: GameId) void
-OnTransportStartedFn: fn(worker_id: GameId, from_storage_id: GameId, to_storage_id: GameId, item: Item) void
-```
-
 ### Hook System
 
-In addition to callbacks, labelle-tasks provides a hook system compatible with labelle-engine.
+The engine uses a comptime hook system compatible with labelle-engine.
 
 **Hook Types:**
 - `pickup_started`, `process_started`, `process_completed`, `store_started` - Step lifecycle
@@ -99,15 +85,34 @@ const MyHooks = struct {
 };
 
 const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
+```
+
+### FindBestWorker Callback
+
+The only required callback selects which worker to assign:
+
+```zig
+engine.setFindBestWorker(fn(workstation_id: ?GameId, available_workers: []const GameId) ?GameId);
 ```
 
 ## Usage Pattern
 
 ```zig
 const Item = enum { Flour, Bread };
-var engine = tasks.Engine(u32, Item).init(allocator);
+
+// Define hooks (optional)
+const MyHooks = struct {
+    pub fn process_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        // Play animation, etc.
+    }
+};
+
+const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 defer engine.deinit();
+
+engine.setFindBestWorker(findBestWorker);
 
 // Create storages (each storage holds ONE item type)
 _ = engine.addStorage(EIS_ID, .{ .item = .Flour });

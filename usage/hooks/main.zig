@@ -2,7 +2,7 @@
 //!
 //! Demonstrates the labelle-tasks hook system with the storage-based API:
 //! - Defining hook handlers for task engine events
-//! - Using EngineWithHooks for hook-based integration
+//! - Using Engine with a HookDispatcher for hook-based integration
 //! - Observing pickup, process, store, and cycle events
 //!
 //! This example shows a simple bakery where a baker picks up flour,
@@ -114,7 +114,7 @@ const BakeryHooks = struct {
 // ============================================================================
 
 const Dispatcher = tasks.hooks.HookDispatcher(GameId, Item, BakeryHooks);
-const TaskEngine = tasks.EngineWithHooks(GameId, Item, Dispatcher);
+const TaskEngine = tasks.Engine(GameId, Item, Dispatcher);
 
 // ============================================================================
 // Callbacks (still needed for worker selection)

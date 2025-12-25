@@ -31,7 +31,7 @@
 //! const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyTaskHooks);
 //!
 //! // Create engine with dispatcher
-//! var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+//! var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 //! ```
 //!
 //! ## Integration with labelle-engine

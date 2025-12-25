@@ -22,7 +22,83 @@ const Item = enum {
     Flour,
 };
 
-const Engine = tasks.Engine(EntityId, Item);
+// Forward declarations for hook handlers
+const FarmHooks = struct {
+    pub fn pickup_started(payload: tasks.hooks.HookPayload(EntityId, Item)) void {
+        const info = payload.pickup_started;
+        const worker = g_workers.getPtr(info.worker_id) orelse return;
+        worker.location = .walking;
+        worker.timer = WALK_TIME;
+
+        log("{s} walking to pick up ingredients", .{workerName(info.worker_id)});
+    }
+
+    pub fn process_started(payload: tasks.hooks.HookPayload(EntityId, Item)) void {
+        const info = payload.process_started;
+        const worker = g_workers.getPtr(info.worker_id) orelse return;
+        worker.location = .mill;
+
+        if (info.workstation_id == Entities.mill) {
+            log("{s} started milling wheat", .{workerName(info.worker_id)});
+        }
+    }
+
+    pub fn process_completed(payload: tasks.hooks.HookPayload(EntityId, Item)) void {
+        const info = payload.process_completed;
+        if (info.workstation_id == Entities.mill) {
+            log("{s} finished milling - flour ready!", .{workerName(info.worker_id)});
+        }
+    }
+
+    pub fn store_started(payload: tasks.hooks.HookPayload(EntityId, Item)) void {
+        const info = payload.store_started;
+        const worker = g_workers.getPtr(info.worker_id) orelse return;
+        worker.location = .walking;
+        worker.timer = WALK_TIME;
+        worker.doing_store = true;
+
+        log("{s} carrying flour to storage", .{workerName(info.worker_id)});
+    }
+
+    pub fn transport_started(payload: tasks.hooks.HookPayload(EntityId, Item)) void {
+        const info = payload.transport_started;
+        const worker = g_workers.getPtr(info.worker_id) orelse return;
+        worker.location = .walking;
+        worker.timer = WALK_TIME;
+        worker.carrying = info.item;
+
+        const from = switch (info.from_storage_id) {
+            Entities.wheat_field => "wheat field",
+            Entities.carrot_field => "carrot field",
+            Entities.flour_storage => "flour storage",
+            else => "storage",
+        };
+        const to = switch (info.to_storage_id) {
+            Entities.barn_wheat, Entities.barn_carrot => "barn",
+            Entities.mill_input => "mill",
+            else => "storage",
+        };
+
+        log("{s} transporting {s} from {s} to {s}", .{
+            workerName(info.worker_id),
+            itemName(info.item),
+            from,
+            to,
+        });
+    }
+
+    pub fn worker_released(payload: tasks.hooks.HookPayload(EntityId, Item)) void {
+        const info = payload.worker_released;
+        const worker = g_workers.getPtr(info.worker_id) orelse return;
+        worker.location = .barn;
+        worker.carrying = null;
+
+        log("{s} returned to barn", .{workerName(info.worker_id)});
+    }
+};
+
+const Dispatcher = tasks.hooks.HookDispatcher(EntityId, Item, FarmHooks);
+const Engine = tasks.Engine(EntityId, Item, Dispatcher);
 
 // ============================================================================
 // Entity IDs
@@ -100,78 +176,12 @@ fn itemName(item: Item) []const u8 {
 }
 
 // ============================================================================
-// Engine Callbacks
+// Engine Callbacks (only findBestWorker needed)
 // ============================================================================
 
 fn findBestWorker(_: ?EntityId, available: []const EntityId) ?EntityId {
     // Return first available worker
     return if (available.len > 0) available[0] else null;
-}
-
-fn onPickupStarted(worker_id: EntityId, _: EntityId, _: EntityId) void {
-    const worker = g_workers.getPtr(worker_id) orelse return;
-    worker.location = .walking;
-    worker.timer = WALK_TIME;
-
-    log("{s} walking to pick up ingredients", .{workerName(worker_id)});
-}
-
-fn onProcessStarted(worker_id: EntityId, workstation_id: EntityId) void {
-    const worker = g_workers.getPtr(worker_id) orelse return;
-    worker.location = .mill;
-
-    if (workstation_id == Entities.mill) {
-        log("{s} started milling wheat", .{workerName(worker_id)});
-    }
-}
-
-fn onProcessComplete(worker_id: EntityId, workstation_id: EntityId) void {
-    if (workstation_id == Entities.mill) {
-        log("{s} finished milling - flour ready!", .{workerName(worker_id)});
-    }
-}
-
-fn onStoreStarted(worker_id: EntityId, _: EntityId, _: EntityId) void {
-    const worker = g_workers.getPtr(worker_id) orelse return;
-    worker.location = .walking;
-    worker.timer = WALK_TIME;
-    worker.doing_store = true;
-
-    log("{s} carrying flour to storage", .{workerName(worker_id)});
-}
-
-fn onTransportStarted(worker_id: EntityId, from_id: EntityId, to_id: EntityId, item: Item) void {
-    const worker = g_workers.getPtr(worker_id) orelse return;
-    worker.location = .walking;
-    worker.timer = WALK_TIME;
-    worker.carrying = item;
-
-    const from = switch (from_id) {
-        Entities.wheat_field => "wheat field",
-        Entities.carrot_field => "carrot field",
-        Entities.flour_storage => "flour storage",
-        else => "storage",
-    };
-    const to = switch (to_id) {
-        Entities.barn_wheat, Entities.barn_carrot => "barn",
-        Entities.mill_input => "mill",
-        else => "storage",
-    };
-
-    log("{s} transporting {s} from {s} to {s}", .{
-        workerName(worker_id),
-        itemName(item),
-        from,
-        to,
-    });
-}
-
-fn onWorkerReleased(worker_id: EntityId, _: EntityId) void {
-    const worker = g_workers.getPtr(worker_id) orelse return;
-    worker.location = .barn;
-    worker.carrying = null;
-
-    log("{s} returned to barn", .{workerName(worker_id)});
 }
 
 // ============================================================================
@@ -242,14 +252,8 @@ pub fn main() !void {
     initGame(allocator, &engine);
     defer deinitGame();
 
-    // Set callbacks
+    // Set worker selection callback
     engine.setFindBestWorker(findBestWorker);
-    engine.setOnPickupStarted(onPickupStarted);
-    engine.setOnProcessStarted(onProcessStarted);
-    engine.setOnProcessComplete(onProcessComplete);
-    engine.setOnStoreStarted(onStoreStarted);
-    engine.setOnTransportStarted(onTransportStarted);
-    engine.setOnWorkerReleased(onWorkerReleased);
 
     // ========================================================================
     // Setup World
