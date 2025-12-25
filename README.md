@@ -16,6 +16,7 @@ A self-contained task orchestration engine with storage management for games. Th
 - **Worker management** - Workers assigned to workstations and transports automatically
 - **Cycle tracking** - Track how many times a workstation has completed its workflow
 - **Callback-driven** - Game controls execution via callbacks, engine manages state
+- **Hook system** - Comptime-resolved event hooks compatible with labelle-engine
 - **ECS Components** - Generic components for labelle-engine integration
 
 ## Storage Model
@@ -174,6 +175,83 @@ fn onTransportStarted(worker_id: u32, from_id: u32, to_id: u32, item: Item) void
 }
 ```
 
+## Hook System
+
+In addition to callbacks, the engine provides a hook system with zero runtime overhead, compatible with labelle-engine:
+
+```zig
+const tasks = @import("labelle_tasks");
+
+// Define hook handlers
+const MyHooks = struct {
+    pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.pickup_started;
+        std.log.info("Worker {d} picking from EIS {d}", .{ info.worker_id, info.eis_id });
+    }
+
+    pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.cycle_completed;
+        std.log.info("Cycle {d} completed!", .{ info.cycles_completed });
+    }
+};
+
+// Create dispatcher and engine with hooks
+const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+defer engine.deinit();
+
+// Use the same API as the regular engine
+engine.setFindBestWorker(findBestWorker);
+_ = engine.addWorker(WORKER_ID, .{});
+// ... hooks are emitted automatically
+```
+
+### Available Hooks
+
+**Step lifecycle:**
+- `pickup_started` - Worker begins pickup from EIS
+- `process_started` - Processing begins at workstation
+- `process_completed` - Processing finished
+- `store_started` - Worker begins storing to EOS
+
+**Worker lifecycle:**
+- `worker_assigned` - Worker assigned to workstation or transport
+- `worker_released` - Worker released from workstation
+
+**Workstation lifecycle:**
+- `workstation_blocked` - Workstation blocked (no inputs or outputs full)
+- `workstation_queued` - Workstation ready, waiting for worker
+- `workstation_activated` - Worker assigned, work starting
+
+**Transport lifecycle:**
+- `transport_started` - Transport task began
+- `transport_completed` - Transport task finished
+
+**Cycle lifecycle:**
+- `cycle_completed` - Workstation completed a full cycle
+
+### Merging Hook Handlers
+
+Combine multiple hook handler structs:
+
+```zig
+const GameHooks = struct {
+    pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        // Game logic
+    }
+};
+
+const AnalyticsHooks = struct {
+    pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        // Analytics tracking
+    }
+};
+
+// Both handlers will be called
+const AllHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ GameHooks, AnalyticsHooks });
+var engine = tasks.EngineWithHooks(u32, Item, AllHooks).init(allocator);
+```
+
 ## Producer Workstations
 
 Workstations without EIS/IIS produce items from nothing (e.g., water condenser, mine):
@@ -286,6 +364,9 @@ zig build components
 
 # Run the farm game example
 zig build farm
+
+# Run the hooks example
+zig build hooks
 
 # Run all examples
 zig build examples
