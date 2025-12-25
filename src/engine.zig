@@ -1292,6 +1292,10 @@ pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Disp
             return self.base.getStorageQuantity(game_id, item);
         }
 
+        pub fn getStorage(self: *Self, game_id: GameId) ?*Storage {
+            return self.base.getStorage(game_id);
+        }
+
         // ====================================================================
         // Workstation Management
         // ====================================================================
@@ -1337,9 +1341,9 @@ pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Disp
         }
 
         /// Notify that a worker completed their store step.
-        /// Emits: cycle_completed hook
+        /// Emits: cycle_completed, worker_assigned (if re-assigned), workstation_activated hooks
         pub fn notifyStoreComplete(self: *Self, worker_game_id: GameId) void {
-            // Get cycle count before
+            // Get state before
             const worker_id = self.base.worker_by_game_id.get(worker_game_id) orelse return;
             const worker = self.base.workers.get(worker_id) orelse return;
             const ws_id = worker.assigned_to orelse return;
@@ -1357,10 +1361,13 @@ pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Disp
                     .cycles_completed = new_cycles,
                 } });
             }
+
+            // Check if worker was re-assigned to new work
+            self.emitWorkerAssignedIfChanged(worker_id, worker_game_id);
         }
 
         /// Notify that a transport is complete.
-        /// Emits: transport_completed hook
+        /// Emits: transport_completed, worker_assigned (if re-assigned) hooks
         pub fn notifyTransportComplete(self: *Self, worker_game_id: GameId) void {
             // Get transport info before completion
             const worker_id = self.base.worker_by_game_id.get(worker_game_id) orelse return;
@@ -1381,6 +1388,9 @@ pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Disp
                 .to_storage_id = to_storage.game_id,
                 .item = transport.item,
             } });
+
+            // Check if worker was re-assigned to new work
+            self.emitWorkerAssignedIfChanged(worker_id, worker_game_id);
         }
 
         /// Notify that a worker has become idle.
@@ -1469,6 +1479,30 @@ pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Disp
                 .workstation_id = ws.game_id,
                 .priority = ws.priority,
             } });
+        }
+
+        /// Check if worker was re-assigned after completing a task and emit worker_assigned hook.
+        fn emitWorkerAssignedIfChanged(self: *Self, worker_id: WorkerId, worker_game_id: GameId) void {
+            const worker = self.base.workers.get(worker_id) orelse return;
+
+            // Check if worker was re-assigned to a workstation
+            if (worker.assigned_to) |ws_id| {
+                const ws = self.base.workstations.get(ws_id) orelse return;
+                Dispatcher.emit(.{ .worker_assigned = .{
+                    .worker_id = worker_game_id,
+                    .workstation_id = ws.game_id,
+                } });
+                Dispatcher.emit(.{ .workstation_activated = .{
+                    .workstation_id = ws.game_id,
+                    .priority = ws.priority,
+                } });
+            } else if (worker.assigned_transport != null) {
+                // Re-assigned to a transport task
+                Dispatcher.emit(.{ .worker_assigned = .{
+                    .worker_id = worker_game_id,
+                    .workstation_id = null, // Transport assignment
+                } });
+            }
         }
 
         // ====================================================================

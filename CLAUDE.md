@@ -66,12 +66,12 @@ Six callback types (all optional):
 
 ```zig
 FindBestWorkerFn: fn(workstation_game_id: ?GameId, available_workers: []const GameId) ?GameId
-OnPickupStartedFn: fn(worker_id, workstation_id, eis_id) void
-OnProcessStartedFn: fn(worker_id, workstation_id) void
-OnProcessCompleteFn: fn(worker_id, workstation_id) void
-OnStoreStartedFn: fn(worker_id, workstation_id, eos_id) void
-OnWorkerReleasedFn: fn(worker_id, workstation_id) void
-OnTransportStartedFn: fn(worker_id, from_storage_id, to_storage_id, item) void
+OnPickupStartedFn: fn(worker_id: GameId, workstation_id: GameId, eis_id: GameId) void
+OnProcessStartedFn: fn(worker_id: GameId, workstation_id: GameId) void
+OnProcessCompleteFn: fn(worker_id: GameId, workstation_id: GameId) void
+OnStoreStartedFn: fn(worker_id: GameId, workstation_id: GameId, eos_id: GameId) void
+OnWorkerReleasedFn: fn(worker_id: GameId, workstation_id: GameId) void
+OnTransportStartedFn: fn(worker_id: GameId, from_storage_id: GameId, to_storage_id: GameId, item: Item) void
 ```
 
 ### Hook System
