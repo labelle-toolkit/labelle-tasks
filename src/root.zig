@@ -5,7 +5,7 @@
 //! - Providing callbacks for game-specific logic (pathfinding, animations)
 //! - Notifying the engine of game events (step complete, worker idle)
 //!
-//! Example:
+//! Example (callback-based):
 //! ```zig
 //! var engine = tasks.Engine(u32).init(allocator);
 //! defer engine.deinit();
@@ -22,6 +22,19 @@
 //! engine.notifyResourcesAvailable(stove_id);
 //! engine.notifyStepComplete(chef_id);
 //! ```
+//!
+//! Example (hook-based, for labelle-engine integration):
+//! ```zig
+//! const MyTaskHooks = struct {
+//!     pub fn step_started(payload: tasks.hooks.HookPayload(u32)) void {
+//!         const info = payload.step_started;
+//!         std.log.info("Step started!", .{});
+//!     }
+//! };
+//!
+//! const Dispatcher = tasks.hooks.HookDispatcher(u32, MyTaskHooks);
+//! var engine = tasks.EngineWithHooks(u32, Dispatcher).init(allocator);
+//! ```
 
 const std = @import("std");
 
@@ -29,7 +42,15 @@ const std = @import("std");
 // Engine API
 // ============================================================================
 
-pub const Engine = @import("engine.zig").Engine;
+const engine_mod = @import("engine.zig");
+pub const Engine = engine_mod.Engine;
+pub const EngineWithHooks = engine_mod.EngineWithHooks;
+
+// ============================================================================
+// Hook System
+// ============================================================================
+
+pub const hooks = @import("hooks.zig");
 
 // ============================================================================
 // Common Types

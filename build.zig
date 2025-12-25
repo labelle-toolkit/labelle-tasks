@@ -141,6 +141,24 @@ pub fn build(b: *std.Build) void {
     const multiworker_step = b.step("multiworker", "Run the multi-worker example");
     multiworker_step.dependOn(&run_multiworker.step);
 
+    // Hooks example - demonstrates hook-based integration
+    const hooks_mod = b.createModule(.{
+        .root_source_file = b.path("usage/hooks/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hooks_mod.addImport("labelle_tasks", lib_mod);
+
+    const hooks_example = b.addExecutable(.{
+        .name = "hooks_example",
+        .root_module = hooks_mod,
+    });
+    b.installArtifact(hooks_example);
+
+    const run_hooks = b.addRunArtifact(hooks_example);
+    const hooks_step = b.step("hooks", "Run the hooks example");
+    hooks_step.dependOn(&run_hooks.step);
+
     // Run all examples step
     const examples_step = b.step("examples", "Run all usage examples");
     examples_step.dependOn(&run_simple.step);
@@ -148,4 +166,5 @@ pub fn build(b: *std.Build) void {
     examples_step.dependOn(&run_abandonment.step);
     examples_step.dependOn(&run_multicycle.step);
     examples_step.dependOn(&run_multiworker.step);
+    examples_step.dependOn(&run_hooks.step);
 }
