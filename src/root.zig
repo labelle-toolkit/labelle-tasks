@@ -53,7 +53,15 @@ const std = @import("std");
 // Engine API
 // ============================================================================
 
-pub const Engine = @import("engine.zig").Engine;
+const engine_mod = @import("engine.zig");
+pub const Engine = engine_mod.Engine;
+pub const EngineWithHooks = engine_mod.EngineWithHooks;
+
+// ============================================================================
+// Hook System
+// ============================================================================
+
+pub const hooks = @import("hooks.zig");
 
 // ============================================================================
 // Logging
