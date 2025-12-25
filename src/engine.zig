@@ -819,41 +819,34 @@ pub fn EngineWithHooks(comptime GameId: type, comptime Dispatcher: type) type {
         /// Notify that a worker has become busy.
         /// Emits: workstation_blocked (via worker_released callback)
         pub fn notifyWorkerBusy(self: *Self, game_id: GameId) void {
-            // Get workstation before
-            const worker_id = self.base.worker_by_game_id.get(game_id) orelse return;
-            const worker = self.base.workers.get(worker_id) orelse return;
-            const ws_id = worker.assigned_to;
-
+            const ws_id = self.getWorkerAssignedWorkstation(game_id);
             self.base.notifyWorkerBusy(game_id);
-
-            // Emit workstation blocked if was assigned
-            if (ws_id) |id| {
-                const ws = self.base.workstations.get(id) orelse return;
-                Dispatcher.emit(.{ .workstation_blocked = .{
-                    .workstation_id = ws.game_id,
-                    .priority = ws.priority,
-                } });
-            }
+            self.emitWorkstationBlockedIfAssigned(ws_id);
         }
 
         /// Worker abandons their current work.
         /// Emits: workstation_blocked
         pub fn abandonWork(self: *Self, game_id: GameId) void {
-            // Get workstation before
-            const worker_id = self.base.worker_by_game_id.get(game_id) orelse return;
-            const worker = self.base.workers.get(worker_id) orelse return;
-            const ws_id = worker.assigned_to;
-
+            const ws_id = self.getWorkerAssignedWorkstation(game_id);
             self.base.abandonWork(game_id);
+            self.emitWorkstationBlockedIfAssigned(ws_id);
+        }
 
-            // Emit workstation blocked if was assigned
-            if (ws_id) |id| {
-                const ws = self.base.workstations.get(id) orelse return;
-                Dispatcher.emit(.{ .workstation_blocked = .{
-                    .workstation_id = ws.game_id,
-                    .priority = ws.priority,
-                } });
-            }
+        /// Helper: Get the workstation a worker is assigned to (internal ID).
+        fn getWorkerAssignedWorkstation(self: *Self, game_id: GameId) ?BaseEngine.WorkstationId {
+            const worker_id = self.base.worker_by_game_id.get(game_id) orelse return null;
+            const worker = self.base.workers.get(worker_id) orelse return null;
+            return worker.assigned_to;
+        }
+
+        /// Helper: Emit workstation_blocked hook if workstation ID is valid.
+        fn emitWorkstationBlockedIfAssigned(self: *Self, ws_id: ?BaseEngine.WorkstationId) void {
+            const id = ws_id orelse return;
+            const ws = self.base.workstations.get(id) orelse return;
+            Dispatcher.emit(.{ .workstation_blocked = .{
+                .workstation_id = ws.game_id,
+                .priority = ws.priority,
+            } });
         }
 
         // ====================================================================

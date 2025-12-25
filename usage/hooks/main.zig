@@ -290,11 +290,11 @@ pub fn main() !void {
                             num_to_complete += 1;
                             _ = g_work_timers.remove(worker);
                         } else {
-                            g_work_timers.put(worker, remaining - 1) catch {};
+                            try g_work_timers.put(worker, remaining - 1);
                         }
                     } else {
                         // Start timer
-                        g_work_timers.put(worker, 1) catch {};
+                        try g_work_timers.put(worker, 1);
                     }
                 }
             }
