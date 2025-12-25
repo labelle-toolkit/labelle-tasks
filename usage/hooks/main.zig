@@ -171,35 +171,27 @@ pub fn main() !void {
     std.debug.print("- Flour storage (EIS) with 5 flour\n", .{});
     std.debug.print("- Dough bowl (IIS) for 1 flour -> 1 bread\n", .{});
     std.debug.print("- Oven tray (IOS) for 1 bread output\n", .{});
-    std.debug.print("- Bread basket (EOS) capacity 3\n", .{});
+    std.debug.print("- Bread basket (EOS)\n", .{});
     std.debug.print("- Process time: 3 ticks\n\n", .{});
 
     // EIS: External Input Storage (flour supply)
-    _ = engine.addStorage(FLOUR_STORAGE, .{
-        .slots = &.{.{ .item = .Flour, .capacity = 10 }},
-    });
+    _ = engine.addStorage(FLOUR_STORAGE, .{ .item = .Flour });
     _ = engine.addToStorage(FLOUR_STORAGE, .Flour, 5);
 
-    // IIS: Internal Input Storage (recipe)
-    _ = engine.addStorage(DOUGH_BOWL, .{
-        .slots = &.{.{ .item = .Flour, .capacity = 1 }},
-    });
+    // IIS: Internal Input Storage (recipe - 1 flour per cycle)
+    _ = engine.addStorage(DOUGH_BOWL, .{ .item = .Flour });
 
-    // IOS: Internal Output Storage (output)
-    _ = engine.addStorage(OVEN_TRAY, .{
-        .slots = &.{.{ .item = .Bread, .capacity = 1 }},
-    });
+    // IOS: Internal Output Storage (produces 1 bread per cycle)
+    _ = engine.addStorage(OVEN_TRAY, .{ .item = .Bread });
 
     // EOS: External Output Storage (bread basket)
-    _ = engine.addStorage(BREAD_BASKET, .{
-        .slots = &.{.{ .item = .Bread, .capacity = 3 }},
-    });
+    _ = engine.addStorage(BREAD_BASKET, .{ .item = .Bread });
 
     // Workstation
     _ = engine.addWorkstation(BAKERY, .{
         .eis = &.{FLOUR_STORAGE},
-        .iis = DOUGH_BOWL,
-        .ios = OVEN_TRAY,
+        .iis = &.{DOUGH_BOWL},
+        .ios = &.{OVEN_TRAY},
         .eos = &.{BREAD_BASKET},
         .process_duration = 3,
         .priority = .High,

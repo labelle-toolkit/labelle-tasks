@@ -26,14 +26,6 @@ const COOK_TIME = COOK_TIME_SECS * TICKS_PER_SECOND;
 const CONDENSE_TIME = CONDENSE_TIME_SECS * TICKS_PER_SECOND;
 const INTERRUPT_DURATION = INTERRUPT_DURATION_SECS * TICKS_PER_SECOND;
 
-// Recipe requirements
-const VEGETABLES_NEEDED = 2;
-const MEAT_NEEDED = 1;
-const WATER_NEEDED = 1;
-
-// Storage limits
-const EOS_MAX_MEALS = 4;
-
 // Entity IDs
 const CHEF_ID: u32 = 1;
 const KITCHEN_WORKSTATION_ID: u32 = 12;
@@ -114,11 +106,8 @@ const GameState = struct {
         const eis_veg = self.engine.getStorageQuantity(KITCHEN_EIS_ID, .Vegetable);
         const eis_meat = self.engine.getStorageQuantity(KITCHEN_EIS_ID, .Meat);
         const eis_water = self.engine.getStorageQuantity(KITCHEN_EIS_ID, .Water);
-        const eos_meals = self.engine.getStorageQuantity(KITCHEN_EOS_ID, .Meal);
-        return eis_veg >= VEGETABLES_NEEDED and
-            eis_meat >= MEAT_NEEDED and
-            eis_water >= WATER_NEEDED and
-            eos_meals < EOS_MAX_MEALS;
+        // Recipe needs 1 of each ingredient
+        return eis_veg >= 1 and eis_meat >= 1 and eis_water >= 1;
     }
 
     fn ticksToSecs(ticks: u32) f32 {
@@ -468,7 +457,7 @@ fn render(state: *GameState) void {
         \\[Kitchen IIS]  Veg: {d}  Meat: {d}  Water: {d}
         \\[Workstation]  {s}
         \\[Kitchen IOS]  Meals: {d}
-        \\[Kitchen EOS]  Meals: {d}/{d}
+        \\[Kitchen EOS]  Meals: {d}
         \\
         \\Chef: {s}
         \\
@@ -491,7 +480,6 @@ fn render(state: *GameState) void {
         getWorkstationStatus(state),
         ios_meals,
         eos_meals,
-        EOS_MAX_MEALS,
         getChefStatus(state),
         state.last_event,
     });
@@ -507,15 +495,12 @@ fn getCondenserStatus(state: *GameState) []const u8 {
 }
 
 fn getWorkstationStatus(state: *GameState) []const u8 {
-    const eos_meals = state.engine.getStorageQuantity(KITCHEN_EOS_ID, .Meal);
     const status = state.engine.getWorkstationStatus(KITCHEN_WORKSTATION_ID);
     return switch (status orelse .Blocked) {
-        .Blocked => if (eos_meals >= EOS_MAX_MEALS)
-            "Blocked (EOS full)"
-        else if (state.canStartCooking())
+        .Blocked => if (state.canStartCooking())
             "Blocked (waiting for chef)"
         else
-            "Blocked (need 2v + 1m + 1w)",
+            "Blocked (need 1v + 1m + 1w)",
         .Queued => "Queued (waiting for chef)",
         .Active => "Cooking...",
     };
@@ -622,43 +607,43 @@ pub fn main() !void {
 
     // Create storages
     // Garden produces vegetables (external source)
-    const garden_slots = [_]GameEngine.Slot{.{ .item = .Vegetable, .capacity = 10 }};
+    const garden_slots = [_]GameEngine.Slot{.{ .item = .Vegetable }};
     _ = engine.addStorage(GARDEN_STORAGE_ID, .{ .slots = &garden_slots });
 
     // Butcher produces meat (external source)
-    const butcher_slots = [_]GameEngine.Slot{.{ .item = .Meat, .capacity = 10 }};
+    const butcher_slots = [_]GameEngine.Slot{.{ .item = .Meat }};
     _ = engine.addStorage(BUTCHER_STORAGE_ID, .{ .slots = &butcher_slots });
 
     // Condenser IOS - holds produced water (1 per cycle)
-    const condenser_ios_slots = [_]GameEngine.Slot{.{ .item = .Water, .capacity = 1 }};
+    const condenser_ios_slots = [_]GameEngine.Slot{.{ .item = .Water }};
     _ = engine.addStorage(CONDENSER_IOS_ID, .{ .slots = &condenser_ios_slots });
 
     // Condenser EOS - output buffer for produced water
-    const condenser_eos_slots = [_]GameEngine.Slot{.{ .item = .Water, .capacity = 5 }};
+    const condenser_eos_slots = [_]GameEngine.Slot{.{ .item = .Water }};
     _ = engine.addStorage(CONDENSER_EOS_ID, .{ .slots = &condenser_eos_slots });
 
     // Kitchen EIS - receives ingredients from garden/butcher/condenser
     const eis_slots = [_]GameEngine.Slot{
-        .{ .item = .Vegetable, .capacity = 10 },
-        .{ .item = .Meat, .capacity = 10 },
-        .{ .item = .Water, .capacity = 10 },
+        .{ .item = .Vegetable },
+        .{ .item = .Meat },
+        .{ .item = .Water },
     };
     _ = engine.addStorage(KITCHEN_EIS_ID, .{ .slots = &eis_slots });
 
-    // Kitchen IIS - holds recipe requirements (consumed per cycle)
+    // Kitchen IIS - holds recipe requirements (1 of each per cycle)
     const iis_slots = [_]GameEngine.Slot{
-        .{ .item = .Vegetable, .capacity = VEGETABLES_NEEDED },
-        .{ .item = .Meat, .capacity = MEAT_NEEDED },
-        .{ .item = .Water, .capacity = WATER_NEEDED },
+        .{ .item = .Vegetable },
+        .{ .item = .Meat },
+        .{ .item = .Water },
     };
     _ = engine.addStorage(KITCHEN_IIS_ID, .{ .slots = &iis_slots });
 
-    // Kitchen IOS - holds produced meal
-    const ios_slots = [_]GameEngine.Slot{.{ .item = .Meal, .capacity = 1 }};
+    // Kitchen IOS - holds produced meal (1 per cycle)
+    const ios_slots = [_]GameEngine.Slot{.{ .item = .Meal }};
     _ = engine.addStorage(KITCHEN_IOS_ID, .{ .slots = &ios_slots });
 
     // Kitchen EOS - output buffer for finished meals
-    const eos_slots = [_]GameEngine.Slot{.{ .item = .Meal, .capacity = EOS_MAX_MEALS }};
+    const eos_slots = [_]GameEngine.Slot{.{ .item = .Meal }};
     _ = engine.addStorage(KITCHEN_EOS_ID, .{ .slots = &eos_slots });
 
     // Add transports for moving ingredients from external sources to kitchen

@@ -13,9 +13,9 @@
 //! var engine = tasks.Engine(u32, Item).init(allocator);
 //! defer engine.deinit();
 //!
-//! // Create storages
+//! // Create storages (each slot defines an item type, no capacity limit)
 //! _ = engine.addStorage(EIS_ID, .{ .slots = &.{
-//!     .{ .item = .Vegetable, .capacity = 10 },
+//!     .{ .item = .Vegetable },
 //! }});
 //!
 //! // Create workstation referencing storages

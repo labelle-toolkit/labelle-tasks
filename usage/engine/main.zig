@@ -36,7 +36,8 @@ const Entities = struct {
     // Storages
     const wheat_field: EntityId = 10;
     const carrot_field: EntityId = 11;
-    const barn: EntityId = 20;
+    const barn_wheat: EntityId = 20;
+    const barn_carrot: EntityId = 21;
     const mill_input: EntityId = 30;
     const mill_output: EntityId = 31;
     const flour_storage: EntityId = 40;
@@ -152,7 +153,7 @@ fn onTransportStarted(worker_id: EntityId, from_id: EntityId, to_id: EntityId, i
         else => "storage",
     };
     const to = switch (to_id) {
-        Entities.barn => "barn",
+        Entities.barn_wheat, Entities.barn_carrot => "barn",
         Entities.mill_input => "mill",
         else => "storage",
     };
@@ -261,48 +262,37 @@ pub fn main() !void {
     _ = engine.addWorker(Entities.farmer_bob, .{});
     std.debug.print("  Workers: Alice, Bob\n", .{});
 
-    // Fields (external sources)
-    const wheat_slots = [_]Engine.Slot{.{ .item = .Wheat, .capacity = 20 }};
-    _ = engine.addStorage(Entities.wheat_field, .{ .slots = &wheat_slots });
-
-    const carrot_slots = [_]Engine.Slot{.{ .item = .Carrot, .capacity = 20 }};
-    _ = engine.addStorage(Entities.carrot_field, .{ .slots = &carrot_slots });
+    // Fields (external sources) - each storage holds one item type
+    _ = engine.addStorage(Entities.wheat_field, .{ .item = .Wheat });
+    _ = engine.addStorage(Entities.carrot_field, .{ .item = .Carrot });
     std.debug.print("  Fields: Wheat, Carrot\n", .{});
 
-    // Barn (stores raw crops)
-    const barn_slots = [_]Engine.Slot{
-        .{ .item = .Wheat, .capacity = 10 },
-        .{ .item = .Carrot, .capacity = 10 },
-    };
-    _ = engine.addStorage(Entities.barn, .{ .slots = &barn_slots });
+    // Barn (stores raw crops) - separate storages for each item type
+    _ = engine.addStorage(Entities.barn_wheat, .{ .item = .Wheat });
+    _ = engine.addStorage(Entities.barn_carrot, .{ .item = .Carrot });
     std.debug.print("  Barn: holds wheat and carrots\n", .{});
 
-    // Mill storages
-    const mill_input_slots = [_]Engine.Slot{.{ .item = .Wheat, .capacity = 2 }};
-    _ = engine.addStorage(Entities.mill_input, .{ .slots = &mill_input_slots });
-
-    const mill_output_slots = [_]Engine.Slot{.{ .item = .Flour, .capacity = 1 }};
-    _ = engine.addStorage(Entities.mill_output, .{ .slots = &mill_output_slots });
-
-    const flour_slots = [_]Engine.Slot{.{ .item = .Flour, .capacity = 10 }};
-    _ = engine.addStorage(Entities.flour_storage, .{ .slots = &flour_slots });
-    std.debug.print("  Mill: 2 wheat -> 1 flour\n", .{});
+    // Mill storages (IIS needs 1 wheat, IOS produces 1 flour)
+    _ = engine.addStorage(Entities.mill_input, .{ .item = .Wheat });
+    _ = engine.addStorage(Entities.mill_output, .{ .item = .Flour });
+    _ = engine.addStorage(Entities.flour_storage, .{ .item = .Flour });
+    std.debug.print("  Mill: 1 wheat -> 1 flour\n", .{});
 
     // Transport routes
     _ = engine.addTransport(.{
         .from = Entities.wheat_field,
-        .to = Entities.barn,
+        .to = Entities.barn_wheat,
         .item = .Wheat,
         .priority = .Normal,
     });
     _ = engine.addTransport(.{
         .from = Entities.carrot_field,
-        .to = Entities.barn,
+        .to = Entities.barn_carrot,
         .item = .Carrot,
         .priority = .Normal,
     });
     _ = engine.addTransport(.{
-        .from = Entities.barn,
+        .from = Entities.barn_wheat,
         .to = Entities.mill_input,
         .item = .Wheat,
         .priority = .High,
@@ -312,8 +302,8 @@ pub fn main() !void {
     // Mill workstation
     _ = engine.addWorkstation(Entities.mill, .{
         .eis = &.{Entities.mill_input},
-        .iis = Entities.mill_input,
-        .ios = Entities.mill_output,
+        .iis = &.{Entities.mill_input},
+        .ios = &.{Entities.mill_output},
         .eos = &.{Entities.flour_storage},
         .process_duration = MILL_TIME,
         .priority = .High,
@@ -355,8 +345,8 @@ pub fn main() !void {
 
     const wheat_field = engine.getStorageQuantity(Entities.wheat_field, .Wheat);
     const carrot_field = engine.getStorageQuantity(Entities.carrot_field, .Carrot);
-    const barn_wheat = engine.getStorageQuantity(Entities.barn, .Wheat);
-    const barn_carrots = engine.getStorageQuantity(Entities.barn, .Carrot);
+    const barn_wheat = engine.getStorageQuantity(Entities.barn_wheat, .Wheat);
+    const barn_carrots = engine.getStorageQuantity(Entities.barn_carrot, .Carrot);
     const flour = engine.getStorageQuantity(Entities.flour_storage, .Flour);
     const cycles = engine.getCyclesCompleted(Entities.mill);
 
