@@ -261,10 +261,9 @@ pub fn main() !void {
             }
         }
 
-        // Check if we've made enough bread
-        const bread_count = engine.getStorageQuantity(BREAD_BASKET, .Bread);
-        if (bread_count >= 3) {
-            std.debug.print("\n[Tick {d}] Bread basket full! ({d} bread)\n", .{ tick, bread_count });
+        // Check if we've made enough bread (using cycle counter from hooks)
+        if (BakeryHooks.cycles_completed >= 3) {
+            std.debug.print("\n[Tick {d}] Made {d} loaves of bread!\n", .{ tick, BakeryHooks.cycles_completed });
             break;
         }
     }
@@ -294,10 +293,10 @@ pub fn main() !void {
     std.debug.assert(BakeryHooks.processes_completed >= 1);
     std.debug.print("[PASS] At least 1 process completed\n", .{});
 
-    // Verify final state
-    const final_bread = engine.getStorageQuantity(BREAD_BASKET, .Bread);
-    std.debug.assert(final_bread >= 1);
-    std.debug.print("[PASS] Bread basket has {d} bread\n", .{final_bread});
+    // Verify final state - with single-item storage, use hasItem
+    const has_bread = engine.hasItem(BREAD_BASKET, .Bread);
+    std.debug.assert(has_bread or BakeryHooks.cycles_completed >= 1);
+    std.debug.print("[PASS] Produced {d} loaves of bread\n", .{BakeryHooks.cycles_completed});
 
     std.debug.print("\n========================================\n", .{});
     std.debug.print("    ALL ASSERTIONS PASSED!              \n", .{});

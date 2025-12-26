@@ -93,11 +93,16 @@ pub const TasksHook = enum {
 };
 
 /// Pickup step information.
+/// For multi-ingredient recipes, `eis_id` is the current pickup target,
+/// while `all_eis_ids` contains all EIS storages the workstation uses.
 pub fn PickupInfo(comptime GameId: type) type {
     return struct {
         worker_id: GameId,
         workstation_id: GameId,
+        /// Current pickup target
         eis_id: GameId,
+        /// All EIS storages for this workstation (for planning)
+        all_eis_ids: []const GameId,
     };
 }
 
@@ -110,11 +115,16 @@ pub fn ProcessInfo(comptime GameId: type) type {
 }
 
 /// Store step information.
+/// For multi-output recipes, `eos_id` is the current store target,
+/// while `all_eos_ids` contains all EOS storages the workstation uses.
 pub fn StoreInfo(comptime GameId: type) type {
     return struct {
         worker_id: GameId,
         workstation_id: GameId,
+        /// Current store target
         eos_id: GameId,
+        /// All EOS storages for this workstation (for planning)
+        all_eos_ids: []const GameId,
     };
 }
 
@@ -370,6 +380,7 @@ test "HookDispatcher emits to registered handlers" {
         .worker_id = 42,
         .workstation_id = 1,
         .eis_id = 100,
+        .all_eis_ids = &.{100},
     } });
 
     try std.testing.expectEqual(@as(u32, 1), TestHooks.pickup_count);

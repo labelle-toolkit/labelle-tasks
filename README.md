@@ -32,7 +32,7 @@ Each storage holds **one item type** with unlimited quantity:
 - **IOS** - Recipe outputs - each IOS defines one product produced per cycle
 - **EOS** - Where finished products go (e.g., serving counter)
 
-For multi-item recipes, use multiple IIS storages (one per ingredient).
+For multi-item recipes, use multiple IIS storages (one for each unit of an ingredient required). For example, a recipe needing 2 Flour and 1 Meat would require three IIS storages: two for Flour and one for Meat.
 
 ## Concepts
 

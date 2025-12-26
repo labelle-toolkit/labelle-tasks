@@ -34,8 +34,8 @@ The engine uses a **storage-based workflow**:
 - **IOS** (Internal Output Storage): Recipe output - each IOS defines one product per cycle
 - **EOS** (External Output Storage): Final product storage
 
-Each storage holds **one item type** with unlimited quantity.
-For multi-item recipes, use multiple IIS storages (one per ingredient).
+Each storage holds **one item type** (quantity 0 or 1 in single-item model).
+For multi-item recipes, use multiple IIS storages (one for each unit of an ingredient required). For example, a recipe needing 2 Flour and 1 Meat would require three IIS storages: two for Flour and one for Meat.
 
 Workflow: `EIS → IIS (Pickup) → IOS (Process) → EOS (Store)`
 

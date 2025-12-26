@@ -185,6 +185,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type, comptime Dispatcher: t
             return self.base.getStorage(game_id);
         }
 
+        /// Get storage quantity by game ID.
+        /// With single-item storage model, returns 0 or 1.
+        pub fn getStorageQuantity(self: *Self, game_id: GameId, item: Item) u32 {
+            return self.base.getStorageQuantity(game_id, item);
+        }
+
         // ====================================================================
         // Workstation Management
         // ====================================================================
@@ -398,11 +404,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type, comptime Dispatcher: t
         // Internal Callbacks (emit hooks)
         // ====================================================================
 
-        fn emitPickupStarted(worker_game_id: GameId, workstation_game_id: GameId, eis_game_id: GameId) void {
+        fn emitPickupStarted(worker_game_id: GameId, workstation_game_id: GameId, eis_game_id: GameId, all_eis_game_ids: []const GameId) void {
             Dispatcher.emit(.{ .pickup_started = .{
                 .worker_id = worker_game_id,
                 .workstation_id = workstation_game_id,
                 .eis_id = eis_game_id,
+                .all_eis_ids = all_eis_game_ids,
             } });
         }
 
@@ -420,11 +427,12 @@ pub fn Engine(comptime GameId: type, comptime Item: type, comptime Dispatcher: t
             } });
         }
 
-        fn emitStoreStarted(worker_game_id: GameId, workstation_game_id: GameId, eos_game_id: GameId) void {
+        fn emitStoreStarted(worker_game_id: GameId, workstation_game_id: GameId, eos_game_id: GameId, all_eos_game_ids: []const GameId) void {
             Dispatcher.emit(.{ .store_started = .{
                 .worker_id = worker_game_id,
                 .workstation_id = workstation_game_id,
                 .eos_id = eos_game_id,
+                .all_eos_ids = all_eos_game_ids,
             } });
         }
 

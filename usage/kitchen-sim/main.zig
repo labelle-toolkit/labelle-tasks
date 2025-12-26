@@ -347,7 +347,7 @@ fn handleInterrupt(state: *GameState) void {
         switch (item) {
             .Meal => {
                 // Put meal back in IOS
-                _ = state.engine.addToStorage(KITCHEN_IOS_ID, .Meal, 1);
+                _ = state.engine.addToStorage(KITCHEN_IOS_ID, .Meal);
                 state.last_event = "Chef interrupted! Meal returned to IOS";
             },
             .Vegetable => {
@@ -383,13 +383,13 @@ fn handleSteal(state: *GameState) void {
 
     // Simple "random": alternate based on tick count
     if (state.total_ticks % 2 == 0 and eis_veg > 0) {
-        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable, 1);
+        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable);
         state.last_event = "Thief stole a vegetable from EIS!";
     } else if (eis_meat > 0) {
-        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Meat, 1);
+        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Meat);
         state.last_event = "Thief stole meat from EIS!";
     } else if (eis_veg > 0) {
-        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable, 1);
+        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable);
         state.last_event = "Thief stole a vegetable from EIS!";
     }
 }
@@ -661,9 +661,10 @@ pub fn main() !void {
         std.debug.print("Run directly in terminal for interactive mode.\n\n", .{});
 
         // Add ingredients to garden and butcher
-        _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable, 3);
-        _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat, 2);
-        std.debug.print("Added 3 vegetables to garden and 2 meat to butcher\n\n", .{});
+        // Single-item storage: add 1 item each (max capacity)
+        _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable);
+        _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat);
+        std.debug.print("Added 1 vegetable to garden and 1 meat to butcher\n\n", .{});
 
         // Run 800 ticks (80 seconds) of simulation - enough for full cycle with condenser
         var tick: u32 = 0;
@@ -724,16 +725,16 @@ pub fn main() !void {
             switch (key) {
                 'q', 'Q' => running = false,
                 'm', 'M' => {
-                    _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat, 1);
+                    _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat);
                     state.last_event = "Meat added to butcher";
                 },
                 'v', 'V' => {
-                    _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable, 1);
+                    _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable);
                     state.last_event = "Vegetable added to garden";
                 },
                 'w', 'W' => {
                     // Condenser works automatically, but W adds water directly (cheat)
-                    _ = engine.addToStorage(KITCHEN_EIS_ID, .Water, 1);
+                    _ = engine.addToStorage(KITCHEN_EIS_ID, .Water);
                     state.last_event = "Water added directly to EIS (cheat)";
                 },
                 'i', 'I' => handleInterrupt(&state),

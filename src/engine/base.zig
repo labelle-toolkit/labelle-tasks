@@ -67,6 +67,10 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
             ios: []const StorageId = &.{},
             eos: []const StorageId = &.{},
 
+            // Game IDs for callbacks (parallel to internal storage IDs)
+            eis_game_ids: []const GameId = &.{},
+            eos_game_ids: []const GameId = &.{},
+
             // Processing
             process_duration: u32 = 0, // 0 means no Process step
             process_timer: u32 = 0,
@@ -102,10 +106,12 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
         /// Callback: Called when Pickup step starts.
         /// Game should start worker movement to EIS.
         /// Call notifyPickupComplete when worker arrives.
+        /// For multi-ingredient recipes, all_eis_game_ids contains all EIS storages.
         pub const OnPickupStartedFn = *const fn (
             worker_game_id: GameId,
             workstation_game_id: GameId,
             eis_game_id: GameId,
+            all_eis_game_ids: []const GameId,
         ) void;
 
         /// Callback: Called when Process step starts.
@@ -125,10 +131,12 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
         /// Callback: Called when Store step starts.
         /// Game should start worker movement to EOS.
         /// Call notifyStoreComplete when worker arrives.
+        /// For multi-output recipes, all_eos_game_ids contains all EOS storages.
         pub const OnStoreStartedFn = *const fn (
             worker_game_id: GameId,
             workstation_game_id: GameId,
             eos_game_id: GameId,
+            all_eos_game_ids: []const GameId,
         ) void;
 
         /// Callback: Called when a worker is released from a workstation.
@@ -215,12 +223,6 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            // Free storage quantities
-            var storage_iter = self.storages.iterator();
-            while (storage_iter.next()) |entry| {
-                entry.value_ptr.deinit();
-            }
-
             // Free workstation storage ID arrays
             var ws_iter = self.workstations.iterator();
             while (ws_iter.next()) |entry| {
@@ -236,6 +238,13 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
                 }
                 if (ws.eos.len > 0) {
                     self.allocator.free(ws.eos);
+                }
+                // Free game ID arrays used for callbacks
+                if (ws.eis_game_ids.len > 0) {
+                    self.allocator.free(ws.eis_game_ids);
+                }
+                if (ws.eos_game_ids.len > 0) {
+                    self.allocator.free(ws.eos_game_ids);
                 }
             }
 
@@ -386,6 +395,15 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
         pub fn isEmpty(self: *Self, game_id: GameId) bool {
             const storage_id = self.storage_by_game_id.get(game_id) orelse return true;
             return (self.storage_quantities.get(storage_id) orelse 0) == 0;
+        }
+
+        /// Get storage quantity by game ID.
+        /// With single-item storage model, returns 0 or 1.
+        /// Note: The item parameter is kept for API compatibility but is not used
+        /// since each storage only holds one item type.
+        pub fn getStorageQuantity(self: *Self, game_id: GameId, _: Item) u32 {
+            const storage_id = self.storage_by_game_id.get(game_id) orelse return 0;
+            return self.storage_quantities.get(storage_id) orelse 0;
         }
 
         /// Get quantity by storage ID (internal use).
@@ -543,6 +561,16 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
             const ios_ids = self.resolveStorageIds(options.ios, "IOS");
             const eos_ids = self.resolveStorageIds(options.eos, "EOS");
 
+            // Store game IDs for callbacks (copy the slices)
+            const eis_game_ids = if (options.eis.len > 0)
+                self.allocator.dupe(GameId, options.eis) catch @panic("OOM")
+            else
+                &[_]GameId{};
+            const eos_game_ids = if (options.eos.len > 0)
+                self.allocator.dupe(GameId, options.eos) catch @panic("OOM")
+            else
+                &[_]GameId{};
+
             // Determine first step based on storages
             const first_step: StepType = if (iis_ids.len > 0) .Pickup else if (options.process_duration > 0) .Process else .Store;
 
@@ -552,6 +580,8 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
                 .iis = iis_ids,
                 .ios = ios_ids,
                 .eos = eos_ids,
+                .eis_game_ids = eis_game_ids,
+                .eos_game_ids = eos_game_ids,
                 .process_duration = options.process_duration,
                 .priority = options.priority,
                 .current_step = first_step,
@@ -918,7 +948,7 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
         }
 
         // ====================================================================
-        // Internal Logic
+        // Internal Logic (pub for engine.zig access, not part of public API)
         // ====================================================================
 
         pub fn checkWorkstationsReadiness(self: *Self) void {
@@ -1184,7 +1214,7 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
                     if (self.on_pickup_started) |callback| {
                         if (ws.selected_eis) |eis_id| {
                             const eis = self.storages.get(eis_id) orelse return;
-                            callback(worker.game_id, ws.game_id, eis.game_id);
+                            callback(worker.game_id, ws.game_id, eis.game_id, ws.eis_game_ids);
                         }
                     }
                 },
@@ -1213,7 +1243,7 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
                     if (self.on_store_started) |callback| {
                         if (ws.selected_eos) |eos_id| {
                             const eos = self.storages.get(eos_id) orelse return;
-                            callback(worker.game_id, ws.game_id, eos.game_id);
+                            callback(worker.game_id, ws.game_id, eos.game_id, ws.eos_game_ids);
                         }
                     }
                 },
