@@ -15,8 +15,7 @@
                 .outputs = .{ .Flour },
             },
             .eos = .{
-                .position = .{ .x = 70, .y = 100 },
-                .sprite = "flour_bin",
+                .{ .position = .{ .x = 70, .y = 100 }, .sprite = "flour_bin" },
             },
         },
 
@@ -30,13 +29,10 @@
                 .outputs = .{ .Bread },
             },
             .eis = .{
-                .position = .{ .x = 130, .y = 100 },
-                .sprite = "flour_shelf",
-                .accepts = .{ .Flour },
+                .{ .position = .{ .x = 130, .y = 100 }, .sprite = "flour_shelf", .accepts = .{ .Flour } },
             },
             .eos = .{
-                .position = .{ .x = 170, .y = 100 },
-                .sprite = "bread_rack",
+                .{ .position = .{ .x = 170, .y = 100 }, .sprite = "bread_rack" },
             },
         },
 
@@ -55,8 +51,7 @@
                 .{ .position = .{ .x = 230, .y = 120 }, .accepts = .{ .Sugar } },
             },
             .eos = .{
-                .position = .{ .x = 270, .y = 100 },
-                .sprite = "cake_display",
+                .{ .position = .{ .x = 270, .y = 100 }, .sprite = "cake_display" },
             },
         },
     },
