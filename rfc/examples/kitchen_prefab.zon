@@ -1,0 +1,63 @@
+// Kitchen transformer workstation prefab
+// Transforms Vegetable + Meat into Meal using parent-child model
+.{
+    .name = "kitchen",
+    .components = .{
+        .TaskWorkstation = .{
+            .process_duration = 40,
+            .priority = .High,
+        },
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .id = "kitchen" },
+    },
+    // Storages are CHILDREN of the workstation entity
+    .children = .{
+        // EIS - External Input Storages (visible, with sprites)
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Vegetable = true } },
+                .TaskStorageRole = .{ .role = .eis },
+                .Position = .{ .x = -30, .y = 0 },
+                .Sprite = .{ .id = "ingredient_shelf" },
+            },
+        },
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Meat = true } },
+                .TaskStorageRole = .{ .role = .eis },
+                .Position = .{ .x = -30, .y = 20 },
+                .Sprite = .{ .id = "meat_rack" },
+            },
+        },
+        // IIS - Internal Input Storages (invisible, recipe inputs)
+        // Recipe: 1 Vegetable + 1 Meat = 1 Meal
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Vegetable = true } },
+                .TaskStorageRole = .{ .role = .iis },
+            },
+        },
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Meat = true } },
+                .TaskStorageRole = .{ .role = .iis },
+            },
+        },
+        // IOS - Internal Output Storages (invisible, recipe outputs)
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Meal = true } },
+                .TaskStorageRole = .{ .role = .ios },
+            },
+        },
+        // EOS - External Output Storages (visible, with sprite)
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Meal = true } },
+                .TaskStorageRole = .{ .role = .eos },
+                .Position = .{ .x = 30, .y = 0 },
+                .Sprite = .{ .id = "serving_counter" },
+            },
+        },
+    },
+}

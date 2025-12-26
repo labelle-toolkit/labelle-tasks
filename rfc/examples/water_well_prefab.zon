@@ -1,0 +1,32 @@
+// Water well - producer workstation (no inputs)
+// Simplest workstation type: just produces items over time
+.{
+    .name = "water_well",
+    .components = .{
+        .TaskWorkstation = .{
+            .process_duration = 20,
+            .priority = .Low,
+        },
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .id = "well" },
+    },
+    // Producer: no EIS/IIS children, only IOS/EOS
+    .children = .{
+        // IOS - Internal Output Storage (invisible)
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Water = true } },
+                .TaskStorageRole = .{ .role = .ios },
+            },
+        },
+        // EOS - External Output Storage (visible)
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Water = true } },
+                .TaskStorageRole = .{ .role = .eos },
+                .Position = .{ .x = 15, .y = 0 },
+                .Sprite = .{ .id = "water_bucket" },
+            },
+        },
+    },
+}
