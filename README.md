@@ -4,19 +4,18 @@ Task orchestration engine for Zig games. Part of the [labelle-toolkit](https://g
 
 ## Overview
 
-A self-contained task orchestration engine with storage management for games. The engine handles task assignment, resource tracking, and workflow progression internally, while games provide callbacks for game-specific logic (pathfinding, animations, etc.).
+A self-contained task orchestration engine with storage management for games. The engine handles task assignment, resource tracking, and workflow progression internally, emitting hooks for game-specific logic (pathfinding, animations, etc.).
 
 ## Features
 
-- **Storage management** - Engine tracks items in storages with capacity limits
+- **Storage management** - Engine tracks items in storages (each storage holds one item type)
 - **Automatic step derivation** - Steps derived from storage configuration (Pickup, Process, Store)
 - **Priority-based assignment** - Workstations and transports have priorities (Low, Normal, High, Critical)
 - **Producer workstations** - Workstations that produce items without inputs (e.g., water condenser)
 - **Recurring transports** - Automatic item movement between storages
 - **Worker management** - Workers assigned to workstations and transports automatically
 - **Cycle tracking** - Track how many times a workstation has completed its workflow
-- **Callback-driven** - Game controls execution via callbacks, engine manages state
-- **Hook system** - Comptime-resolved event hooks compatible with labelle-engine
+- **Hook-based events** - Comptime-resolved event hooks with zero runtime overhead
 - **ECS Components** - Generic components for labelle-engine integration
 
 ## Storage Model
@@ -27,10 +26,13 @@ The engine uses a four-storage model for workstations:
 EIS (External Input) → IIS (Internal Input) → [Process] → IOS (Internal Output) → EOS (External Output)
 ```
 
+Each storage holds **one item type** with unlimited quantity:
 - **EIS** - Where raw materials are stored (e.g., ingredients shelf)
-- **IIS** - Recipe definition - capacity defines what's consumed per cycle
-- **IOS** - Output definition - capacity defines what's produced per cycle
+- **IIS** - Recipe inputs - each IIS defines one ingredient needed per cycle
+- **IOS** - Recipe outputs - each IOS defines one product produced per cycle
 - **EOS** - Where finished products go (e.g., serving counter)
+
+For multi-item recipes, use multiple IIS storages (one for each unit of an ingredient required). For example, a recipe needing 2 Flour and 1 Meat would require three IIS storages: two for Flour and one for Meat.
 
 ## Concepts
 
@@ -49,65 +51,63 @@ Locations where work happens. Steps are derived automatically from storage confi
 - Has IOS → **Store** step (transfer IOS → EOS)
 
 Workstation statuses:
-- **Blocked** - EIS doesn't have recipe requirements, or EOS is full
-- **Queued** - Has resources and space, waiting for worker
+- **Blocked** - EIS doesn't have recipe requirements
+- **Queued** - Has resources, waiting for worker
 - **Active** - Worker assigned and executing steps
 
 ### Transports
 
-Recurring tasks that move items between any two storages. Activate when source has items AND destination has space.
+Recurring tasks that move items between any two storages. Activate when source has items.
 
 ## Engine API
 
 ```zig
 const tasks = @import("labelle_tasks");
 
-// Define your item types
+// Define your item types (can be enum or tagged union)
 const Item = enum { Vegetable, Meat, Water, Meal };
 
-// Create engine with game's entity ID and Item types
-var engine = tasks.Engine(u32, Item).init(allocator);
+// Define hook handlers (optional - only implement the hooks you need)
+const MyHooks = struct {
+    pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.pickup_started;
+        // Start worker movement to EIS location
+    }
+
+    pub fn process_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.process_started;
+        // Play cooking animation, etc.
+    }
+
+    pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.cycle_completed;
+        std.log.info("Cycle {d} completed!", .{info.cycles_completed});
+    }
+};
+
+// Create dispatcher and engine
+const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 defer engine.deinit();
 
-// Register callbacks
+// Set worker selection callback (required)
 engine.setFindBestWorker(findBestWorker);
-engine.setOnPickupStarted(onPickupStarted);
-engine.setOnProcessStarted(onProcessStarted);
-engine.setOnProcessComplete(onProcessComplete);
-engine.setOnStoreStarted(onStoreStarted);
-engine.setOnWorkerReleased(onWorkerReleased);
-engine.setOnTransportStarted(onTransportStarted);
 
-// Create storages
-const eis_slots = [_]tasks.Engine(u32, Item).Slot{
-    .{ .item = .Vegetable, .capacity = 10 },
-    .{ .item = .Meat, .capacity = 10 },
-};
-_ = engine.addStorage(KITCHEN_EIS_ID, .{ .slots = &eis_slots });
-
-const iis_slots = [_]tasks.Engine(u32, Item).Slot{
-    .{ .item = .Vegetable, .capacity = 2 },  // Recipe: 2 vegetables
-    .{ .item = .Meat, .capacity = 1 },       // Recipe: 1 meat
-};
-_ = engine.addStorage(KITCHEN_IIS_ID, .{ .slots = &iis_slots });
-
-const ios_slots = [_]tasks.Engine(u32, Item).Slot{
-    .{ .item = .Meal, .capacity = 1 },  // Produces: 1 meal
-};
-_ = engine.addStorage(KITCHEN_IOS_ID, .{ .slots = &ios_slots });
-
-const eos_slots = [_]tasks.Engine(u32, Item).Slot{
-    .{ .item = .Meal, .capacity = 4 },
-};
-_ = engine.addStorage(KITCHEN_EOS_ID, .{ .slots = &eos_slots });
+// Create storages (each storage holds ONE item type)
+_ = engine.addStorage(VEG_EIS_ID, .{ .item = .Vegetable });
+_ = engine.addStorage(MEAT_EIS_ID, .{ .item = .Meat });
+_ = engine.addStorage(VEG_IIS_ID, .{ .item = .Vegetable });  // Recipe needs 1 vegetable
+_ = engine.addStorage(MEAT_IIS_ID, .{ .item = .Meat });      // Recipe needs 1 meat
+_ = engine.addStorage(KITCHEN_IOS_ID, .{ .item = .Meal });   // Produces 1 meal
+_ = engine.addStorage(KITCHEN_EOS_ID, .{ .item = .Meal });
 
 // Create workstation referencing storages
-// EIS and EOS support multiple storages for flexible input/output routing
+// All storage references are slices for flexible routing
 _ = engine.addWorkstation(KITCHEN_ID, .{
-    .eis = &.{KITCHEN_EIS_ID},  // Multiple input storages supported
-    .iis = KITCHEN_IIS_ID,
-    .ios = KITCHEN_IOS_ID,
-    .eos = &.{KITCHEN_EOS_ID},  // Multiple output storages supported
+    .eis = &.{ VEG_EIS_ID, MEAT_EIS_ID },      // Multiple input sources
+    .iis = &.{ VEG_IIS_ID, MEAT_IIS_ID },      // Recipe: 1 veg + 1 meat
+    .ios = &.{KITCHEN_IOS_ID},                  // Produces: 1 meal
+    .eos = &.{KITCHEN_EOS_ID},                  // Output destination
     .process_duration = 40,
     .priority = .High,
 });
@@ -116,8 +116,8 @@ _ = engine.addWorkstation(KITCHEN_ID, .{
 _ = engine.addWorker(CHEF_ID, .{});
 
 // Add items to storage - engine automatically manages state transitions
-_ = engine.addToStorage(KITCHEN_EIS_ID, .Vegetable, 5);
-_ = engine.addToStorage(KITCHEN_EIS_ID, .Meat, 2);
+_ = engine.addToStorage(VEG_EIS_ID, .Vegetable, 5);
+_ = engine.addToStorage(MEAT_EIS_ID, .Meat, 2);
 
 // Call update() each game tick to advance process timers
 engine.update();
@@ -131,10 +131,11 @@ engine.notifyWorkerBusy(CHEF_ID);         // Worker unavailable
 engine.abandonWork(CHEF_ID);              // Worker abandons task
 ```
 
-## Callbacks
+## findBestWorker Callback
+
+The only required callback selects which worker to assign:
 
 ```zig
-/// Find the best worker for a workstation or transport
 fn findBestWorker(
     workstation_id: ?u32,  // null for transport tasks
     available_workers: []const u32,
@@ -143,41 +144,12 @@ fn findBestWorker(
     if (available_workers.len > 0) return available_workers[0];
     return null;
 }
-
-/// Called when Pickup step starts - worker should move to EIS
-fn onPickupStarted(worker_id: u32, workstation_id: u32, eis_id: u32) void {
-    // Start worker movement to EIS location
-}
-
-/// Called when Process step starts - engine handles timing
-fn onProcessStarted(worker_id: u32, workstation_id: u32) void {
-    // Play cooking animation, etc.
-}
-
-/// Called when Process step completes
-fn onProcessComplete(worker_id: u32, workstation_id: u32) void {
-    // Play completion sound, etc.
-}
-
-/// Called when Store step starts - worker should move to EOS
-fn onStoreStarted(worker_id: u32, workstation_id: u32, eos_id: u32) void {
-    // Start worker movement to EOS location
-}
-
-/// Called when worker is released from workstation
-fn onWorkerReleased(worker_id: u32, workstation_id: u32) void {
-    // Update UI, etc.
-}
-
-/// Called when transport starts
-fn onTransportStarted(worker_id: u32, from_id: u32, to_id: u32, item: Item) void {
-    // Start worker movement from source to destination
-}
 ```
 
 ## Hook System
 
-In addition to callbacks, the engine provides a hook system with zero runtime overhead, compatible with labelle-engine:
+The engine emits hooks for lifecycle events with zero runtime overhead.
+Only implement the hooks you need - unhandled hooks are no-ops at comptime.
 
 ```zig
 const tasks = @import("labelle_tasks");
@@ -195,15 +167,14 @@ const MyHooks = struct {
     }
 };
 
-// Create dispatcher and engine with hooks
+// Create dispatcher and engine
 const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 defer engine.deinit();
 
-// Use the same API as the regular engine
 engine.setFindBestWorker(findBestWorker);
 _ = engine.addWorker(WORKER_ID, .{});
-// ... hooks are emitted automatically
+// Hooks are emitted automatically during engine operations
 ```
 
 ### Available Hooks
@@ -249,7 +220,7 @@ const AnalyticsHooks = struct {
 
 // Both handlers will be called
 const AllHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ GameHooks, AnalyticsHooks });
-var engine = tasks.EngineWithHooks(u32, Item, AllHooks).init(allocator);
+var engine = tasks.Engine(u32, Item, AllHooks).init(allocator);
 ```
 
 ## Producer Workstations
@@ -258,14 +229,11 @@ Workstations without EIS/IIS produce items from nothing (e.g., water condenser, 
 
 ```zig
 // Water condenser - produces water without inputs
-const ios_slots = [_]Slot{.{ .item = .Water, .capacity = 1 }};
-const eos_slots = [_]Slot{.{ .item = .Water, .capacity = 4 }};
-
-_ = engine.addStorage(CONDENSER_IOS_ID, .{ .slots = &ios_slots });
-_ = engine.addStorage(CONDENSER_EOS_ID, .{ .slots = &eos_slots });
+_ = engine.addStorage(CONDENSER_IOS_ID, .{ .item = .Water });
+_ = engine.addStorage(CONDENSER_EOS_ID, .{ .item = .Water });
 
 _ = engine.addWorkstation(CONDENSER_ID, .{
-    .ios = CONDENSER_IOS_ID,
+    .ios = &.{CONDENSER_IOS_ID},
     .eos = &.{CONDENSER_EOS_ID},
     .process_duration = 30,
     .priority = .Low,
@@ -275,15 +243,15 @@ _ = engine.addWorkstation(CONDENSER_ID, .{
 
 ## Multiple Input/Output Storages
 
-Workstations can reference multiple EIS (External Input Storages) and EOS (External Output Storages) for flexible routing:
+Workstations can reference multiple EIS and EOS for flexible routing:
 
 ```zig
 // Kitchen with multiple ingredient sources and serving counters
 _ = engine.addWorkstation(KITCHEN_ID, .{
     .eis = &.{ PANTRY_ID, FRIDGE_ID, SHELF_ID },  // Pick from any that has ingredients
-    .iis = KITCHEN_IIS_ID,
-    .ios = KITCHEN_IOS_ID,
-    .eos = &.{ COUNTER_1_ID, COUNTER_2_ID },      // Store to first with space
+    .iis = &.{INGREDIENT_IIS_ID},                  // Recipe requirement
+    .ios = &.{MEAL_IOS_ID},                        // Produced output
+    .eos = &.{ COUNTER_1_ID, COUNTER_2_ID },       // Store to first available
     .process_duration = 40,
     .priority = .High,
 });
@@ -291,9 +259,9 @@ _ = engine.addWorkstation(KITCHEN_ID, .{
 
 The engine automatically:
 - Checks all EIS storages when looking for available ingredients
-- Picks from the first EIS that can fulfill the recipe
-- Stores outputs to the first EOS that has space
-- Blocks only when NO EIS has ingredients OR ALL EOS are full
+- Picks from the first EIS that has the required item
+- Stores outputs to the first EOS that accepts the item type
+- Blocks only when NO EIS has required ingredients
 
 ## Transports
 
@@ -307,7 +275,7 @@ _ = engine.addTransport(.{
     .item = .Vegetable,
     .priority = .Normal,
 });
-// Transport activates when garden has vegetables AND kitchen EIS has space
+// Transport activates when garden has vegetables
 ```
 
 ## ECS Components

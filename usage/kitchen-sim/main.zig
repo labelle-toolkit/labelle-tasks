@@ -26,14 +26,6 @@ const COOK_TIME = COOK_TIME_SECS * TICKS_PER_SECOND;
 const CONDENSE_TIME = CONDENSE_TIME_SECS * TICKS_PER_SECOND;
 const INTERRUPT_DURATION = INTERRUPT_DURATION_SECS * TICKS_PER_SECOND;
 
-// Recipe requirements
-const VEGETABLES_NEEDED = 2;
-const MEAT_NEEDED = 1;
-const WATER_NEEDED = 1;
-
-// Storage limits
-const EOS_MAX_MEALS = 4;
-
 // Entity IDs
 const CHEF_ID: u32 = 1;
 const KITCHEN_WORKSTATION_ID: u32 = 12;
@@ -84,8 +76,97 @@ const Item = enum {
     Meal,
 };
 
-// Use the parameterized engine type
-const GameEngine = tasks.Engine(u32, Item);
+// Forward declaration for hook handlers (need access to g_state)
+const KitchenHooks = struct {
+    pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.pickup_started;
+        if (info.workstation_id == KITCHEN_WORKSTATION_ID) {
+            // Walk to EIS to pickup ingredients
+            g_state.chef_state = .Walking;
+            g_state.chef_location = .WalkingToEIS;
+            g_state.chef_timer = WALK_TO_EIS;
+            g_state.last_event = "Chef walking to EIS for ingredients";
+        }
+    }
+
+    pub fn process_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.process_started;
+        if (info.workstation_id == KITCHEN_WORKSTATION_ID) {
+            // Start cooking
+            g_state.chef_state = .Working;
+            g_state.chef_location = .AtWorkstation;
+            g_state.last_event = "Chef started cooking";
+        } else if (info.workstation_id == CONDENSER_WORKSTATION_ID) {
+            // Start condensing water
+            g_state.chef_state = .Working;
+            g_state.chef_location = .AtCondenser;
+            g_state.last_event = "Chef started condensing water";
+        }
+    }
+
+    pub fn process_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.process_completed;
+        if (info.workstation_id == KITCHEN_WORKSTATION_ID) {
+            g_state.last_event = "Cooking complete! Meal ready in IOS";
+        } else if (info.workstation_id == CONDENSER_WORKSTATION_ID) {
+            g_state.last_event = "Condensing complete! Water ready";
+        }
+    }
+
+    pub fn store_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.store_started;
+        if (info.workstation_id == KITCHEN_WORKSTATION_ID) {
+            // Take meal from IOS
+            g_state.chef_carrying = .Meal;
+            // Walk to EOS to drop it
+            g_state.chef_state = .Walking;
+            g_state.chef_location = .WalkingToEIS; // Reuse for simplicity
+            g_state.chef_timer = WALK_TO_EIS;
+            g_state.last_event = "Chef moving meal to storage";
+        } else if (info.workstation_id == CONDENSER_WORKSTATION_ID) {
+            // Take water from condenser IOS and store to condenser EOS
+            g_state.chef_carrying = .Water;
+            g_state.doing_condenser_store = true;
+            // Walk to condenser EOS
+            g_state.chef_state = .Walking;
+            g_state.chef_location = .WalkingFromCondenser;
+            g_state.chef_timer = WALK_TO_CONDENSER;
+            g_state.last_event = "Chef collecting water from condenser";
+        }
+    }
+
+    pub fn transport_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        const info = payload.transport_started;
+        if (info.from_storage_id == GARDEN_STORAGE_ID) {
+            g_state.chef_state = .Walking;
+            g_state.chef_location = .WalkingToGarden;
+            g_state.chef_timer = WALK_TO_GARDEN;
+            g_state.chef_carrying = info.item;
+            g_state.last_event = "Chef walking to garden";
+        } else if (info.from_storage_id == BUTCHER_STORAGE_ID) {
+            g_state.chef_state = .Walking;
+            g_state.chef_location = .WalkingToButcher;
+            g_state.chef_timer = WALK_TO_BUTCHER;
+            g_state.chef_carrying = info.item;
+            g_state.last_event = "Chef walking to butcher";
+        } else if (info.from_storage_id == CONDENSER_EOS_ID) {
+            g_state.chef_state = .Walking;
+            g_state.chef_location = .WalkingToCondenser;
+            g_state.chef_timer = WALK_TO_CONDENSER;
+            g_state.chef_carrying = info.item;
+            g_state.last_event = "Chef walking to condenser";
+        }
+    }
+
+    pub fn worker_released(_: tasks.hooks.HookPayload(u32, Item)) void {
+        g_state.chef_state = .Idle;
+        g_state.chef_location = .Kitchen;
+        g_state.last_event = "Chef released from workstation";
+    }
+};
+
+const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, KitchenHooks);
+const GameEngine = tasks.Engine(u32, Item, Dispatcher);
 
 // ============================================================================
 // Game State
@@ -114,11 +195,8 @@ const GameState = struct {
         const eis_veg = self.engine.getStorageQuantity(KITCHEN_EIS_ID, .Vegetable);
         const eis_meat = self.engine.getStorageQuantity(KITCHEN_EIS_ID, .Meat);
         const eis_water = self.engine.getStorageQuantity(KITCHEN_EIS_ID, .Water);
-        const eos_meals = self.engine.getStorageQuantity(KITCHEN_EOS_ID, .Meal);
-        return eis_veg >= VEGETABLES_NEEDED and
-            eis_meat >= MEAT_NEEDED and
-            eis_water >= WATER_NEEDED and
-            eos_meals < EOS_MAX_MEALS;
+        // Recipe needs 1 of each ingredient
+        return eis_veg >= 1 and eis_meat >= 1 and eis_water >= 1;
     }
 
     fn ticksToSecs(ticks: u32) f32 {
@@ -133,7 +211,7 @@ const GameState = struct {
 var g_state: *GameState = undefined;
 
 // ============================================================================
-// Engine Callbacks
+// Engine Callbacks (only findBestWorker needed)
 // ============================================================================
 
 fn findBestWorker(
@@ -146,124 +224,6 @@ fn findBestWorker(
         if (worker == CHEF_ID) return worker;
     }
     return null;
-}
-
-fn onPickupStarted(
-    worker_id: u32,
-    workstation_id: u32,
-    eis_id: u32,
-) void {
-    _ = worker_id;
-    _ = eis_id;
-
-    if (workstation_id == KITCHEN_WORKSTATION_ID) {
-        // Walk to EIS to pickup ingredients
-        g_state.chef_state = .Walking;
-        g_state.chef_location = .WalkingToEIS;
-        g_state.chef_timer = WALK_TO_EIS;
-        g_state.last_event = "Chef walking to EIS for ingredients";
-    }
-}
-
-fn onProcessStarted(
-    worker_id: u32,
-    workstation_id: u32,
-) void {
-    _ = worker_id;
-
-    if (workstation_id == KITCHEN_WORKSTATION_ID) {
-        // Start cooking
-        g_state.chef_state = .Working;
-        g_state.chef_location = .AtWorkstation;
-        g_state.last_event = "Chef started cooking";
-    } else if (workstation_id == CONDENSER_WORKSTATION_ID) {
-        // Start condensing water
-        g_state.chef_state = .Working;
-        g_state.chef_location = .AtCondenser;
-        g_state.last_event = "Chef started condensing water";
-    }
-}
-
-fn onProcessComplete(
-    worker_id: u32,
-    workstation_id: u32,
-) void {
-    _ = worker_id;
-
-    if (workstation_id == KITCHEN_WORKSTATION_ID) {
-        g_state.last_event = "Cooking complete! Meal ready in IOS";
-    } else if (workstation_id == CONDENSER_WORKSTATION_ID) {
-        g_state.last_event = "Condensing complete! Water ready";
-    }
-}
-
-fn onStoreStarted(
-    worker_id: u32,
-    workstation_id: u32,
-    eos_id: u32,
-) void {
-    _ = worker_id;
-    _ = eos_id;
-
-    if (workstation_id == KITCHEN_WORKSTATION_ID) {
-        // Take meal from IOS
-        g_state.chef_carrying = .Meal;
-        // Walk to EOS to drop it
-        g_state.chef_state = .Walking;
-        g_state.chef_location = .WalkingToEIS; // Reuse for simplicity
-        g_state.chef_timer = WALK_TO_EIS;
-        g_state.last_event = "Chef moving meal to storage";
-    } else if (workstation_id == CONDENSER_WORKSTATION_ID) {
-        // Take water from condenser IOS and store to condenser EOS
-        g_state.chef_carrying = .Water;
-        g_state.doing_condenser_store = true;
-        // Walk to condenser EOS
-        g_state.chef_state = .Walking;
-        g_state.chef_location = .WalkingFromCondenser;
-        g_state.chef_timer = WALK_TO_CONDENSER;
-        g_state.last_event = "Chef collecting water from condenser";
-    }
-}
-
-fn onTransportStarted(
-    worker_id: u32,
-    from_storage_id: u32,
-    to_storage_id: u32,
-    item: Item,
-) void {
-    _ = worker_id;
-    _ = to_storage_id;
-
-    if (from_storage_id == GARDEN_STORAGE_ID) {
-        g_state.chef_state = .Walking;
-        g_state.chef_location = .WalkingToGarden;
-        g_state.chef_timer = WALK_TO_GARDEN;
-        g_state.chef_carrying = item;
-        g_state.last_event = "Chef walking to garden";
-    } else if (from_storage_id == BUTCHER_STORAGE_ID) {
-        g_state.chef_state = .Walking;
-        g_state.chef_location = .WalkingToButcher;
-        g_state.chef_timer = WALK_TO_BUTCHER;
-        g_state.chef_carrying = item;
-        g_state.last_event = "Chef walking to butcher";
-    } else if (from_storage_id == CONDENSER_EOS_ID) {
-        g_state.chef_state = .Walking;
-        g_state.chef_location = .WalkingToCondenser;
-        g_state.chef_timer = WALK_TO_CONDENSER;
-        g_state.chef_carrying = item;
-        g_state.last_event = "Chef walking to condenser";
-    }
-}
-
-fn onWorkerReleased(
-    worker_id: u32,
-    workstation_id: u32,
-) void {
-    _ = worker_id;
-    _ = workstation_id;
-    g_state.chef_state = .Idle;
-    g_state.chef_location = .Kitchen;
-    g_state.last_event = "Chef released from workstation";
 }
 
 // ============================================================================
@@ -387,7 +347,7 @@ fn handleInterrupt(state: *GameState) void {
         switch (item) {
             .Meal => {
                 // Put meal back in IOS
-                _ = state.engine.addToStorage(KITCHEN_IOS_ID, .Meal, 1);
+                _ = state.engine.addToStorage(KITCHEN_IOS_ID, .Meal);
                 state.last_event = "Chef interrupted! Meal returned to IOS";
             },
             .Vegetable => {
@@ -423,13 +383,13 @@ fn handleSteal(state: *GameState) void {
 
     // Simple "random": alternate based on tick count
     if (state.total_ticks % 2 == 0 and eis_veg > 0) {
-        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable, 1);
+        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable);
         state.last_event = "Thief stole a vegetable from EIS!";
     } else if (eis_meat > 0) {
-        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Meat, 1);
+        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Meat);
         state.last_event = "Thief stole meat from EIS!";
     } else if (eis_veg > 0) {
-        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable, 1);
+        _ = state.engine.removeFromStorage(KITCHEN_EIS_ID, .Vegetable);
         state.last_event = "Thief stole a vegetable from EIS!";
     }
 }
@@ -468,7 +428,7 @@ fn render(state: *GameState) void {
         \\[Kitchen IIS]  Veg: {d}  Meat: {d}  Water: {d}
         \\[Workstation]  {s}
         \\[Kitchen IOS]  Meals: {d}
-        \\[Kitchen EOS]  Meals: {d}/{d}
+        \\[Kitchen EOS]  Meals: {d}
         \\
         \\Chef: {s}
         \\
@@ -491,7 +451,6 @@ fn render(state: *GameState) void {
         getWorkstationStatus(state),
         ios_meals,
         eos_meals,
-        EOS_MAX_MEALS,
         getChefStatus(state),
         state.last_event,
     });
@@ -507,15 +466,12 @@ fn getCondenserStatus(state: *GameState) []const u8 {
 }
 
 fn getWorkstationStatus(state: *GameState) []const u8 {
-    const eos_meals = state.engine.getStorageQuantity(KITCHEN_EOS_ID, .Meal);
     const status = state.engine.getWorkstationStatus(KITCHEN_WORKSTATION_ID);
     return switch (status orelse .Blocked) {
-        .Blocked => if (eos_meals >= EOS_MAX_MEALS)
-            "Blocked (EOS full)"
-        else if (state.canStartCooking())
+        .Blocked => if (state.canStartCooking())
             "Blocked (waiting for chef)"
         else
-            "Blocked (need 2v + 1m + 1w)",
+            "Blocked (need 1v + 1m + 1w)",
         .Queued => "Queued (waiting for chef)",
         .Active => "Cooking...",
     };
@@ -602,64 +558,51 @@ pub fn main() !void {
     var engine = GameEngine.init(allocator);
     defer engine.deinit();
 
-    // Initialize game state BEFORE setting callbacks
-    // (callbacks use g_state and can be called during addWorker/addWorkstation)
+    // Initialize game state BEFORE hooks can fire
+    // (hooks use g_state and can be called during addWorker/addWorkstation)
     var state = GameState{
         .engine = &engine,
     };
     g_state = &state;
 
     engine.setFindBestWorker(findBestWorker);
-    engine.setOnPickupStarted(onPickupStarted);
-    engine.setOnProcessStarted(onProcessStarted);
-    engine.setOnProcessComplete(onProcessComplete);
-    engine.setOnStoreStarted(onStoreStarted);
-    engine.setOnTransportStarted(onTransportStarted);
-    engine.setOnWorkerReleased(onWorkerReleased);
 
     // Add chef
     _ = engine.addWorker(CHEF_ID, .{});
 
-    // Create storages
+    // Create storages (each storage holds one item type)
     // Garden produces vegetables (external source)
-    const garden_slots = [_]GameEngine.Slot{.{ .item = .Vegetable, .capacity = 10 }};
-    _ = engine.addStorage(GARDEN_STORAGE_ID, .{ .slots = &garden_slots });
+    _ = engine.addStorage(GARDEN_STORAGE_ID, .{ .item = .Vegetable });
 
     // Butcher produces meat (external source)
-    const butcher_slots = [_]GameEngine.Slot{.{ .item = .Meat, .capacity = 10 }};
-    _ = engine.addStorage(BUTCHER_STORAGE_ID, .{ .slots = &butcher_slots });
+    _ = engine.addStorage(BUTCHER_STORAGE_ID, .{ .item = .Meat });
 
     // Condenser IOS - holds produced water (1 per cycle)
-    const condenser_ios_slots = [_]GameEngine.Slot{.{ .item = .Water, .capacity = 1 }};
-    _ = engine.addStorage(CONDENSER_IOS_ID, .{ .slots = &condenser_ios_slots });
+    _ = engine.addStorage(CONDENSER_IOS_ID, .{ .item = .Water });
 
     // Condenser EOS - output buffer for produced water
-    const condenser_eos_slots = [_]GameEngine.Slot{.{ .item = .Water, .capacity = 5 }};
-    _ = engine.addStorage(CONDENSER_EOS_ID, .{ .slots = &condenser_eos_slots });
+    _ = engine.addStorage(CONDENSER_EOS_ID, .{ .item = .Water });
 
-    // Kitchen EIS - receives ingredients from garden/butcher/condenser
-    const eis_slots = [_]GameEngine.Slot{
-        .{ .item = .Vegetable, .capacity = 10 },
-        .{ .item = .Meat, .capacity = 10 },
-        .{ .item = .Water, .capacity = 10 },
-    };
-    _ = engine.addStorage(KITCHEN_EIS_ID, .{ .slots = &eis_slots });
+    // Kitchen EIS - receives ingredients (need separate storage for each item type)
+    _ = engine.addStorage(KITCHEN_EIS_ID, .{ .item = .Vegetable });
+    const KITCHEN_EIS_MEAT_ID: u32 = 108;
+    const KITCHEN_EIS_WATER_ID: u32 = 109;
+    _ = engine.addStorage(KITCHEN_EIS_MEAT_ID, .{ .item = .Meat });
+    _ = engine.addStorage(KITCHEN_EIS_WATER_ID, .{ .item = .Water });
 
-    // Kitchen IIS - holds recipe requirements (consumed per cycle)
-    const iis_slots = [_]GameEngine.Slot{
-        .{ .item = .Vegetable, .capacity = VEGETABLES_NEEDED },
-        .{ .item = .Meat, .capacity = MEAT_NEEDED },
-        .{ .item = .Water, .capacity = WATER_NEEDED },
-    };
-    _ = engine.addStorage(KITCHEN_IIS_ID, .{ .slots = &iis_slots });
+    // Kitchen IIS - holds recipe requirements (1 of each per cycle)
+    const KITCHEN_IIS_VEG_ID: u32 = 110;
+    const KITCHEN_IIS_MEAT_ID: u32 = 111;
+    const KITCHEN_IIS_WATER_ID: u32 = 112;
+    _ = engine.addStorage(KITCHEN_IIS_VEG_ID, .{ .item = .Vegetable });
+    _ = engine.addStorage(KITCHEN_IIS_MEAT_ID, .{ .item = .Meat });
+    _ = engine.addStorage(KITCHEN_IIS_WATER_ID, .{ .item = .Water });
 
-    // Kitchen IOS - holds produced meal
-    const ios_slots = [_]GameEngine.Slot{.{ .item = .Meal, .capacity = 1 }};
-    _ = engine.addStorage(KITCHEN_IOS_ID, .{ .slots = &ios_slots });
+    // Kitchen IOS - holds produced meal (1 per cycle)
+    _ = engine.addStorage(KITCHEN_IOS_ID, .{ .item = .Meal });
 
     // Kitchen EOS - output buffer for finished meals
-    const eos_slots = [_]GameEngine.Slot{.{ .item = .Meal, .capacity = EOS_MAX_MEALS }};
-    _ = engine.addStorage(KITCHEN_EOS_ID, .{ .slots = &eos_slots });
+    _ = engine.addStorage(KITCHEN_EOS_ID, .{ .item = .Meal });
 
     // Add transports for moving ingredients from external sources to kitchen
     // Transport vegetables from garden to kitchen EIS
@@ -673,7 +616,7 @@ pub fn main() !void {
     // Transport meat from butcher to kitchen EIS
     _ = engine.addTransport(.{
         .from = BUTCHER_STORAGE_ID,
-        .to = KITCHEN_EIS_ID,
+        .to = KITCHEN_EIS_MEAT_ID,
         .item = .Meat,
         .priority = .Normal,
     });
@@ -681,7 +624,7 @@ pub fn main() !void {
     // Transport water from condenser EOS to kitchen EIS
     _ = engine.addTransport(.{
         .from = CONDENSER_EOS_ID,
-        .to = KITCHEN_EIS_ID,
+        .to = KITCHEN_EIS_WATER_ID,
         .item = .Water,
         .priority = .Normal,
     });
@@ -689,7 +632,7 @@ pub fn main() !void {
     // Water condenser workstation - producer (no inputs, just process and store)
     // Low priority so transporting ingredients takes precedence
     _ = engine.addWorkstation(CONDENSER_WORKSTATION_ID, .{
-        .ios = CONDENSER_IOS_ID,
+        .ios = &.{CONDENSER_IOS_ID},
         .eos = &.{CONDENSER_EOS_ID},
         .process_duration = CONDENSE_TIME,
         .priority = .Low,
@@ -697,9 +640,9 @@ pub fn main() !void {
 
     // Kitchen workstation - full cycle with all storages
     _ = engine.addWorkstation(KITCHEN_WORKSTATION_ID, .{
-        .eis = &.{KITCHEN_EIS_ID},
-        .iis = KITCHEN_IIS_ID,
-        .ios = KITCHEN_IOS_ID,
+        .eis = &.{ KITCHEN_EIS_ID, KITCHEN_EIS_MEAT_ID, KITCHEN_EIS_WATER_ID },
+        .iis = &.{ KITCHEN_IIS_VEG_ID, KITCHEN_IIS_MEAT_ID, KITCHEN_IIS_WATER_ID },
+        .ios = &.{KITCHEN_IOS_ID},
         .eos = &.{KITCHEN_EOS_ID},
         .process_duration = COOK_TIME,
         .priority = .High,
@@ -718,9 +661,10 @@ pub fn main() !void {
         std.debug.print("Run directly in terminal for interactive mode.\n\n", .{});
 
         // Add ingredients to garden and butcher
-        _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable, 3);
-        _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat, 2);
-        std.debug.print("Added 3 vegetables to garden and 2 meat to butcher\n\n", .{});
+        // Single-item storage: add 1 item each (max capacity)
+        _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable);
+        _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat);
+        std.debug.print("Added 1 vegetable to garden and 1 meat to butcher\n\n", .{});
 
         // Run 800 ticks (80 seconds) of simulation - enough for full cycle with condenser
         var tick: u32 = 0;
@@ -781,16 +725,16 @@ pub fn main() !void {
             switch (key) {
                 'q', 'Q' => running = false,
                 'm', 'M' => {
-                    _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat, 1);
+                    _ = engine.addToStorage(BUTCHER_STORAGE_ID, .Meat);
                     state.last_event = "Meat added to butcher";
                 },
                 'v', 'V' => {
-                    _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable, 1);
+                    _ = engine.addToStorage(GARDEN_STORAGE_ID, .Vegetable);
                     state.last_event = "Vegetable added to garden";
                 },
                 'w', 'W' => {
                     // Condenser works automatically, but W adds water directly (cheat)
-                    _ = engine.addToStorage(KITCHEN_EIS_ID, .Water, 1);
+                    _ = engine.addToStorage(KITCHEN_EIS_ID, .Water);
                     state.last_event = "Water added directly to EIS (cheat)";
                 },
                 'i', 'I' => handleInterrupt(&state),

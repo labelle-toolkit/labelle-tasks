@@ -1,35 +1,46 @@
 //! labelle-tasks: Task orchestration engine for Zig games
 //!
-//! A self-contained task orchestration engine with storage management.
+//! A self-contained task orchestration engine with storage management and
+//! hook-based event emission.
+//!
 //! Games interact via:
 //! - Creating storages (EIS, IIS, IOS, EOS) as separate entities
 //! - Creating workstations that reference storages
-//! - Providing callbacks for game-specific logic (movement, animations)
+//! - Registering hook handlers for lifecycle events
 //! - Notifying the engine of game events (pickup complete, store complete)
 //!
 //! Example:
 //! ```zig
+//! const tasks = @import("labelle_tasks");
 //! const Item = enum { Vegetable, Meat, Meal };
-//! var engine = tasks.Engine(u32, Item).init(allocator);
+//!
+//! // Define hook handlers (optional)
+//! const MyHooks = struct {
+//!     pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+//!         const info = payload.cycle_completed;
+//!         std.log.info("Cycle {d} completed!", .{info.cycles_completed});
+//!     }
+//! };
+//!
+//! // Create engine with dispatcher
+//! const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+//! var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 //! defer engine.deinit();
 //!
-//! // Create storages
-//! _ = engine.addStorage(EIS_ID, .{ .slots = &.{
-//!     .{ .item = .Vegetable, .capacity = 10 },
-//! }});
+//! // Create storages (each storage holds one item type)
+//! _ = engine.addStorage(EIS_ID, .{ .item = .Vegetable });
 //!
 //! // Create workstation referencing storages
-//! // EIS and EOS support multiple storages for flexible routing
 //! _ = engine.addWorkstation(KITCHEN_ID, .{
 //!     .eis = &.{EIS_ID},
-//!     .iis = IIS_ID,
-//!     .ios = IOS_ID,
+//!     .iis = &.{IIS_ID},
+//!     .ios = &.{IOS_ID},
 //!     .eos = &.{EOS_ID},
 //!     .process_duration = 40,
 //! });
 //!
-//! // Add items and engine automatically manages state
-//! _ = engine.addToStorage(EIS_ID, .Vegetable, 5);
+//! // Add item (each storage holds at most one item)
+//! _ = engine.addToStorage(EIS_ID, .Vegetable);
 //! ```
 //!
 //! ## Logging
@@ -55,7 +66,6 @@ const std = @import("std");
 
 const engine_mod = @import("engine.zig");
 pub const Engine = engine_mod.Engine;
-pub const EngineWithHooks = engine_mod.EngineWithHooks;
 
 // ============================================================================
 // Hook System

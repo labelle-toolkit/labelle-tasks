@@ -30,19 +30,23 @@ zig build examples
 
 The engine uses a **storage-based workflow**:
 - **EIS** (External Input Storage): Source of raw materials
-- **IIS** (Internal Input Storage): Recipe buffer (defines what items are needed)
-- **IOS** (Internal Output Storage): Output buffer
+- **IIS** (Internal Input Storage): Recipe input - each IIS defines one ingredient needed per cycle
+- **IOS** (Internal Output Storage): Recipe output - each IOS defines one product per cycle
 - **EOS** (External Output Storage): Final product storage
+
+Each storage holds **one item type** (quantity 0 or 1 in single-item model).
+For multi-item recipes, use multiple IIS storages (one for each unit of an ingredient required). For example, a recipe needing 2 Flour and 1 Meat would require three IIS storages: two for Flour and one for Meat.
 
 Workflow: `EIS → IIS (Pickup) → IOS (Process) → EOS (Store)`
 
 ### Key Design Principles
 
-1. **Generic over GameId and Item types** - `Engine(u32, MyItemEnum)`
+1. **Generic over GameId, Item, and Dispatcher types** - `Engine(u32, MyItemEnum, MyDispatcher)`
 2. **Storage-based workflow** - Items flow through defined storage paths
-3. **Multiple EIS/EOS support** - Flexible input/output routing
-4. **Transport tasks** - Recurring item movement between any storages
-5. **Callback-driven** - Games control movement/animations
+3. **Single-item storages** - Each storage holds one item type
+4. **Multiple storage support** - All storage references are slices for flexible routing
+5. **Transport tasks** - Recurring item movement between any storages
+6. **Hook-driven** - Games receive events via comptime hooks with zero overhead
 
 ### Core Types
 
@@ -55,28 +59,14 @@ Workflow: `EIS → IIS (Pickup) → IOS (Process) → EOS (Store)`
 ### Main Files
 
 - `src/root.zig` - Public API exports
-- `src/engine.zig` - Core Engine and EngineWithHooks implementation
-- `src/storage.zig` - Storage management
+- `src/engine.zig` - Core Engine implementation with hook support
+- `src/storage.zig` - Storage management (item type definition only, quantities in engine)
 - `src/hooks.zig` - Hook system for event observation
 - `src/log.zig` - Scoped logging utilities
 
-### Callback System
-
-Six callback types (all optional):
-
-```zig
-FindBestWorkerFn: fn(workstation_game_id: ?GameId, available_workers: []const GameId) ?GameId
-OnPickupStartedFn: fn(worker_id: GameId, workstation_id: GameId, eis_id: GameId) void
-OnProcessStartedFn: fn(worker_id: GameId, workstation_id: GameId) void
-OnProcessCompleteFn: fn(worker_id: GameId, workstation_id: GameId) void
-OnStoreStartedFn: fn(worker_id: GameId, workstation_id: GameId, eos_id: GameId) void
-OnWorkerReleasedFn: fn(worker_id: GameId, workstation_id: GameId) void
-OnTransportStartedFn: fn(worker_id: GameId, from_storage_id: GameId, to_storage_id: GameId, item: Item) void
-```
-
 ### Hook System
 
-In addition to callbacks, labelle-tasks provides a hook system compatible with labelle-engine.
+The engine uses a comptime hook system compatible with labelle-engine.
 
 **Hook Types:**
 - `pickup_started`, `process_started`, `process_completed`, `store_started` - Step lifecycle
@@ -95,27 +85,46 @@ const MyHooks = struct {
 };
 
 const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.EngineWithHooks(u32, Item, Dispatcher).init(allocator);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
+```
+
+### FindBestWorker Callback
+
+The only required callback selects which worker to assign:
+
+```zig
+engine.setFindBestWorker(fn(workstation_id: ?GameId, available_workers: []const GameId) ?GameId);
 ```
 
 ## Usage Pattern
 
 ```zig
 const Item = enum { Flour, Bread };
-var engine = tasks.Engine(u32, Item).init(allocator);
+
+// Define hooks (optional)
+const MyHooks = struct {
+    pub fn process_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+        // Play animation, etc.
+    }
+};
+
+const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
 defer engine.deinit();
 
-// Create storages
-_ = engine.addStorage(EIS_ID, .{ .slots = &.{.{ .item = .Flour, .capacity = 10 }} });
-_ = engine.addStorage(IIS_ID, .{ .slots = &.{.{ .item = .Flour, .capacity = 1 }} });
-_ = engine.addStorage(IOS_ID, .{ .slots = &.{.{ .item = .Bread, .capacity = 1 }} });
-_ = engine.addStorage(EOS_ID, .{ .slots = &.{.{ .item = .Bread, .capacity = 5 }} });
+engine.setFindBestWorker(findBestWorker);
 
-// Create workstation
+// Create storages (each storage holds ONE item type)
+_ = engine.addStorage(EIS_ID, .{ .item = .Flour });
+_ = engine.addStorage(IIS_ID, .{ .item = .Flour });   // Recipe needs 1 flour
+_ = engine.addStorage(IOS_ID, .{ .item = .Bread });   // Produces 1 bread
+_ = engine.addStorage(EOS_ID, .{ .item = .Bread });
+
+// Create workstation (all storage references are slices)
 _ = engine.addWorkstation(BAKERY_ID, .{
     .eis = &.{EIS_ID},
-    .iis = IIS_ID,
-    .ios = IOS_ID,
+    .iis = &.{IIS_ID},   // Multiple IIS for multi-ingredient recipes
+    .ios = &.{IOS_ID},   // Multiple IOS for multi-output recipes
     .eos = &.{EOS_ID},
     .process_duration = 3,
 });

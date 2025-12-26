@@ -2,7 +2,7 @@
 //!
 //! Demonstrates the labelle-tasks hook system with the storage-based API:
 //! - Defining hook handlers for task engine events
-//! - Using EngineWithHooks for hook-based integration
+//! - Using Engine with a HookDispatcher for hook-based integration
 //! - Observing pickup, process, store, and cycle events
 //!
 //! This example shows a simple bakery where a baker picks up flour,
@@ -114,7 +114,7 @@ const BakeryHooks = struct {
 // ============================================================================
 
 const Dispatcher = tasks.hooks.HookDispatcher(GameId, Item, BakeryHooks);
-const TaskEngine = tasks.EngineWithHooks(GameId, Item, Dispatcher);
+const TaskEngine = tasks.Engine(GameId, Item, Dispatcher);
 
 // ============================================================================
 // Callbacks (still needed for worker selection)
@@ -171,35 +171,27 @@ pub fn main() !void {
     std.debug.print("- Flour storage (EIS) with 5 flour\n", .{});
     std.debug.print("- Dough bowl (IIS) for 1 flour -> 1 bread\n", .{});
     std.debug.print("- Oven tray (IOS) for 1 bread output\n", .{});
-    std.debug.print("- Bread basket (EOS) capacity 3\n", .{});
+    std.debug.print("- Bread basket (EOS)\n", .{});
     std.debug.print("- Process time: 3 ticks\n\n", .{});
 
     // EIS: External Input Storage (flour supply)
-    _ = engine.addStorage(FLOUR_STORAGE, .{
-        .slots = &.{.{ .item = .Flour, .capacity = 10 }},
-    });
-    _ = engine.addToStorage(FLOUR_STORAGE, .Flour, 5);
+    _ = engine.addStorage(FLOUR_STORAGE, .{ .item = .Flour });
+    _ = engine.addToStorage(FLOUR_STORAGE, .Flour);
 
-    // IIS: Internal Input Storage (recipe)
-    _ = engine.addStorage(DOUGH_BOWL, .{
-        .slots = &.{.{ .item = .Flour, .capacity = 1 }},
-    });
+    // IIS: Internal Input Storage (recipe - 1 flour per cycle)
+    _ = engine.addStorage(DOUGH_BOWL, .{ .item = .Flour });
 
-    // IOS: Internal Output Storage (output)
-    _ = engine.addStorage(OVEN_TRAY, .{
-        .slots = &.{.{ .item = .Bread, .capacity = 1 }},
-    });
+    // IOS: Internal Output Storage (produces 1 bread per cycle)
+    _ = engine.addStorage(OVEN_TRAY, .{ .item = .Bread });
 
     // EOS: External Output Storage (bread basket)
-    _ = engine.addStorage(BREAD_BASKET, .{
-        .slots = &.{.{ .item = .Bread, .capacity = 3 }},
-    });
+    _ = engine.addStorage(BREAD_BASKET, .{ .item = .Bread });
 
     // Workstation
     _ = engine.addWorkstation(BAKERY, .{
         .eis = &.{FLOUR_STORAGE},
-        .iis = DOUGH_BOWL,
-        .ios = OVEN_TRAY,
+        .iis = &.{DOUGH_BOWL},
+        .ios = &.{OVEN_TRAY},
         .eos = &.{BREAD_BASKET},
         .process_duration = 3,
         .priority = .High,
@@ -269,10 +261,9 @@ pub fn main() !void {
             }
         }
 
-        // Check if we've made enough bread
-        const bread_count = engine.getStorageQuantity(BREAD_BASKET, .Bread);
-        if (bread_count >= 3) {
-            std.debug.print("\n[Tick {d}] Bread basket full! ({d} bread)\n", .{ tick, bread_count });
+        // Check if we've made enough bread (using cycle counter from hooks)
+        if (BakeryHooks.cycles_completed >= 3) {
+            std.debug.print("\n[Tick {d}] Made {d} loaves of bread!\n", .{ tick, BakeryHooks.cycles_completed });
             break;
         }
     }
@@ -302,10 +293,10 @@ pub fn main() !void {
     std.debug.assert(BakeryHooks.processes_completed >= 1);
     std.debug.print("[PASS] At least 1 process completed\n", .{});
 
-    // Verify final state
-    const final_bread = engine.getStorageQuantity(BREAD_BASKET, .Bread);
-    std.debug.assert(final_bread >= 1);
-    std.debug.print("[PASS] Bread basket has {d} bread\n", .{final_bread});
+    // Verify final state - with single-item storage, use hasItem
+    const has_bread = engine.hasItem(BREAD_BASKET, .Bread);
+    std.debug.assert(has_bread or BakeryHooks.cycles_completed >= 1);
+    std.debug.print("[PASS] Produced {d} loaves of bread\n", .{BakeryHooks.cycles_completed});
 
     std.debug.print("\n========================================\n", .{});
     std.debug.print("    ALL ASSERTIONS PASSED!              \n", .{});
