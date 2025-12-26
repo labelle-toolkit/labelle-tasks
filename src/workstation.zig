@@ -1,4 +1,5 @@
 const std = @import("std");
+const storage = @import("storage.zig");
 
 /// Entity type - matches labelle-engine's Entity
 pub const Entity = struct {
@@ -52,8 +53,25 @@ pub const StepType = enum {
     Store,
 };
 
+/// Position component for storage entities
+pub const StoragePosition = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+};
+
+/// Components that can be defined on a storage slot
+pub const StorageComponents = struct {
+    Position: StoragePosition = .{},
+    TaskStorage: storage.TaskStorage = .{},
+};
+
+/// Storage slot with inline component definitions
+pub const StorageSlot = struct {
+    components: StorageComponents = .{},
+};
+
 /// Generic comptime-sized workstation type.
-/// Storage references are filled by the loader when creating the entity.
+/// Storage configurations are defined in prefabs, entities created at load time.
 pub fn TaskWorkstation(
     comptime eis_count: usize,
     comptime iis_count: usize,
@@ -68,14 +86,14 @@ pub fn TaskWorkstation(
         pub const IOS_COUNT = ios_count;
         pub const EOS_COUNT = eos_count;
 
-        /// External Input Storage entities
-        eis: [eis_count]Entity = [_]Entity{Entity.invalid} ** eis_count,
-        /// Internal Input Storage entities (recipe inputs)
-        iis: [iis_count]Entity = [_]Entity{Entity.invalid} ** iis_count,
-        /// Internal Output Storage entities (recipe outputs)
-        ios: [ios_count]Entity = [_]Entity{Entity.invalid} ** ios_count,
-        /// External Output Storage entities
-        eos: [eos_count]Entity = [_]Entity{Entity.invalid} ** eos_count,
+        /// External Input Storage configurations
+        eis: [eis_count]StorageSlot = [_]StorageSlot{.{}} ** eis_count,
+        /// Internal Input Storage configurations
+        iis: [iis_count]StorageSlot = [_]StorageSlot{.{}} ** iis_count,
+        /// Internal Output Storage configurations
+        ios: [ios_count]StorageSlot = [_]StorageSlot{.{}} ** ios_count,
+        /// External Output Storage configurations
+        eos: [eos_count]StorageSlot = [_]StorageSlot{.{}} ** eos_count,
 
         /// Check if this is a producer workstation (no inputs)
         pub fn isProducer(self: *const Self) bool {
@@ -88,34 +106,25 @@ pub fn TaskWorkstation(
             _ = self;
             return eis_count + iis_count + ios_count + eos_count;
         }
-
-        /// Check if all storage references are valid
-        pub fn isFullyBound(self: *const Self) bool {
-            for (self.eis) |e| if (!e.isValid()) return false;
-            for (self.iis) |e| if (!e.isValid()) return false;
-            for (self.ios) |e| if (!e.isValid()) return false;
-            for (self.eos) |e| if (!e.isValid()) return false;
-            return true;
-        }
     };
 }
 
 /// Common interface for working with any workstation type
 pub fn WorkstationInterface(comptime T: type) type {
     return struct {
-        pub fn getEis(ws: *const T) []const Entity {
+        pub fn getEis(ws: *const T) []const StorageSlot {
             return &ws.eis;
         }
 
-        pub fn getIis(ws: *const T) []const Entity {
+        pub fn getIis(ws: *const T) []const StorageSlot {
             return &ws.iis;
         }
 
-        pub fn getIos(ws: *const T) []const Entity {
+        pub fn getIos(ws: *const T) []const StorageSlot {
             return &ws.ios;
         }
 
-        pub fn getEos(ws: *const T) []const Entity {
+        pub fn getEos(ws: *const T) []const StorageSlot {
             return &ws.eos;
         }
 
@@ -132,7 +141,7 @@ pub fn WorkstationInterface(comptime T: type) type {
 
 test "TaskWorkstation basic creation" {
     const Kitchen = TaskWorkstation(2, 2, 1, 1);
-    var kitchen = Kitchen{};
+    const kitchen = Kitchen{};
 
     try std.testing.expectEqual(2, Kitchen.EIS_COUNT);
     try std.testing.expectEqual(2, Kitchen.IIS_COUNT);
@@ -144,22 +153,28 @@ test "TaskWorkstation basic creation" {
 
 test "TaskWorkstation producer type" {
     const Well = TaskWorkstation(0, 0, 1, 1);
-    var well = Well{};
+    const well = Well{};
 
     try std.testing.expectEqual(true, well.isProducer());
     try std.testing.expectEqual(2, well.totalStorages());
 }
 
-test "TaskWorkstation storage binding" {
+test "TaskWorkstation storage configuration" {
     const Kitchen = TaskWorkstation(1, 1, 1, 1);
-    var kitchen = Kitchen{};
+    const kitchen = Kitchen{
+        .eis = .{.{ .components = .{
+            .Position = .{ .x = -60, .y = 0 },
+            .TaskStorage = .{ .priority = .High },
+        } }},
+        .iis = .{.{}},
+        .ios = .{.{}},
+        .eos = .{.{ .components = .{
+            .Position = .{ .x = 60, .y = 0 },
+            .TaskStorage = .{ .has_item = true },
+        } }},
+    };
 
-    try std.testing.expectEqual(false, kitchen.isFullyBound());
-
-    kitchen.eis[0] = Entity{ .id = 1 };
-    kitchen.iis[0] = Entity{ .id = 2 };
-    kitchen.ios[0] = Entity{ .id = 3 };
-    kitchen.eos[0] = Entity{ .id = 4 };
-
-    try std.testing.expectEqual(true, kitchen.isFullyBound());
+    try std.testing.expectEqual(.High, kitchen.eis[0].components.TaskStorage.priority);
+    try std.testing.expectEqual(-60, kitchen.eis[0].components.Position.x);
+    try std.testing.expectEqual(true, kitchen.eos[0].components.TaskStorage.has_item);
 }
