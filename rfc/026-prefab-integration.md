@@ -130,6 +130,8 @@ pub fn EcsComponents(comptime ItemType: type) type {
         pub const TaskStorage = struct {
             /// What item type this storage accepts
             accepts: ItemSet = ItemSet.initFull(),
+            /// Priority for storage selection (higher = preferred)
+            priority: Priority = .Normal,
         };
 
         /// Role marker for storage entities (child of workstation)
@@ -330,6 +332,7 @@ pub const TaskWorkstation = struct {
 
 pub const TaskStorage = struct {
     accepts: ItemSet = ItemSet.initFull(),
+    priority: Priority = .Normal,
 };
 
 pub const TaskStorageRole = struct {
