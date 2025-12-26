@@ -1,196 +1,83 @@
-//! labelle-tasks: Task orchestration engine for Zig games
+//! labelle-tasks: Comptime workstation task system for labelle-engine
 //!
-//! A self-contained task orchestration engine with storage management and
-//! hook-based event emission.
+//! This module provides a task orchestration system using comptime-sized
+//! workstation types. Each workstation variant is a distinct ECS component
+//! with fixed storage array sizes.
 //!
-//! Games interact via:
-//! - Creating storages (EIS, IIS, IOS, EOS) as separate entities
-//! - Creating workstations that reference storages
-//! - Registering hook handlers for lifecycle events
-//! - Notifying the engine of game events (pickup complete, store complete)
-//!
-//! Example:
-//! ```zig
-//! const tasks = @import("labelle_tasks");
-//! const Item = enum { Vegetable, Meat, Meal };
-//!
-//! // Define hook handlers (optional)
-//! const MyHooks = struct {
-//!     pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
-//!         const info = payload.cycle_completed;
-//!         std.log.info("Cycle {d} completed!", .{info.cycles_completed});
-//!     }
-//! };
-//!
-//! // Create engine with dispatcher
-//! const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-//! var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
-//! defer engine.deinit();
-//!
-//! // Create storages (each storage holds one item type)
-//! _ = engine.addStorage(EIS_ID, .{ .item = .Vegetable });
-//!
-//! // Create workstation referencing storages
-//! _ = engine.addWorkstation(KITCHEN_ID, .{
-//!     .eis = &.{EIS_ID},
-//!     .iis = &.{IIS_ID},
-//!     .ios = &.{IOS_ID},
-//!     .eos = &.{EOS_ID},
-//!     .process_duration = 40,
-//! });
-//!
-//! // Add item (each storage holds at most one item)
-//! _ = engine.addToStorage(EIS_ID, .Vegetable);
-//! ```
-//!
-//! ## Logging
-//!
-//! The engine uses Zig's standard library scoped logging. Configure log levels
-//! in your root file:
+//! ## Quick Start
 //!
 //! ```zig
-//! pub const std_options: std.Options = .{
-//!     .log_level = .debug,
-//!     .log_scope_levels = &.{
-//!         .{ .scope = .labelle_tasks_engine, .level = .info },
-//!         .{ .scope = .labelle_tasks_storage, .level = .warn },
-//!     },
-//! };
+//! const tasks = @import("labelle-tasks");
+//!
+//! // Define workstation types in your game
+//! pub const KitchenWorkstation = tasks.TaskWorkstation(2, 2, 1, 1);
+//! pub const WellWorkstation = tasks.TaskWorkstation(0, 0, 1, 1);
+//!
+//! // Register as ECS components alongside TaskWorkstationBinding
 //! ```
+//!
+//! ## Workflow
+//!
+//! Items flow through storages: EIS → IIS (Pickup) → IOS (Process) → EOS (Store)
+//!
+//! - **EIS**: External Input Storage - source of raw materials
+//! - **IIS**: Internal Input Storage - recipe inputs (define ingredient count)
+//! - **IOS**: Internal Output Storage - recipe outputs
+//! - **EOS**: External Output Storage - finished products
 
-const std = @import("std");
+const workstation = @import("workstation.zig");
+const binding = @import("binding.zig");
+const storage = @import("storage.zig");
 
-// ============================================================================
-// Engine API
-// ============================================================================
+// === Core Types ===
 
-const engine_mod = @import("engine.zig");
-pub const Engine = engine_mod.Engine;
+/// Generic comptime-sized workstation type.
+/// Create workstation variants with specific storage counts.
+pub const TaskWorkstation = workstation.TaskWorkstation;
 
-// ============================================================================
-// Hook System
-// ============================================================================
+/// Interface for working with any workstation type generically.
+pub const WorkstationInterface = workstation.WorkstationInterface;
 
-pub const hooks = @import("hooks.zig");
+/// Common binding component for all workstation types.
+/// Holds configuration and runtime state.
+pub const TaskWorkstationBinding = binding.TaskWorkstationBinding;
 
-// ============================================================================
-// Simplified Engine Creation
-// ============================================================================
+/// Storage component for items in the task system.
+pub const TaskStorage = storage.TaskStorage;
 
-/// Creates a task engine with hook handlers automatically wired.
-///
-/// This is a convenience wrapper that eliminates the need to manually
-/// create a HookDispatcher. Simply pass your hooks struct directly.
-///
-/// Example:
-/// ```zig
-/// const MyHooks = struct {
-///     pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
-///         // handle pickup
-///     }
-///     pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
-///         // handle cycle completion
-///     }
-/// };
-///
-/// // Before (manual dispatcher):
-/// // const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-/// // var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
-///
-/// // After (auto-wrapped):
-/// var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
-/// ```
-///
-/// For an engine without hooks, pass an empty struct:
-/// ```zig
-/// var engine = tasks.EngineWithHooks(u32, Item, struct {}).init(allocator);
-/// ```
-pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Hooks: type) type {
-    const Dispatcher = hooks.HookDispatcher(GameId, Item, Hooks);
-    return Engine(GameId, Item, Dispatcher);
-}
+/// Role marker for storage entities (eis/iis/ios/eos).
+pub const TaskStorageRole = storage.TaskStorageRole;
 
-// ============================================================================
-// Logging
-// ============================================================================
+// === Enums ===
 
-pub const log = @import("log.zig");
+/// Entity reference type.
+pub const Entity = workstation.Entity;
 
-// ============================================================================
-// Components (for plugin integration)
-// ============================================================================
+/// Priority levels for workstations and storages.
+pub const Priority = workstation.Priority;
 
-/// Component types exported for labelle-engine plugin integration.
-/// When used as a plugin, these types are automatically registered
-/// with ComponentRegistryMulti.
+/// Workstation status in the task pipeline.
+pub const WorkstationStatus = workstation.WorkstationStatus;
+
+/// Current step in the workstation cycle.
+pub const StepType = workstation.StepType;
+
+/// Storage role in the workstation workflow.
+pub const StorageRole = storage.StorageRole;
+
+// === Components Export ===
+
+/// All components provided by labelle-tasks for ECS registration.
 pub const Components = struct {
-    pub const Priority = enum {
-        Low,
-        Normal,
-        High,
-        Critical,
-    };
-
-    pub const StepType = @import("engine.zig").StepType;
+    pub const TaskWorkstationBinding = binding.TaskWorkstationBinding;
+    pub const TaskStorage = storage.TaskStorage;
+    pub const TaskStorageRole = storage.TaskStorageRole;
 };
 
-// ============================================================================
-// ECS Components (for plugin integration)
-// ============================================================================
+// === Tests ===
 
-/// Creates component types parameterized by the game's item type.
-///
-/// Example:
-/// ```zig
-/// const ItemType = enum { wheat, carrot, flour };
-/// const C = labelle_tasks.EcsComponents(ItemType);
-///
-/// // Storage accepting specific items
-/// .TaskStorage = .{ .accepts = C.ItemSet.initMany(&.{ .wheat, .carrot }) },
-///
-/// // Storage accepting all items (default)
-/// .TaskStorage = .{},
-/// ```
-pub fn EcsComponents(comptime ItemType: type) type {
-    return struct {
-        /// Set type for combining multiple item types.
-        pub const ItemSet = std.EnumSet(ItemType);
-
-        /// Marks an entity as a worker that can perform tasks.
-        pub const TaskWorker = struct {
-            /// Worker priority for task assignment (0-15, higher = more important).
-            priority: u4 = 5,
-        };
-
-        /// Configures an entity as a workstation that processes items.
-        pub const TaskWorkstation = struct {
-            /// Duration in ticks for the processing step.
-            process_duration: u32 = 0,
-            /// Workstation priority for worker assignment (0-15, higher = more important).
-            priority: u4 = 5,
-        };
-
-        /// Marks an entity as a storage location.
-        pub const TaskStorage = struct {
-            /// Set of item types this storage accepts. Defaults to all items.
-            accepts: ItemSet = ItemSet.initFull(),
-
-            /// Check if this storage accepts the given item type.
-            pub fn canAccept(self: TaskStorage, item_type: ItemType) bool {
-                return self.accepts.contains(item_type);
-            }
-        };
-
-        /// Marks an entity as an item that can be stored or carried.
-        pub const TaskItem = struct {
-            /// The type of this item.
-            item_type: ItemType,
-        };
-
-        /// Configures a transport route between two storages.
-        pub const TaskTransport = struct {
-            /// Priority for transport task assignment (0-15, higher = more important).
-            priority: u4 = 5,
-        };
-    };
+test {
+    _ = @import("workstation.zig");
+    _ = @import("binding.zig");
+    _ = @import("storage.zig");
 }

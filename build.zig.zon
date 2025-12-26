@@ -1,13 +1,9 @@
 .{
+    .fingerprint = 0x9883692330f70d05,
     .name = .labelle_tasks,
-    .version = "0.8.0",
-    .fingerprint = 0x98836923cbb94d87,
-    .dependencies = .{
-        .zspec = .{
-            .url = "https://github.com/apotema/zspec/archive/refs/heads/main.tar.gz",
-            .hash = "zspec-0.6.0-jaKLbU5DAwAYa0jR0cnFGuIbSrxD6ojh-oyXj9ooyb3V",
-        },
-    },
+    .version = "0.1.0",
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
