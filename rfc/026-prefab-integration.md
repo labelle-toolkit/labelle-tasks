@@ -20,6 +20,45 @@ labelle-engine already has a powerful system for:
 
 labelle-tasks should leverage this existing infrastructure rather than inventing new patterns.
 
+## Real-world Example: labelle_flying_platform
+
+The flying platform demo already implements a pattern very similar to this proposal:
+
+### Room Component with Entity Lists
+
+```zig
+// components/room.zig
+pub const Room = struct {
+    movement_nodes: []const engine.Entity = &.{},
+};
+```
+
+### Usage in Prefab (simple_kitchen.zon)
+
+```zig
+.Room = .{
+    .movement_nodes = .{
+        .{
+            .components = .{
+                .Position = .{ .x = 26, .y = -93 },
+                .Shape = .{ .type = .circle, .radius = 4 },
+                .MovementNode = .{},
+            },
+        },
+        .{
+            .components = .{
+                .Position = .{ .x = 78, .y = -93 },
+                .Shape = .{ .type = .circle, .radius = 4 },
+                .MovementNode = .{},
+            },
+        },
+        // ... more nodes
+    },
+},
+```
+
+This demonstrates that **inline entity definitions with multiple components work today** in labelle-engine. The movement nodes have no sprites - they only have Shape for debug visualization. Internal storages (IIS/IOS) can follow the same pattern.
+
 ## labelle-engine Patterns (Reference)
 
 ### Entity References in Components
@@ -379,12 +418,14 @@ How do transports reference workstations/storages by name in scenes?
 
 Internal storages typically don't need visuals or positions. Should they:
 
-**Option A: Be invisible entities**
+**Option A: Be invisible entities (Recommended)**
 ```zig
 .iis = .{
     .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Flour = true } } } },
 },
 ```
+
+Based on the `movement_nodes` pattern in flying platform, invisible entities are the natural fit. Movement nodes have no sprites - only Shape for debug visualization. Internal storages follow the same pattern: entities that exist for logic but may optionally have debug visuals.
 
 **Option B: Be data-only (not entities)**
 ```zig
@@ -392,6 +433,18 @@ Internal storages typically don't need visuals or positions. Should they:
 .recipe_inputs = .{ .Flour, .Flour, .Meat },  // 2 flour + 1 meat
 .recipe_outputs = .{ .Bread },
 ```
+
+**Option C: Hybrid - Recipe shorthand with auto-generated entities**
+```zig
+.TaskWorkstation = .{
+    .recipe = .{ .inputs = .{ .Flour, .Meat }, .outputs = .{ .Meal } },
+    // Engine auto-generates IIS/IOS entities from recipe
+    .eis = .{ ... },  // Only external storages need explicit definition
+    .eos = .{ ... },
+},
+```
+
+This hybrid approach keeps prefabs readable while still using entities under the hood. The engine would auto-generate IIS/IOS entities based on the recipe definition.
 
 ### 3. Task Engine Ownership
 
@@ -451,3 +504,4 @@ var scene = try Loader.load(@import("scenes/kitchen.zon"), ctx);
 - [labelle-engine loader.zig](https://github.com/labelle-toolkit/labelle-engine/blob/main/src/loader.zig) - Entity reference handling
 - [labelle-engine nested_prefab_test.zig](https://github.com/labelle-toolkit/labelle-engine/blob/main/test/nested_prefab_test.zig) - Entity list patterns
 - [labelle-engine zon_coercion.zig](https://github.com/labelle-toolkit/labelle-engine/blob/main/src/zon_coercion.zig) - Entity detection
+- [labelle_flying_platform simple_kitchen.zon](https://github.com/labelle-toolkit/labelle_flying_platform) - Real-world example with Room.movement_nodes pattern
