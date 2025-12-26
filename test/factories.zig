@@ -3,6 +3,8 @@ const zspec = @import("zspec");
 const Factory = zspec.Factory;
 const tasks = @import("labelle_tasks");
 
+const factory_defs = @import("factories.zon");
+
 // ============================================================================
 // Test Types
 // ============================================================================
@@ -130,16 +132,7 @@ pub const KitchenConfig = struct {
     output_item: Item = .Meal,
 };
 
-pub const KitchenFactory = Factory.define(KitchenConfig, .{
-    .eis_id = IDs.EIS_VEG,
-    .iis_id = IDs.IIS_VEG,
-    .ios_id = IDs.IOS_MEAL,
-    .eos_id = IDs.EOS_MEAL,
-    .workstation_id = IDs.WORKSTATION_1,
-    .process_duration = 5,
-    .input_item = .Vegetable,
-    .output_item = .Meal,
-});
+pub const KitchenFactory = Factory.defineFrom(KitchenConfig, factory_defs.kitchen);
 
 /// Sets up a kitchen workstation with all storages
 pub fn setupKitchen(eng: *TestEngine, config: KitchenConfig) void {
@@ -167,14 +160,7 @@ pub const ProducerConfig = struct {
     priority: tasks.Components.Priority = .Normal,
 };
 
-pub const ProducerFactory = Factory.define(ProducerConfig, .{
-    .ios_id = IDs.IOS_WATER,
-    .eos_id = IDs.EOS_WATER,
-    .workstation_id = IDs.WORKSTATION_1,
-    .process_duration = 3,
-    .output_item = .Water,
-    .priority = .Normal,
-});
+pub const ProducerFactory = Factory.defineFrom(ProducerConfig, factory_defs.producer);
 
 /// Sets up a producer workstation (no inputs required)
 pub fn setupProducer(eng: *TestEngine, config: ProducerConfig) void {
@@ -196,11 +182,7 @@ pub const TransportConfig = struct {
     item: Item = .Meal,
 };
 
-pub const TransportFactory = Factory.define(TransportConfig, .{
-    .from_id = IDs.SOURCE,
-    .to_id = IDs.DEST,
-    .item = .Meal,
-});
+pub const TransportFactory = Factory.defineFrom(TransportConfig, factory_defs.transport);
 
 /// Sets up a transport route between two storages
 pub fn setupTransport(eng: *TestEngine, config: TransportConfig) void {

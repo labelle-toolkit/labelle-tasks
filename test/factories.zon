@@ -1,0 +1,25 @@
+.{
+    .kitchen = .{
+        .eis_id = 10,
+        .iis_id = 20,
+        .ios_id = 12,
+        .eos_id = 13,
+        .workstation_id = 100,
+        .process_duration = 5,
+        .input_item = .Vegetable,
+        .output_item = .Meal,
+    },
+    .producer = .{
+        .ios_id = 32,
+        .eos_id = 33,
+        .workstation_id = 100,
+        .process_duration = 3,
+        .output_item = .Water,
+        .priority = .Normal,
+    },
+    .transport = .{
+        .from_id = 50,
+        .to_id = 60,
+        .item = .Meal,
+    },
+}
