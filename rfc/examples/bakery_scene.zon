@@ -45,10 +45,11 @@
                 .inputs = .{ .Flour, .Egg, .Sugar },
                 .outputs = .{ .Cake },
             },
+            // Named EIS entries for clarity in transport references
             .eis = .{
-                .{ .position = .{ .x = 230, .y = 80 }, .accepts = .{ .Flour } },
-                .{ .position = .{ .x = 230, .y = 100 }, .accepts = .{ .Egg } },
-                .{ .position = .{ .x = 230, .y = 120 }, .accepts = .{ .Sugar } },
+                .flour = .{ .position = .{ .x = 230, .y = 80 }, .accepts = .{ .Flour } },
+                .egg = .{ .position = .{ .x = 230, .y = 100 }, .accepts = .{ .Egg } },
+                .sugar = .{ .position = .{ .x = 230, .y = 120 }, .accepts = .{ .Sugar } },
             },
             .eos = .{
                 .{ .position = .{ .x = 270, .y = 100 }, .sprite = "cake_display" },
@@ -66,7 +67,7 @@
         },
         .flour_to_cake = .{
             .from = "flour_mill.eos",
-            .to = "cake_station.eis[0]",
+            .to = "cake_station.eis.flour",
             .item = .Flour,
             .priority = .Low,
         },
