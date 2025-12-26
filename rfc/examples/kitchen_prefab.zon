@@ -1,0 +1,50 @@
+// Kitchen workstation prefab
+// Defines a complete workstation with all storages in one file
+.{
+    .name = "kitchen",
+    .root = .{
+        .components = .{
+            .TaskWorkstation = .{
+                .process_duration = 40,
+                .priority = .High,
+            },
+            .Position = .{ .x = 0, .y = 0 },
+            .Sprite = .{ .id = "kitchen" },
+        },
+    },
+    .storages = .{
+        .eis = .{
+            .{
+                .item = .Vegetable,
+                .components = .{
+                    .Position = .{ .x = -30, .y = 0 },
+                    .Sprite = .{ .id = "ingredient_shelf" },
+                },
+            },
+            .{
+                .item = .Meat,
+                .components = .{
+                    .Position = .{ .x = -30, .y = 20 },
+                    .Sprite = .{ .id = "meat_rack" },
+                },
+            },
+        },
+        .iis = .{
+            // Recipe inputs: 1 Vegetable + 1 Meat = 1 Meal
+            .{ .item = .Vegetable },
+            .{ .item = .Meat },
+        },
+        .ios = .{
+            .{ .item = .Meal },
+        },
+        .eos = .{
+            .{
+                .item = .Meal,
+                .components = .{
+                    .Position = .{ .x = 30, .y = 0 },
+                    .Sprite = .{ .id = "serving_counter" },
+                },
+            },
+        },
+    },
+}

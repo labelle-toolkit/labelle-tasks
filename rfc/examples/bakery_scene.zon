@@ -1,0 +1,110 @@
+// Bakery scene - defines all workstations and transports for a bakery game
+// This approach puts everything in one scene file rather than separate prefabs
+.{
+    .name = "bakery_level_1",
+
+    // Workstations defined inline in the scene
+    .workstations = .{
+        .flour_mill = .{
+            .position = .{ .x = 50, .y = 100 },
+            .process_duration = 30,
+            .priority = .Normal,
+            // Producer workstation - no inputs needed
+            .recipe = .{
+                .inputs = .{},
+                .outputs = .{ .Flour },
+            },
+            .eos = .{
+                .position = .{ .x = 70, .y = 100 },
+                .sprite = "flour_bin",
+            },
+        },
+
+        .oven = .{
+            .position = .{ .x = 150, .y = 100 },
+            .process_duration = 60,
+            .priority = .High,
+            .recipe = .{
+                // 2 Flour = 1 Bread
+                .inputs = .{ .Flour, .Flour },
+                .outputs = .{ .Bread },
+            },
+            .eis = .{
+                .position = .{ .x = 130, .y = 100 },
+                .sprite = "flour_shelf",
+                .accepts = .{ .Flour },
+            },
+            .eos = .{
+                .position = .{ .x = 170, .y = 100 },
+                .sprite = "bread_rack",
+            },
+        },
+
+        .cake_station = .{
+            .position = .{ .x = 250, .y = 100 },
+            .process_duration = 90,
+            .priority = .High,
+            .recipe = .{
+                // 1 Flour + 1 Egg + 1 Sugar = 1 Cake
+                .inputs = .{ .Flour, .Egg, .Sugar },
+                .outputs = .{ .Cake },
+            },
+            .eis = .{
+                .{ .position = .{ .x = 230, .y = 80 }, .accepts = .{ .Flour } },
+                .{ .position = .{ .x = 230, .y = 100 }, .accepts = .{ .Egg } },
+                .{ .position = .{ .x = 230, .y = 120 }, .accepts = .{ .Sugar } },
+            },
+            .eos = .{
+                .position = .{ .x = 270, .y = 100 },
+                .sprite = "cake_display",
+            },
+        },
+    },
+
+    // Transports move items between workstations
+    .transports = .{
+        .flour_to_oven = .{
+            .from = "flour_mill.eos",
+            .to = "oven.eis",
+            .item = .Flour,
+            .priority = .Normal,
+        },
+        .flour_to_cake = .{
+            .from = "flour_mill.eos",
+            .to = "cake_station.eis[0]",
+            .item = .Flour,
+            .priority = .Low,
+        },
+    },
+
+    // Workers
+    .workers = .{
+        .baker_1 = .{
+            .position = .{ .x = 100, .y = 150 },
+            .priority = 5,
+        },
+        .baker_2 = .{
+            .position = .{ .x = 200, .y = 150 },
+            .priority = 5,
+        },
+    },
+
+    // External storages (pantry, delivery, etc.)
+    .storages = .{
+        .egg_delivery = .{
+            .position = .{ .x = 0, .y = 50 },
+            .item = .Egg,
+            .sprite = "delivery_crate",
+        },
+        .sugar_pantry = .{
+            .position = .{ .x = 0, .y = 80 },
+            .item = .Sugar,
+            .sprite = "sugar_bag",
+        },
+        .sales_counter = .{
+            .position = .{ .x = 300, .y = 50 },
+            .accepts = .{ .Bread, .Cake },
+            .sprite = "sales_counter",
+        },
+    },
+}

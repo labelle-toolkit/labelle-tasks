@@ -230,6 +230,56 @@ Can storages be added/removed from workstations at runtime?
 2. How does this interact with save/load? Do we serialize the blueprint or the expanded entities?
 3. Should prefabs support variants (e.g., `KitchenPrefab.withPriority(.High)`)?
 
+## Data-Driven Examples
+
+See the `examples/` directory for .zon file examples:
+
+### Prefab Approach
+
+Individual workstation prefabs that can be spawned multiple times:
+
+- [`kitchen_prefab.zon`](examples/kitchen_prefab.zon) - Transformer workstation (inputs → outputs)
+- [`water_well_prefab.zon`](examples/water_well_prefab.zon) - Producer workstation (no inputs)
+
+```zig
+// Load and spawn prefab
+const KitchenPrefab = @import("prefabs/kitchen_prefab.zon");
+const kitchen = world.spawnPrefab(KitchenPrefab, .{ .position = .{ .x = 100, .y = 50 } });
+```
+
+### Scene Approach
+
+Complete level definition with all workstations, transports, and workers:
+
+- [`bakery_scene.zon`](examples/bakery_scene.zon) - Full bakery level
+
+```zig
+// Load entire scene
+const BakeryScene = @import("scenes/bakery_scene.zon");
+world.loadScene(BakeryScene);
+```
+
+### Trade-offs
+
+| Approach | Use Case | Pros | Cons |
+|----------|----------|------|------|
+| Prefabs | Reusable workstations | Composable, spawn anywhere | Need separate scene file |
+| Scenes | Level design | All-in-one, editor-friendly | Less reusable |
+| Hybrid | Production games | Best of both | More files to manage |
+
+**Recommendation**: Support both. Prefabs for reusable workstation types, scenes for level layout. Scenes can reference prefabs:
+
+```zig
+// Scene references prefabs
+.{
+    .workstations = .{
+        .kitchen_1 = .{ .prefab = "kitchen", .position = .{ .x = 100, .y = 50 } },
+        .kitchen_2 = .{ .prefab = "kitchen", .position = .{ .x = 200, .y = 50 } },
+        .well = .{ .prefab = "water_well", .position = .{ .x = 50, .y = 100 } },
+    },
+}
+```
+
 ## References
 
 - [labelle-tasks EcsComponents](../src/root.zig)

@@ -1,0 +1,30 @@
+// Water well - producer workstation (no inputs)
+// Simplest workstation type: just produces items over time
+.{
+    .name = "water_well",
+    .root = .{
+        .components = .{
+            .TaskWorkstation = .{
+                .process_duration = 20,
+                .priority = .Low,
+            },
+            .Position = .{ .x = 0, .y = 0 },
+            .Sprite = .{ .id = "well" },
+        },
+    },
+    .storages = .{
+        // No EIS/IIS - producer workstation
+        .ios = .{
+            .{ .item = .Water },
+        },
+        .eos = .{
+            .{
+                .item = .Water,
+                .components = .{
+                    .Position = .{ .x = 15, .y = 0 },
+                    .Sprite = .{ .id = "water_bucket" },
+                },
+            },
+        },
+    },
+}
