@@ -10,8 +10,7 @@ const factory_defs = @import("factories.zon");
 // ============================================================================
 
 pub const Item = enum { Vegetable, Meat, Meal, Water };
-pub const TestDispatcher = tasks.hooks.HookDispatcher(u32, Item, TestHooks);
-pub const TestEngine = tasks.Engine(u32, Item, TestDispatcher);
+pub const TestEngine = tasks.EngineWithHooks(u32, Item, TestHooks);
 
 // ============================================================================
 // Standard Test IDs
@@ -28,6 +27,7 @@ pub const IDs = struct {
 
     // Kitchen storages (primary)
     pub const EIS_VEG: u32 = 10;
+    pub const EIS_VEG_2: u32 = 14;
     pub const EIS_MEAT: u32 = 11;
     pub const IIS_VEG: u32 = 20;
     pub const IIS_MEAT: u32 = 21;

@@ -101,9 +101,9 @@ pub const hooks = @import("hooks.zig");
 /// var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
 /// ```
 ///
-/// For an engine without hooks, use `Engine` with `hooks.NoOpDispatcher`:
+/// For an engine without hooks, pass an empty struct:
 /// ```zig
-/// var engine = tasks.Engine(u32, Item, tasks.hooks.NoOpDispatcher(u32, Item)).init(allocator);
+/// var engine = tasks.EngineWithHooks(u32, Item, struct {}).init(allocator);
 /// ```
 pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Hooks: type) type {
     const Dispatcher = hooks.HookDispatcher(GameId, Item, Hooks);

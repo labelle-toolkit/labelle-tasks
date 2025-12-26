@@ -270,7 +270,9 @@ pub fn EmptyDispatcher(comptime GameId: type, comptime Item: type) type {
     return HookDispatcher(GameId, Item, struct {});
 }
 
-/// Alias for EmptyDispatcher - clearer naming for common use case.
+/// A no-operation hook dispatcher that ignores all hook events.
+/// This is an alias for `EmptyDispatcher` with clearer naming.
+/// Use this when you need an engine but don't want to handle any hooks.
 pub const NoOpDispatcher = EmptyDispatcher;
 
 /// Convenience type for creating a task hook dispatcher.

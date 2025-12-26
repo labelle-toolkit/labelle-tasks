@@ -519,14 +519,14 @@ pub const @"Engine" = struct {
 
             // Two EIS storages for same item type
             _ = eng.addStorage(IDs.EIS_VEG, .{ .item = .Vegetable }); // EIS 1
-            _ = eng.addStorage(IDs.EIS_MEAT, .{ .item = .Vegetable }); // EIS 2 (using MEAT id for different storage)
+            _ = eng.addStorage(IDs.EIS_VEG_2, .{ .item = .Vegetable }); // EIS 2
             _ = eng.addStorage(IDs.IIS_VEG, .{ .item = .Vegetable });
             _ = eng.addStorage(IDs.IOS_MEAL, .{ .item = .Meal });
             _ = eng.addStorage(IDs.EOS_MEAL, .{ .item = .Meal });
 
             _ = eng.addWorker(IDs.WORKER_1, .{});
             _ = eng.addWorkstation(IDs.WORKSTATION_1, .{
-                .eis = &.{ IDs.EIS_VEG, IDs.EIS_MEAT }, // Multiple EIS
+                .eis = &.{ IDs.EIS_VEG, IDs.EIS_VEG_2 }, // Multiple EIS
                 .iis = &.{IDs.IIS_VEG},
                 .ios = &.{IDs.IOS_MEAL},
                 .eos = &.{IDs.EOS_MEAL},
@@ -534,7 +534,7 @@ pub const @"Engine" = struct {
             });
 
             // Add item only to second EIS
-            _ = eng.addToStorage(IDs.EIS_MEAT, .Vegetable);
+            _ = eng.addToStorage(IDs.EIS_VEG_2, .Vegetable);
 
             // Workstation should start (second EIS has item)
             try expect.equal(eng.getWorkstationStatus(IDs.WORKSTATION_1).?, .Active);
@@ -542,7 +542,7 @@ pub const @"Engine" = struct {
 
             // Complete pickup - item from EIS 2 should transfer to IIS
             eng.notifyPickupComplete(IDs.WORKER_1);
-            try expect.equal(eng.hasItem(IDs.EIS_MEAT, .Vegetable), false);
+            try expect.equal(eng.hasItem(IDs.EIS_VEG_2, .Vegetable), false);
             try expect.equal(eng.hasItem(IDs.IIS_VEG, .Vegetable), true);
         }
 
