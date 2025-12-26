@@ -107,9 +107,9 @@ const Room = struct {
 
 ## Proposed Design for labelle-tasks
 
-### 1. TaskWorkstation Component
+### 1. ECS Components (Parent-Child Model)
 
-Define a component that uses entity references for storages:
+The key insight: **workstation doesn't store entity references**. Instead, storages are child entities with a role marker.
 
 ```zig
 // In labelle-tasks EcsComponents
@@ -118,15 +118,8 @@ pub fn EcsComponents(comptime ItemType: type) type {
         pub const ItemSet = std.EnumSet(ItemType);
 
         /// Workstation that processes items through a recipe
+        /// NOTE: No storage references! Storages are child entities.
         pub const TaskWorkstation = struct {
-            /// External Input Storages - where raw materials come from
-            eis: []const Entity = &.{},
-            /// Internal Input Storages - recipe inputs (defines what's needed)
-            iis: []const Entity = &.{},
-            /// Internal Output Storages - recipe outputs (defines what's produced)
-            ios: []const Entity = &.{},
-            /// External Output Storages - where finished products go
-            eos: []const Entity = &.{},
             /// Duration in ticks for processing
             process_duration: u32 = 0,
             /// Priority for worker assignment
@@ -137,6 +130,11 @@ pub fn EcsComponents(comptime ItemType: type) type {
         pub const TaskStorage = struct {
             /// What item type this storage accepts
             accepts: ItemSet = ItemSet.initFull(),
+        };
+
+        /// Role marker for storage entities (child of workstation)
+        pub const TaskStorageRole = struct {
+            role: enum { eis, iis, ios, eos },
         };
 
         /// Worker that can perform tasks
@@ -154,6 +152,12 @@ pub fn EcsComponents(comptime ItemType: type) type {
     };
 }
 ```
+
+**Why this design?**
+- No slices to manage/free when entity is removed
+- Storages as children is natural (workstation "owns" its storages)
+- Task engine builds internal mapping from role markers
+- Clean separation: ECS = declarative, Task engine = runtime state
 
 ### 2. Storage Prefabs
 
@@ -179,7 +183,7 @@ Define reusable storage prefabs:
 }
 ```
 
-### 3. Workstation Prefabs with Nested Storages
+### 3. Workstation Prefabs with Child Storages
 
 ```zig
 // prefabs/kitchen.zon
@@ -190,32 +194,51 @@ Define reusable storage prefabs:
         .TaskWorkstation = .{
             .process_duration = 40,
             .priority = .High,
-            // EIS - where ingredients come from
-            .eis = .{
-                .{
-                    .prefab = "vegetable_storage",
-                    .components = .{ .Position = .{ .x = -30, .y = 0 } }
-                },
-                .{
-                    .prefab = "meat_storage",
-                    .components = .{ .Position = .{ .x = -30, .y = 20 } }
-                },
+        },
+    },
+    // Storages are CHILDREN of the workstation entity
+    .children = .{
+        // EIS - where ingredients come from (visible, with sprites)
+        .{
+            .prefab = "vegetable_storage",
+            .components = .{
+                .Position = .{ .x = -30, .y = 0 },
+                .TaskStorageRole = .{ .role = .eis },
             },
-            // IIS - recipe requirements (1 vegetable + 1 meat)
-            .iis = .{
-                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Vegetable = true } } } },
-                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meat = true } } } },
+        },
+        .{
+            .prefab = "meat_storage",
+            .components = .{
+                .Position = .{ .x = -30, .y = 20 },
+                .TaskStorageRole = .{ .role = .eis },
             },
-            // IOS - recipe output (1 meal)
-            .ios = .{
-                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meal = true } } } },
+        },
+        // IIS - recipe inputs (invisible, logic only)
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Vegetable = true } },
+                .TaskStorageRole = .{ .role = .iis },
             },
-            // EOS - where meals go
-            .eos = .{
-                .{
-                    .prefab = "meal_storage",
-                    .components = .{ .Position = .{ .x = 30, .y = 0 } }
-                },
+        },
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Meat = true } },
+                .TaskStorageRole = .{ .role = .iis },
+            },
+        },
+        // IOS - recipe output (invisible, logic only)
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Meal = true } },
+                .TaskStorageRole = .{ .role = .ios },
+            },
+        },
+        // EOS - where meals go (visible, with sprite)
+        .{
+            .prefab = "meal_storage",
+            .components = .{
+                .Position = .{ .x = 30, .y = 0 },
+                .TaskStorageRole = .{ .role = .eos },
             },
         },
     },
@@ -233,15 +256,21 @@ Define reusable storage prefabs:
         .TaskWorkstation = .{
             .process_duration = 20,
             .priority = .Low,
-            // No EIS/IIS - producer workstation
-            .ios = .{
-                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Water = true } } } },
+        },
+    },
+    // Producer: no EIS/IIS children, only IOS/EOS
+    .children = .{
+        .{
+            .components = .{
+                .TaskStorage = .{ .accepts = .{ .Water = true } },
+                .TaskStorageRole = .{ .role = .ios },
             },
-            .eos = .{
-                .{
-                    .prefab = "water_storage",
-                    .components = .{ .Position = .{ .x = 15, .y = 0 } }
-                },
+        },
+        .{
+            .prefab = "water_storage",
+            .components = .{
+                .Position = .{ .x = 15, .y = 0 },
+                .TaskStorageRole = .{ .role = .eos },
             },
         },
     },
@@ -291,56 +320,106 @@ Define reusable storage prefabs:
 
 ### Phase 1: Update EcsComponents
 
-Modify `labelle-tasks` EcsComponents to use `Entity` and `[]const Entity` fields:
+Add the new components (no slices!):
 
 ```zig
 pub const TaskWorkstation = struct {
-    eis: []const Entity = &.{},
-    iis: []const Entity = &.{},
-    ios: []const Entity = &.{},
-    eos: []const Entity = &.{},
     process_duration: u32 = 0,
     priority: Priority = .Normal,
 };
+
+pub const TaskStorage = struct {
+    accepts: ItemSet = ItemSet.initFull(),
+};
+
+pub const TaskStorageRole = struct {
+    role: enum { eis, iis, ios, eos },
+};
 ```
 
-### Phase 2: Task Engine Observer System
+### Phase 2: Task Engine Storage Mapping
 
-Create a system that observes `TaskWorkstation` components and syncs with the task engine:
+Add internal storage tracking to the task engine:
 
 ```zig
-// In a labelle-tasks plugin
+// In Engine
+const WorkstationStorages = struct {
+    eis: std.ArrayList(Entity),
+    iis: std.ArrayList(Entity),
+    ios: std.ArrayList(Entity),
+    eos: std.ArrayList(Entity),
+
+    pub fn deinit(self: *@This(), allocator: Allocator) void {
+        self.eis.deinit();
+        self.iis.deinit();
+        self.ios.deinit();
+        self.eos.deinit();
+    }
+};
+
+workstation_storages: std.AutoHashMap(Entity, WorkstationStorages),
+
+pub fn bindStorage(self: *Self, workstation: Entity, storage: Entity, role: StorageRole) void {
+    const entry = self.workstation_storages.getOrPut(workstation) catch return;
+    if (!entry.found_existing) {
+        entry.value_ptr.* = .{
+            .eis = std.ArrayList(Entity).init(self.allocator),
+            .iis = std.ArrayList(Entity).init(self.allocator),
+            .ios = std.ArrayList(Entity).init(self.allocator),
+            .eos = std.ArrayList(Entity).init(self.allocator),
+        };
+    }
+    switch (role) {
+        .eis => entry.value_ptr.eis.append(storage) catch {},
+        .iis => entry.value_ptr.iis.append(storage) catch {},
+        .ios => entry.value_ptr.ios.append(storage) catch {},
+        .eos => entry.value_ptr.eos.append(storage) catch {},
+    }
+}
+```
+
+### Phase 3: Observer System
+
+Create hooks that build the mapping from parent-child relationships:
+
+```zig
 pub const TasksPlugin = struct {
     pub const EngineHooks = struct {
         pub fn entity_created(payload: engine.HookPayload) void {
-            const info = payload.entity_created;
-            const game = @ptrCast(*Game, @alignCast(info.game));
+            const entity = payload.entity_created.entity;
+            const registry = getRegistry();
 
-            // Check if entity has TaskWorkstation component
-            if (game.getRegistry().tryGet(info.entity, TaskWorkstation)) |ws| {
-                // Register with task engine
-                task_engine.addWorkstation(info.entity, .{
-                    .eis = ws.eis,
-                    .iis = ws.iis,
-                    .ios = ws.ios,
-                    .eos = ws.eos,
+            // Register workstation
+            if (registry.tryGet(entity, TaskWorkstation)) |ws| {
+                task_engine.addWorkstation(entity, .{
                     .process_duration = ws.process_duration,
                     .priority = ws.priority,
                 });
             }
 
-            // Check if entity has TaskStorage component
-            if (game.getRegistry().tryGet(info.entity, TaskStorage)) |storage| {
-                task_engine.addStorage(info.entity, .{
-                    .accepts = storage.accepts,
-                });
+            // Register storage and bind to parent workstation
+            if (registry.tryGet(entity, TaskStorageRole)) |role| {
+                if (registry.tryGet(entity, TaskStorage)) |storage| {
+                    task_engine.addStorage(entity, .{ .accepts = storage.accepts });
+
+                    // Bind to parent workstation
+                    const parent = registry.getParent(entity);
+                    if (parent != Entity.invalid) {
+                        task_engine.bindStorage(parent, entity, role.role);
+                    }
+                }
             }
+        }
+
+        pub fn entity_destroyed(payload: engine.HookPayload) void {
+            const entity = payload.entity_destroyed.entity;
+            task_engine.removeEntity(entity);  // Handles both workstation and storage cleanup
         }
     };
 };
 ```
 
-### Phase 3: Task Engine Refactor
+### Phase 4: Task Engine Refactor
 
 The current `labelle-tasks` Engine uses game IDs (`GameId`) for entities. We need to either:
 
@@ -360,25 +439,30 @@ pub fn entityToGameId(entity: Entity) u64 {
 }
 ```
 
-### Phase 4: Storage Resolution
+### Phase 5: Entity Creation Flow
 
-When `TaskWorkstation` is loaded, the engine's loader creates child entities for each storage in the entity lists. The task engine observer receives these entities and registers them.
+When a workstation prefab is loaded, labelle-engine creates entities in parent-first order:
 
 **Flow:**
 ```
 Scene loads workstation prefab
   ↓
-Engine creates TaskWorkstation entity
+Engine creates workstation entity (parent)
   ↓
-Engine creates child entities for eis[], iis[], ios[], eos[]
+entity_created hook fires → task_engine.addWorkstation()
   ↓
-entity_created hook fires for workstation
+Engine creates child storage entities
   ↓
-Observer reads TaskWorkstation.eis, .iis, .ios, .eos
-  (these now contain actual Entity references)
+For each child: entity_created hook fires
   ↓
-Observer registers with task engine
+Observer checks for TaskStorageRole component
+  ↓
+Observer calls registry.getParent() to find workstation
+  ↓
+Observer calls task_engine.bindStorage(parent, child, role)
 ```
+
+**Key insight:** Children are created after parent, so the workstation is already registered when storage bindings happen.
 
 ## Storage Binding Strategies
 
@@ -503,29 +587,125 @@ fn getStoragesForWorkstation(registry: *Registry, ws: Entity) []Entity {
 - Storage-to-workstation lookup requires iteration
 - Two-way binding needed for efficient access
 
-### Recommendation
-
-**Option A (runtime slices)** is recommended because:
-
-1. **labelle-engine already handles this** - The loader allocates entity slices from a stable arena when processing `[]const Entity` fields
-2. **Uniform type** - All workstations are the same component type, enabling simple ECS queries
-3. **Proven pattern** - `Room.movement_nodes` in flying platform uses the same approach
-4. **No artificial limits** - Unlike Option C, no MAX_STORAGES constant
-
-The slice memory concern is addressed by labelle-engine's prefab/scene loading:
+### Option E: Parent-Child with Role Component (No References in Workstation)
 
 ```zig
-// In labelle-engine loader (simplified)
-fn loadEntitySlice(arena: *Arena, zon_data: anytype) []const Entity {
-    var entities = arena.alloc(Entity, zon_data.len);
-    for (zon_data, 0..) |item, i| {
-        entities[i] = createChildEntity(item);
-    }
-    return entities;  // Lives as long as the scene/prefab
+// Workstation has NO storage references - just processing config
+pub const TaskWorkstation = struct {
+    process_duration: u32 = 0,
+    priority: Priority = .Normal,
+};
+
+// Each storage knows its parent workstation and role
+pub const TaskStorageRole = struct {
+    role: enum { eis, iis, ios, eos },
+};
+
+// Storage is a CHILD entity of the workstation (parent-child hierarchy)
+// The parent relationship is implicit via labelle-engine's entity hierarchy
+```
+
+**Prefab structure:**
+```zig
+// prefabs/kitchen.zon
+.{
+    .components = .{
+        .TaskWorkstation = .{ .process_duration = 40 },
+        .Position = .{ .x = 0, .y = 0 },
+    },
+    .children = .{
+        .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Vegetable = true } }, .TaskStorageRole = .{ .role = .eis } } },
+        .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meat = true } }, .TaskStorageRole = .{ .role = .eis } } },
+        .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Vegetable = true } }, .TaskStorageRole = .{ .role = .iis } } },
+        .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meat = true } }, .TaskStorageRole = .{ .role = .iis } } },
+        .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meal = true } }, .TaskStorageRole = .{ .role = .ios } } },
+        .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meal = true } }, .TaskStorageRole = .{ .role = .eos } } },
+    },
 }
 ```
 
-The arena allocator ensures slice memory lives for the duration of the scene.
+**Observer builds mapping:**
+```zig
+pub fn entity_created(payload: engine.HookPayload) void {
+    const entity = payload.entity_created.entity;
+    const registry = getRegistry();
+
+    // If storage with role, register with parent workstation
+    if (registry.tryGet(entity, TaskStorageRole)) |role| {
+        if (registry.tryGet(entity, TaskStorage)) |storage| {
+            const parent = registry.getParent(entity);  // labelle-engine parent lookup
+            if (parent != Entity.invalid) {
+                task_engine.bindStorage(parent, entity, role.role, storage.accepts);
+            }
+        }
+    }
+}
+```
+
+**Pros:**
+- **No slices to free** - no Entity references in components
+- Workstation component is tiny and uniform
+- Storage removal is automatic (ECS handles component cleanup)
+- Parent-child relationship is natural for "workstation owns storages"
+- Task engine owns the mapping (can use whatever data structure fits)
+
+**Cons:**
+- Requires parent-child support in labelle-engine (already exists)
+- Two queries needed: find workstation, then find its children
+- Less explicit in the component (mapping lives in task engine)
+
+### Option F: BoundedArray (Fixed Capacity, Clean API)
+
+```zig
+const std = @import("std");
+
+pub const TaskWorkstation = struct {
+    eis: std.BoundedArray(Entity, 8) = .{},
+    iis: std.BoundedArray(Entity, 8) = .{},
+    ios: std.BoundedArray(Entity, 8) = .{},
+    eos: std.BoundedArray(Entity, 8) = .{},
+    process_duration: u32 = 0,
+    priority: Priority = .Normal,
+};
+```
+
+**Pros:**
+- No slice memory management
+- Clean API (`.append()`, `.slice()`, `.len`)
+- Single uniform type
+- Fixed memory layout
+
+**Cons:**
+- 8 * 4 * sizeof(Entity) overhead per workstation
+- Hard limit (8 per category)
+- BoundedArray may not serialize well to .zon
+
+### Recommendation
+
+**Option E (Parent-Child with Role Component)** is recommended because:
+
+1. **No memory management** - No slices, no arrays to size, no freeing
+2. **Natural hierarchy** - Storages as children of workstation matches the conceptual model
+3. **Task engine owns the mapping** - Can optimize data structure for actual access patterns
+4. **Clean component design** - TaskWorkstation is just config, TaskStorageRole is just a tag
+5. **Automatic cleanup** - When workstation entity is deleted, children are deleted too
+
+The task engine maintains an internal mapping:
+```zig
+// In task engine (not ECS component)
+const WorkstationStorages = struct {
+    eis: std.ArrayList(Entity),
+    iis: std.ArrayList(Entity),
+    ios: std.ArrayList(Entity),
+    eos: std.ArrayList(Entity),
+};
+
+storages: std.AutoHashMap(Entity, WorkstationStorages),
+```
+
+This separates concerns:
+- **ECS components** = declarative data (what kind of workstation, what role)
+- **Task engine** = runtime state (which entities are bound where)
 
 ## Open Questions
 
