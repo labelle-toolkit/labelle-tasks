@@ -74,6 +74,43 @@ pub const Engine = engine_mod.Engine;
 pub const hooks = @import("hooks.zig");
 
 // ============================================================================
+// Simplified Engine Creation
+// ============================================================================
+
+/// Creates a task engine with hook handlers automatically wired.
+///
+/// This is a convenience wrapper that eliminates the need to manually
+/// create a HookDispatcher. Simply pass your hooks struct directly.
+///
+/// Example:
+/// ```zig
+/// const MyHooks = struct {
+///     pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
+///         // handle pickup
+///     }
+///     pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
+///         // handle cycle completion
+///     }
+/// };
+///
+/// // Before (manual dispatcher):
+/// // const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
+/// // var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
+///
+/// // After (auto-wrapped):
+/// var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
+/// ```
+///
+/// For an engine without hooks, use `Engine` with `hooks.NoOpDispatcher`:
+/// ```zig
+/// var engine = tasks.Engine(u32, Item, tasks.hooks.NoOpDispatcher(u32, Item)).init(allocator);
+/// ```
+pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Hooks: type) type {
+    const Dispatcher = hooks.HookDispatcher(GameId, Item, Hooks);
+    return Engine(GameId, Item, Dispatcher);
+}
+
+// ============================================================================
 // Logging
 // ============================================================================
 

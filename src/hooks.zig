@@ -270,6 +270,9 @@ pub fn EmptyDispatcher(comptime GameId: type, comptime Item: type) type {
     return HookDispatcher(GameId, Item, struct {});
 }
 
+/// Alias for EmptyDispatcher - clearer naming for common use case.
+pub const NoOpDispatcher = EmptyDispatcher;
+
 /// Convenience type for creating a task hook dispatcher.
 /// Equivalent to `HookDispatcher(GameId, Item, HookMap)`.
 pub fn TasksHookDispatcher(comptime GameId: type, comptime Item: type, comptime HookMap: type) type {
