@@ -7,281 +7,447 @@
 
 ## Summary
 
-Explore a deeper integration between labelle-tasks and labelle-engine that allows defining complete workstations (with all storages) using prefabs alone.
+Integrate labelle-tasks with labelle-engine's existing prefab and entity reference system to define complete workstations using .zon files.
 
 ## Motivation
 
-Setting up a workstation currently requires multiple steps across different systems. This is error-prone, verbose, and doesn't leverage the compositional power of ECS prefabs.
+labelle-engine already has a powerful system for:
+- Prefab definitions with components
+- Entity references in component fields (`Entity` type)
+- Entity lists in component fields (`[]const Entity` type)
+- Nested prefabs with component overrides
+- Relative positioning for child entities
 
-### Current State
+labelle-tasks should leverage this existing infrastructure rather than inventing new patterns.
 
-```zig
-// 1. Create each storage entity separately
-const eis = world.spawn(.{ TaskStorage{ .accepts = .Vegetable }, Position{...} });
-const iis = world.spawn(.{ TaskStorage{ .accepts = .Vegetable }, Position{...} });
-const ios = world.spawn(.{ TaskStorage{ .accepts = .Meal }, Position{...} });
-const eos = world.spawn(.{ TaskStorage{ .accepts = .Meal }, Position{...} });
+## labelle-engine Patterns (Reference)
 
-// 2. Create workstation entity
-const kitchen = world.spawn(.{ TaskWorkstation{...}, Position{...} });
+### Entity References in Components
 
-// 3. Register everything with task engine (manual wiring)
-_ = engine.addStorage(eis, .{ .item = .Vegetable });
-_ = engine.addStorage(iis, .{ .item = .Vegetable });
-_ = engine.addStorage(ios, .{ .item = .Meal });
-_ = engine.addStorage(eos, .{ .item = .Meal });
-_ = engine.addWorkstation(kitchen, .{
-    .eis = &.{eis},
-    .iis = &.{iis},
-    .ios = &.{ios},
-    .eos = &.{eos},
-    .process_duration = 40,
-});
-```
-
-**Problems:**
-- 5+ entities to create manually
-- Manual wiring between entities and engine
-- Easy to forget a step or misconfigure
-- No single source of truth for "what is a kitchen"
-
-## Proposed Design
-
-### Vision
-
-Define a complete workstation as a single prefab:
+Components can reference other entities using `Entity` or `[]const Entity` fields:
 
 ```zig
-const KitchenPrefab = Prefab.define(.{
-    // Main workstation entity
-    .root = .{
-        TaskWorkstation{ .process_duration = 40, .priority = .High },
-        Position{ .x = 100, .y = 50 },
-        Sprite{ .id = .kitchen },
-    },
-    // Child storage entities (automatically wired)
-    .children = .{
-        .eis = .{
-            TaskStorage{ .accepts = ItemSet.initOne(.Vegetable) },
-            Position{ .x = -20, .y = 0 },  // Relative to parent
-            Sprite{ .id = .ingredient_shelf },
-        },
-        .iis = .{
-            TaskStorage{ .accepts = ItemSet.initOne(.Vegetable) },
-            // Internal storage, no visual
-        },
-        .ios = .{
-            TaskStorage{ .accepts = ItemSet.initOne(.Meal) },
-        },
-        .eos = .{
-            TaskStorage{ .accepts = ItemSet.initOne(.Meal) },
-            Position{ .x = 20, .y = 0 },
-            Sprite{ .id = .serving_counter },
-        },
-    },
-});
-
-// Spawn complete workstation with one call
-const kitchen = world.spawnPrefab(KitchenPrefab, .{ .position = .{ .x = 100, .y = 50 } });
-// All storages created and wired automatically
-```
-
-### Alternative: Recipe-based Definition
-
-```zig
-const KitchenPrefab = Prefab.define(.{
-    .root = .{
-        TaskWorkstation{ .process_duration = 40 },
-        // Recipe defined inline
-        TaskRecipe{
-            .inputs = &.{ .Vegetable, .Meat },
-            .outputs = &.{ .Meal },
-        },
-        Position{},
-        Sprite{ .id = .kitchen },
-    },
-    // Storages auto-generated from recipe
-});
-```
-
-### Alternative: Component-only (No Prefab Changes)
-
-```zig
-// New component that defines workstation structure
-const WorkstationBlueprint = struct {
-    eis_items: []const Item,
-    iis_items: []const Item,  // Recipe inputs
-    ios_items: []const Item,  // Recipe outputs
-    eos_items: []const Item,
-    process_duration: u32,
+// Component with single entity reference
+const Weapon = struct {
+    projectile: Entity = Entity.invalid,
 };
 
-// System observes WorkstationBlueprint and creates storages
-const kitchen = world.spawn(.{
-    WorkstationBlueprint{
-        .iis_items = &.{ .Vegetable, .Meat },
-        .ios_items = &.{ .Meal },
-        .process_duration = 40,
-    },
-    Position{},
-});
-// System auto-creates EIS/IIS/IOS/EOS entities and registers with engine
+// Component with entity list
+const Room = struct {
+    movement_nodes: []const Entity = &.{},
+};
 ```
 
-## Design Questions
-
-### 1. Prefab Structure
-
-How should child entities (storages) be defined in prefabs?
-
-| Option | Pros | Cons |
-|--------|------|------|
-| Named children (`.eis`, `.iis`) | Clear semantics | Requires prefab system changes |
-| Role marker components | Works with existing prefabs | More components to manage |
-| Separate config component | Simple | Less compositional |
-
-### 2. Automatic Registration
-
-Should spawning a workstation prefab automatically register with the task engine?
-
-| Option | Pros | Cons |
-|--------|------|------|
-| Observer system | Decoupled, reactive | Delayed registration |
-| Spawn hook | Immediate | Couples prefab to engine |
-| Explicit call | Clear control | More boilerplate |
-
-**Recommendation**: Observer system that runs at end of frame, registers any new `TaskWorkstation` entities.
-
-### 3. Entity Relationships
-
-How to link storage entities to their workstation?
-
-| Option | Pros | Cons |
-|--------|------|------|
-| Parent-child hierarchy | Natural for transforms | May not fit all games |
-| Relationship component | Flexible | Extra component |
-| Workstation stores entity IDs | Simple | Workstation knows children |
-
-### 4. Multi-item Recipes
-
-How to express recipes needing 2+ of same ingredient?
+### Usage in .zon Files
 
 ```zig
-// Recipe: 2 Flour + 1 Meat = 1 Bread
+// Prefab reference with component overrides
+.Weapon = .{
+    .projectile = .{
+        .prefab = "bullet",
+        .components = .{ .Damage = .{ .value = 25 } }
+    },
+},
 
-// Option A: Repeated entries
-.iis_items = &.{ .Flour, .Flour, .Meat },
+// Entity list with prefab references
+.Room = .{
+    .movement_nodes = .{
+        .{ .prefab = "patrol_point", .components = .{ .Position = .{ .x = 50 } } },
+        .{ .prefab = "patrol_point", .components = .{ .Position = .{ .x = 100 } } },
+    },
+},
 
-// Option B: Count tuples
-.iis_items = &.{ .{ .Flour, 2 }, .{ .Meat, 1 } },
-
-// Option C: Separate IIS per unit (current model)
-.iis = .{
-    .{ TaskStorage{ .accepts = .Flour } },
-    .{ TaskStorage{ .accepts = .Flour } },
-    .{ TaskStorage{ .accepts = .Meat } },
+// Mixed prefab and inline definitions
+.Room = .{
+    .movement_nodes = .{
+        .{ .prefab = "patrol_point" },
+        .{ .components = .{ .Position = .{ .x = 50 }, .Shape = .{ .type = .circle } } },
+    },
 },
 ```
 
-### 5. Runtime Flexibility
+## Proposed Design for labelle-tasks
 
-Can storages be added/removed from workstations at runtime?
+### 1. TaskWorkstation Component
 
-**Use cases:**
-- Upgrade system adds output slot
-- Damaged workstation loses input
-- Modular workstations
-
-**Recommendation**: Support runtime modification via engine API, but prefabs define initial state.
-
-## Implementation Plan
-
-### Phase 1: Component Design
-- [ ] Define `WorkstationBlueprint` component
-- [ ] Define storage role markers (`EisMarker`, `IisMarker`, etc.)
-- [ ] Update `EcsComponents` with new types
-
-### Phase 2: Observer System
-- [ ] Create `WorkstationSpawnSystem` that observes new blueprints
-- [ ] Auto-create storage entities from blueprint
-- [ ] Auto-register with task engine
-
-### Phase 3: Prefab Integration
-- [ ] Work with labelle-engine on prefab child support
-- [ ] Define workstation prefab schema
-- [ ] Create prefab examples
-
-### Phase 4: Documentation
-- [ ] Update README with prefab usage
-- [ ] Add prefab example to `usage/`
-- [ ] Document migration from manual setup
-
-## Benefits
-
-- **Single source of truth**: Workstation definition in one place
-- **Less boilerplate**: No manual wiring between entities and engine
-- **Type safety**: Prefab structure validated at comptime
-- **Easier tooling**: Level editors can work with prefabs directly
-- **Consistent patterns**: Same prefab system used for all game objects
-
-## Open Questions
-
-1. Should this live in labelle-tasks or a separate labelle-tasks-engine bridge package?
-2. How does this interact with save/load? Do we serialize the blueprint or the expanded entities?
-3. Should prefabs support variants (e.g., `KitchenPrefab.withPriority(.High)`)?
-
-## Data-Driven Examples
-
-See the `examples/` directory for .zon file examples:
-
-### Prefab Approach
-
-Individual workstation prefabs that can be spawned multiple times:
-
-- [`kitchen_prefab.zon`](examples/kitchen_prefab.zon) - Transformer workstation (inputs → outputs)
-- [`water_well_prefab.zon`](examples/water_well_prefab.zon) - Producer workstation (no inputs)
+Define a component that uses entity references for storages:
 
 ```zig
-// Load and spawn prefab
-const KitchenPrefab = @import("prefabs/kitchen_prefab.zon");
-const kitchen = world.spawnPrefab(KitchenPrefab, .{ .position = .{ .x = 100, .y = 50 } });
+// In labelle-tasks EcsComponents
+pub fn EcsComponents(comptime ItemType: type) type {
+    return struct {
+        pub const ItemSet = std.EnumSet(ItemType);
+
+        /// Workstation that processes items through a recipe
+        pub const TaskWorkstation = struct {
+            /// External Input Storages - where raw materials come from
+            eis: []const Entity = &.{},
+            /// Internal Input Storages - recipe inputs (defines what's needed)
+            iis: []const Entity = &.{},
+            /// Internal Output Storages - recipe outputs (defines what's produced)
+            ios: []const Entity = &.{},
+            /// External Output Storages - where finished products go
+            eos: []const Entity = &.{},
+            /// Duration in ticks for processing
+            process_duration: u32 = 0,
+            /// Priority for worker assignment
+            priority: Priority = .Normal,
+        };
+
+        /// Storage that holds items
+        pub const TaskStorage = struct {
+            /// What item type this storage accepts
+            accepts: ItemSet = ItemSet.initFull(),
+        };
+
+        /// Worker that can perform tasks
+        pub const TaskWorker = struct {
+            priority: u4 = 5,
+        };
+
+        /// Transport route between storages
+        pub const TaskTransport = struct {
+            from: Entity = Entity.invalid,
+            to: Entity = Entity.invalid,
+            item: ItemType,
+            priority: Priority = .Normal,
+        };
+    };
+}
 ```
 
-### Scene Approach
+### 2. Storage Prefabs
 
-Complete level definition with all workstations, transports, and workers:
-
-- [`bakery_scene.zon`](examples/bakery_scene.zon) - Full bakery level
+Define reusable storage prefabs:
 
 ```zig
-// Load entire scene
-const BakeryScene = @import("scenes/bakery_scene.zon");
-world.loadScene(BakeryScene);
-```
-
-### Trade-offs
-
-| Approach | Use Case | Pros | Cons |
-|----------|----------|------|------|
-| Prefabs | Reusable workstations | Composable, spawn anywhere | Need separate scene file |
-| Scenes | Level design | All-in-one, editor-friendly | Less reusable |
-| Hybrid | Production games | Best of both | More files to manage |
-
-**Recommendation**: Support both. Prefabs for reusable workstation types, scenes for level layout. Scenes can reference prefabs:
-
-```zig
-// Scene references prefabs
+// prefabs/vegetable_storage.zon
 .{
-    .workstations = .{
-        .kitchen_1 = .{ .prefab = "kitchen", .position = .{ .x = 100, .y = 50 } },
-        .kitchen_2 = .{ .prefab = "kitchen", .position = .{ .x = 200, .y = 50 } },
-        .well = .{ .prefab = "water_well", .position = .{ .x = 50, .y = 100 } },
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .name = "crate.png" },
+        .TaskStorage = .{ .accepts = .{ .Vegetable = true } },
+    },
+}
+
+// prefabs/meal_storage.zon
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .name = "plate_rack.png" },
+        .TaskStorage = .{ .accepts = .{ .Meal = true } },
     },
 }
 ```
 
+### 3. Workstation Prefabs with Nested Storages
+
+```zig
+// prefabs/kitchen.zon
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .name = "kitchen.png", .z_index = 10 },
+        .TaskWorkstation = .{
+            .process_duration = 40,
+            .priority = .High,
+            // EIS - where ingredients come from
+            .eis = .{
+                .{
+                    .prefab = "vegetable_storage",
+                    .components = .{ .Position = .{ .x = -30, .y = 0 } }
+                },
+                .{
+                    .prefab = "meat_storage",
+                    .components = .{ .Position = .{ .x = -30, .y = 20 } }
+                },
+            },
+            // IIS - recipe requirements (1 vegetable + 1 meat)
+            .iis = .{
+                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Vegetable = true } } } },
+                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meat = true } } } },
+            },
+            // IOS - recipe output (1 meal)
+            .ios = .{
+                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Meal = true } } } },
+            },
+            // EOS - where meals go
+            .eos = .{
+                .{
+                    .prefab = "meal_storage",
+                    .components = .{ .Position = .{ .x = 30, .y = 0 } }
+                },
+            },
+        },
+    },
+}
+```
+
+### 4. Producer Workstation (No Inputs)
+
+```zig
+// prefabs/water_well.zon
+.{
+    .components = .{
+        .Position = .{ .x = 0, .y = 0 },
+        .Sprite = .{ .name = "well.png" },
+        .TaskWorkstation = .{
+            .process_duration = 20,
+            .priority = .Low,
+            // No EIS/IIS - producer workstation
+            .ios = .{
+                .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Water = true } } } },
+            },
+            .eos = .{
+                .{
+                    .prefab = "water_storage",
+                    .components = .{ .Position = .{ .x = 15, .y = 0 } }
+                },
+            },
+        },
+    },
+}
+```
+
+### 5. Scene Definition
+
+```zig
+// scenes/bakery.zon
+.{
+    .name = "bakery",
+    .scripts = .{ "task_engine" },
+    .camera = .{ .x = 320, .y = 180 },
+    .entities = .{
+        // Workstations
+        .{
+            .prefab = "flour_mill",
+            .components = .{ .Position = .{ .x = 50, .y = 100 } }
+        },
+        .{
+            .prefab = "oven",
+            .components = .{ .Position = .{ .x = 150, .y = 100 } }
+        },
+
+        // Workers
+        .{
+            .prefab = "baker",
+            .components = .{ .Position = .{ .x = 100, .y = 150 } }
+        },
+
+        // Transports (inline definition)
+        .{
+            .components = .{
+                .TaskTransport = .{
+                    .from = .{ .prefab = "flour_mill" },  // Reference by prefab?
+                    .to = .{ .prefab = "oven" },
+                    .item = .Flour,
+                },
+            },
+        },
+    },
+}
+```
+
+## Implementation Plan
+
+### Phase 1: Update EcsComponents
+
+Modify `labelle-tasks` EcsComponents to use `Entity` and `[]const Entity` fields:
+
+```zig
+pub const TaskWorkstation = struct {
+    eis: []const Entity = &.{},
+    iis: []const Entity = &.{},
+    ios: []const Entity = &.{},
+    eos: []const Entity = &.{},
+    process_duration: u32 = 0,
+    priority: Priority = .Normal,
+};
+```
+
+### Phase 2: Task Engine Observer System
+
+Create a system that observes `TaskWorkstation` components and syncs with the task engine:
+
+```zig
+// In a labelle-tasks plugin
+pub const TasksPlugin = struct {
+    pub const EngineHooks = struct {
+        pub fn entity_created(payload: engine.HookPayload) void {
+            const info = payload.entity_created;
+            const game = @ptrCast(*Game, @alignCast(info.game));
+
+            // Check if entity has TaskWorkstation component
+            if (game.getRegistry().tryGet(info.entity, TaskWorkstation)) |ws| {
+                // Register with task engine
+                task_engine.addWorkstation(info.entity, .{
+                    .eis = ws.eis,
+                    .iis = ws.iis,
+                    .ios = ws.ios,
+                    .eos = ws.eos,
+                    .process_duration = ws.process_duration,
+                    .priority = ws.priority,
+                });
+            }
+
+            // Check if entity has TaskStorage component
+            if (game.getRegistry().tryGet(info.entity, TaskStorage)) |storage| {
+                task_engine.addStorage(info.entity, .{
+                    .accepts = storage.accepts,
+                });
+            }
+        }
+    };
+};
+```
+
+### Phase 3: Task Engine Refactor
+
+The current `labelle-tasks` Engine uses game IDs (`GameId`) for entities. We need to either:
+
+**Option A: Use Entity directly**
+```zig
+// Change Engine signature
+pub fn Engine(comptime Item: type, comptime Dispatcher: type) type {
+    // Use Entity from labelle-engine instead of generic GameId
+}
+```
+
+**Option B: Entity ID adapter**
+```zig
+// Keep Engine generic, provide adapter for labelle-engine Entity
+pub fn entityToGameId(entity: Entity) u64 {
+    return @bitCast(entity);
+}
+```
+
+### Phase 4: Storage Resolution
+
+When `TaskWorkstation` is loaded, the engine's loader creates child entities for each storage in the entity lists. The task engine observer receives these entities and registers them.
+
+**Flow:**
+```
+Scene loads workstation prefab
+  ↓
+Engine creates TaskWorkstation entity
+  ↓
+Engine creates child entities for eis[], iis[], ios[], eos[]
+  ↓
+entity_created hook fires for workstation
+  ↓
+Observer reads TaskWorkstation.eis, .iis, .ios, .eos
+  (these now contain actual Entity references)
+  ↓
+Observer registers with task engine
+```
+
+## Open Questions
+
+### 1. Transport References
+
+How do transports reference workstations/storages by name in scenes?
+
+**Option A: Direct entity reference (requires knowing entity at comptime)**
+```zig
+.TaskTransport = .{
+    .from = some_entity,  // How to get this?
+    .to = other_entity,
+},
+```
+
+**Option B: Named entity lookup (runtime)**
+```zig
+// Scene entities could have optional names
+.{ .name = "flour_mill", .prefab = "flour_mill", ... },
+
+// Transport references by name
+.TaskTransport = .{
+    .from_name = "flour_mill.eos",
+    .to_name = "oven.eis",
+},
+```
+
+**Option C: Transport as relationship (new pattern)**
+```zig
+// Transport defined at scene level, not as entity
+.transports = .{
+    .{ .from = 0, .to = 1, .item = .Flour },  // Entity indices
+},
+```
+
+### 2. Internal Storages (IIS/IOS)
+
+Internal storages typically don't need visuals or positions. Should they:
+
+**Option A: Be invisible entities**
+```zig
+.iis = .{
+    .{ .components = .{ .TaskStorage = .{ .accepts = .{ .Flour = true } } } },
+},
+```
+
+**Option B: Be data-only (not entities)**
+```zig
+// New component field type
+.recipe_inputs = .{ .Flour, .Flour, .Meat },  // 2 flour + 1 meat
+.recipe_outputs = .{ .Bread },
+```
+
+### 3. Task Engine Ownership
+
+Should labelle-tasks own the task engine instance, or should it be managed by labelle-engine?
+
+**Option A: Plugin owns engine**
+```zig
+const TasksPlugin = struct {
+    var task_engine: TaskEngine = undefined;
+
+    pub fn init(allocator: Allocator) void {
+        task_engine = TaskEngine.init(allocator);
+    }
+};
+```
+
+**Option B: Component on Game/World**
+```zig
+// Task engine as a resource in the ECS world
+game.addResource(TaskEngine, task_engine);
+```
+
+## Migration Path
+
+### From Current API
+
+```zig
+// Current labelle-tasks usage
+_ = engine.addStorage(10, .{ .item = .Vegetable });
+_ = engine.addWorkstation(100, .{
+    .eis = &.{10},
+    .iis = &.{11},
+    // ...
+});
+```
+
+### To Prefab-based
+
+```zig
+// New usage with labelle-engine
+const Loader = engine.SceneLoader(Prefabs, Components, Scripts);
+var scene = try Loader.load(@import("scenes/kitchen.zon"), ctx);
+
+// Workstations and storages automatically registered via hooks
+```
+
+## Benefits
+
+1. **Leverages existing patterns** - Uses labelle-engine's proven entity reference system
+2. **Visual consistency** - Storages can have sprites and positions like any entity
+3. **Tooling ready** - Level editors understand prefabs and entities
+4. **Type safety** - Comptime validation of prefab references
+5. **Familiar API** - Same patterns as other labelle-engine features
+
 ## References
 
-- [labelle-tasks EcsComponents](../src/root.zig)
-- [labelle-engine prefab system](https://github.com/labelle-toolkit/labelle-engine) (TBD)
-- [Bevy Bundles](https://bevyengine.org/learn/book/getting-started/ecs/#bundles) - Similar concept in Rust
+- [labelle-engine loader.zig](https://github.com/labelle-toolkit/labelle-engine/blob/main/src/loader.zig) - Entity reference handling
+- [labelle-engine nested_prefab_test.zig](https://github.com/labelle-toolkit/labelle-engine/blob/main/test/nested_prefab_test.zig) - Entity list patterns
+- [labelle-engine zon_coercion.zig](https://github.com/labelle-toolkit/labelle-engine/blob/main/src/zon_coercion.zig) - Entity detection
