@@ -9,9 +9,12 @@
 //! ```zig
 //! const tasks = @import("labelle-tasks");
 //!
-//! // Define workstation types in your game
-//! pub const KitchenWorkstation = tasks.TaskWorkstation(2, 2, 1, 1);
-//! pub const WellWorkstation = tasks.TaskWorkstation(0, 0, 1, 1);
+//! // Use predefined workstation types
+//! pub const OvenWorkstation = tasks.OvenWorkstation;
+//! pub const WellWorkstation = tasks.WellWorkstation;
+//!
+//! // Or create custom workstation types
+//! pub const CustomWorkstation = tasks.TaskWorkstation(2, 3, 1, 2);
 //!
 //! // Register as ECS components alongside TaskWorkstationBinding
 //! ```
@@ -26,6 +29,7 @@
 //! - **EOS**: External Output Storage - finished products
 
 const workstation = @import("workstation.zig");
+const workstations = @import("workstations.zig");
 const binding = @import("binding.zig");
 const storage = @import("storage.zig");
 
@@ -65,6 +69,26 @@ pub const StepType = workstation.StepType;
 /// Storage role in the workstation workflow.
 pub const StorageRole = storage.StorageRole;
 
+// === Predefined Workstation Types ===
+
+// Bakery workstations
+pub const OvenWorkstation = workstations.OvenWorkstation;
+pub const MixerWorkstation = workstations.MixerWorkstation;
+pub const CakeOvenWorkstation = workstations.CakeOvenWorkstation;
+
+// Producer workstations (no inputs)
+pub const WellWorkstation = workstations.WellWorkstation;
+pub const FarmFieldWorkstation = workstations.FarmFieldWorkstation;
+
+// Crafting workstations
+pub const SimpleCraftingWorkstation = workstations.SimpleCraftingWorkstation;
+pub const DualCraftingWorkstation = workstations.DualCraftingWorkstation;
+pub const TripleCraftingWorkstation = workstations.TripleCraftingWorkstation;
+
+// Multi-output workstations
+pub const SawmillWorkstation = workstations.SawmillWorkstation;
+pub const ButcherWorkstation = workstations.ButcherWorkstation;
+
 // === Components Export ===
 
 /// All components provided by labelle-tasks for ECS registration.
@@ -78,6 +102,7 @@ pub const Components = struct {
 
 test {
     _ = @import("workstation.zig");
+    _ = @import("workstations.zig");
     _ = @import("binding.zig");
     _ = @import("storage.zig");
 }
