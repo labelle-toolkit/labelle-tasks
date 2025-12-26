@@ -84,8 +84,11 @@ const MyHooks = struct {
     }
 };
 
-const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
+// Simplified API - auto-wraps HookDispatcher
+var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
+
+// For an engine without hooks:
+// var engine = tasks.EngineWithHooks(u32, Item, struct {}).init(allocator);
 ```
 
 ### FindBestWorker Callback
@@ -108,8 +111,8 @@ const MyHooks = struct {
     }
 };
 
-const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
+// Create engine with hooks
+var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
 defer engine.deinit();
 
 engine.setFindBestWorker(findBestWorker);
@@ -142,9 +145,11 @@ engine.notifyStoreComplete(BAKER_ID);    // Store done
 
 ## Testing
 
-Tests use **zspec** (BDD-style):
+Tests use **zspec** (BDD-style) with factory helpers:
 - `test/engine_spec.zig` - Core behavior tests
 - `test/priority_spec.zig` - Priority selection tests
+- `test/factories.zig` - Test factories and helpers (KitchenFactory, ProducerFactory, etc.)
+- `test/factories.zon` - Factory default values
 
 Run with: `zig build test`
 

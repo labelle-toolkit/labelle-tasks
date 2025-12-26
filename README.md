@@ -85,10 +85,12 @@ const MyHooks = struct {
     }
 };
 
-// Create dispatcher and engine
-const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
+// Create engine with hooks (simplified API)
+var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
 defer engine.deinit();
+
+// For an engine without hooks, pass an empty struct:
+// var engine = tasks.EngineWithHooks(u32, Item, struct {}).init(allocator);
 
 // Set worker selection callback (required)
 engine.setFindBestWorker(findBestWorker);
@@ -167,9 +169,8 @@ const MyHooks = struct {
     }
 };
 
-// Create dispatcher and engine
-const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
+// Create engine with hooks
+var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
 defer engine.deinit();
 
 engine.setFindBestWorker(findBestWorker);
@@ -219,8 +220,8 @@ const AnalyticsHooks = struct {
 };
 
 // Both handlers will be called
-const AllHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ GameHooks, AnalyticsHooks });
-var engine = tasks.Engine(u32, Item, AllHooks).init(allocator);
+const MergedHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ GameHooks, AnalyticsHooks });
+var engine = tasks.Engine(u32, Item, MergedHooks).init(allocator);
 ```
 
 ## Producer Workstations
