@@ -380,6 +380,153 @@ Observer reads TaskWorkstation.eis, .iis, .ios, .eos
 Observer registers with task engine
 ```
 
+## Storage Binding Strategies
+
+A key design question: how do we bind N storages to a workstation component? There are several approaches:
+
+### Option A: Runtime Slices (Current Proposal)
+
+```zig
+pub const TaskWorkstation = struct {
+    eis: []const Entity = &.{},
+    iis: []const Entity = &.{},
+    ios: []const Entity = &.{},
+    eos: []const Entity = &.{},
+    process_duration: u32 = 0,
+    priority: Priority = .Normal,
+};
+```
+
+**Pros:**
+- Flexible - any number of storages
+- Single component type for all workstations
+- Works with existing ECS queries
+
+**Cons:**
+- Slice memory must be managed (who owns it?)
+- Runtime indirection
+- labelle-engine's loader allocates these from the prefab arena (stable lifetime)
+
+### Option B: Comptime Generic Struct
+
+```zig
+pub fn TaskWorkstation(
+    comptime eis_count: usize,
+    comptime iis_count: usize,
+    comptime ios_count: usize,
+    comptime eos_count: usize,
+) type {
+    return struct {
+        eis: [eis_count]Entity,
+        iis: [iis_count]Entity,
+        ios: [ios_count]Entity,
+        eos: [eos_count]Entity,
+        process_duration: u32 = 0,
+        priority: Priority = .Normal,
+    };
+}
+
+// Usage
+const KitchenWorkstation = TaskWorkstation(2, 2, 1, 1);
+const WellWorkstation = TaskWorkstation(0, 0, 1, 1);
+```
+
+**Pros:**
+- Fixed-size arrays - no slice memory management
+- Comptime known sizes - better optimization
+- No runtime allocation
+
+**Cons:**
+- Each workstation type is a **different type**
+- Cannot query all workstations with a single ECS query
+- labelle-engine component registry expects uniform types
+- Prefab loader would need significant changes
+
+### Option C: Fixed Maximum Capacity
+
+```zig
+pub const MAX_STORAGES = 8;
+
+pub const TaskWorkstation = struct {
+    eis: [MAX_STORAGES]Entity = [_]Entity{Entity.invalid} ** MAX_STORAGES,
+    iis: [MAX_STORAGES]Entity = [_]Entity{Entity.invalid} ** MAX_STORAGES,
+    ios: [MAX_STORAGES]Entity = [_]Entity{Entity.invalid} ** MAX_STORAGES,
+    eos: [MAX_STORAGES]Entity = [_]Entity{Entity.invalid} ** MAX_STORAGES,
+    eis_count: u8 = 0,
+    iis_count: u8 = 0,
+    ios_count: u8 = 0,
+    eos_count: u8 = 0,
+    process_duration: u32 = 0,
+    priority: Priority = .Normal,
+};
+```
+
+**Pros:**
+- Single component type
+- No slice memory management
+- Fixed size - predictable memory layout
+
+**Cons:**
+- Wastes memory if most workstations use few storages
+- Hard limit on storage count
+- Larger component size (8 * 4 * sizeof(Entity) + 4 bytes + other fields)
+
+### Option D: Separate Storage Binding Component
+
+```zig
+// Core workstation - just the processing logic
+pub const TaskWorkstation = struct {
+    process_duration: u32 = 0,
+    priority: Priority = .Normal,
+};
+
+// Storage binding - added by loader, references parent workstation
+pub const TaskStorageBinding = struct {
+    workstation: Entity,
+    role: enum { eis, iis, ios, eos },
+};
+
+// Query: find all storages for a workstation
+fn getStoragesForWorkstation(registry: *Registry, ws: Entity) []Entity {
+    // Query all TaskStorageBinding where workstation == ws
+}
+```
+
+**Pros:**
+- Workstation component is tiny and uniform
+- No limits on storage count
+- Follows ECS relationship patterns
+- Each storage knows its role
+
+**Cons:**
+- More complex queries
+- Storage-to-workstation lookup requires iteration
+- Two-way binding needed for efficient access
+
+### Recommendation
+
+**Option A (runtime slices)** is recommended because:
+
+1. **labelle-engine already handles this** - The loader allocates entity slices from a stable arena when processing `[]const Entity` fields
+2. **Uniform type** - All workstations are the same component type, enabling simple ECS queries
+3. **Proven pattern** - `Room.movement_nodes` in flying platform uses the same approach
+4. **No artificial limits** - Unlike Option C, no MAX_STORAGES constant
+
+The slice memory concern is addressed by labelle-engine's prefab/scene loading:
+
+```zig
+// In labelle-engine loader (simplified)
+fn loadEntitySlice(arena: *Arena, zon_data: anytype) []const Entity {
+    var entities = arena.alloc(Entity, zon_data.len);
+    for (zon_data, 0..) |item, i| {
+        entities[i] = createChildEntity(item);
+    }
+    return entities;  // Lives as long as the scene/prefab
+}
+```
+
+The arena allocator ensures slice memory lives for the duration of the scene.
+
 ## Open Questions
 
 ### 1. Transport References
