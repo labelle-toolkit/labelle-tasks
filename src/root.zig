@@ -39,8 +39,8 @@
 //!     .process_duration = 40,
 //! });
 //!
-//! // Add items and engine automatically manages state
-//! _ = engine.addToStorage(EIS_ID, .Vegetable, 5);
+//! // Add item (each storage holds at most one item)
+//! _ = engine.addToStorage(EIS_ID, .Vegetable);
 //! ```
 //!
 //! ## Logging

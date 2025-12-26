@@ -176,7 +176,7 @@ pub fn main() !void {
 
     // EIS: External Input Storage (flour supply)
     _ = engine.addStorage(FLOUR_STORAGE, .{ .item = .Flour });
-    _ = engine.addToStorage(FLOUR_STORAGE, .Flour, 5);
+    _ = engine.addToStorage(FLOUR_STORAGE, .Flour);
 
     // IIS: Internal Input Storage (recipe - 1 flour per cycle)
     _ = engine.addStorage(DOUGH_BOWL, .{ .item = .Flour });

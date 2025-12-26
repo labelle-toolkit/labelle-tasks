@@ -1,11 +1,11 @@
 //! Farm Game Example
 //!
 //! A simple farm game demonstrating labelle-tasks engine:
-//! - Farmers harvest crops from fields
-//! - Crops are stored in a barn
+//! - Farmers harvest wheat from the field
+//! - Wheat is transported to the barn
 //! - A mill processes wheat into flour
 //!
-//! Shows the complete engine workflow with multiple workers and workstations.
+//! Shows the complete engine workflow with single-item storages.
 
 const std = @import("std");
 const tasks = @import("labelle_tasks");
@@ -18,7 +18,6 @@ const EntityId = u32;
 
 const Item = enum {
     Wheat,
-    Carrot,
     Flour,
 };
 
@@ -69,12 +68,11 @@ const FarmHooks = struct {
 
         const from = switch (info.from_storage_id) {
             Entities.wheat_field => "wheat field",
-            Entities.carrot_field => "carrot field",
             Entities.flour_storage => "flour storage",
             else => "storage",
         };
         const to = switch (info.to_storage_id) {
-            Entities.barn_wheat, Entities.barn_carrot => "barn",
+            Entities.barn => "barn",
             Entities.mill_input => "mill",
             else => "storage",
         };
@@ -106,14 +104,11 @@ const Engine = tasks.Engine(EntityId, Item, Dispatcher);
 
 const Entities = struct {
     // Workers
-    const farmer_alice: EntityId = 1;
-    const farmer_bob: EntityId = 2;
+    const farmer: EntityId = 1;
 
     // Storages
     const wheat_field: EntityId = 10;
-    const carrot_field: EntityId = 11;
-    const barn_wheat: EntityId = 20;
-    const barn_carrot: EntityId = 21;
+    const barn: EntityId = 20;
     const mill_input: EntityId = 30;
     const mill_output: EntityId = 31;
     const flour_storage: EntityId = 40;
@@ -136,7 +131,6 @@ const WorkerState = struct {
 const Location = enum {
     barn,
     wheat_field,
-    carrot_field,
     mill,
     walking,
 };
@@ -150,8 +144,7 @@ var g_tick: u32 = 0;
 
 fn initGame(allocator: std.mem.Allocator, engine: *Engine) void {
     g_workers = std.AutoHashMap(EntityId, WorkerState).init(allocator);
-    g_workers.put(Entities.farmer_alice, .{}) catch {};
-    g_workers.put(Entities.farmer_bob, .{}) catch {};
+    g_workers.put(Entities.farmer, .{}) catch {};
     g_engine = engine;
 }
 
@@ -161,8 +154,7 @@ fn deinitGame() void {
 
 fn workerName(id: EntityId) []const u8 {
     return switch (id) {
-        Entities.farmer_alice => "Alice",
-        Entities.farmer_bob => "Bob",
+        Entities.farmer => "Farmer",
         else => "Unknown",
     };
 }
@@ -170,7 +162,6 @@ fn workerName(id: EntityId) []const u8 {
 fn itemName(item: Item) []const u8 {
     return switch (item) {
         .Wheat => "wheat",
-        .Carrot => "carrot",
         .Flour => "flour",
     };
 }
@@ -261,20 +252,17 @@ pub fn main() !void {
 
     std.debug.print("Setting up the farm...\n\n", .{});
 
-    // Add workers
-    _ = engine.addWorker(Entities.farmer_alice, .{});
-    _ = engine.addWorker(Entities.farmer_bob, .{});
-    std.debug.print("  Workers: Alice, Bob\n", .{});
+    // Add worker
+    _ = engine.addWorker(Entities.farmer, .{});
+    std.debug.print("  Worker: Farmer\n", .{});
 
-    // Fields (external sources) - each storage holds one item type
+    // Field (external source) - single-item storage
     _ = engine.addStorage(Entities.wheat_field, .{ .item = .Wheat });
-    _ = engine.addStorage(Entities.carrot_field, .{ .item = .Carrot });
-    std.debug.print("  Fields: Wheat, Carrot\n", .{});
+    std.debug.print("  Field: holds one wheat\n", .{});
 
-    // Barn (stores raw crops) - separate storages for each item type
-    _ = engine.addStorage(Entities.barn_wheat, .{ .item = .Wheat });
-    _ = engine.addStorage(Entities.barn_carrot, .{ .item = .Carrot });
-    std.debug.print("  Barn: holds wheat and carrots\n", .{});
+    // Barn (stores wheat) - single-item storage
+    _ = engine.addStorage(Entities.barn, .{ .item = .Wheat });
+    std.debug.print("  Barn: holds one wheat\n", .{});
 
     // Mill storages (IIS needs 1 wheat, IOS produces 1 flour)
     _ = engine.addStorage(Entities.mill_input, .{ .item = .Wheat });
@@ -285,18 +273,12 @@ pub fn main() !void {
     // Transport routes
     _ = engine.addTransport(.{
         .from = Entities.wheat_field,
-        .to = Entities.barn_wheat,
+        .to = Entities.barn,
         .item = .Wheat,
         .priority = .Normal,
     });
     _ = engine.addTransport(.{
-        .from = Entities.carrot_field,
-        .to = Entities.barn_carrot,
-        .item = .Carrot,
-        .priority = .Normal,
-    });
-    _ = engine.addTransport(.{
-        .from = Entities.barn_wheat,
+        .from = Entities.barn,
         .to = Entities.mill_input,
         .item = .Wheat,
         .priority = .High,
@@ -320,23 +302,17 @@ pub fn main() !void {
 
     std.debug.print("\n--- Harvest begins! ---\n\n", .{});
 
-    // Crops appear in fields
-    _ = engine.addToStorage(Entities.wheat_field, .Wheat, 5);
-    _ = engine.addToStorage(Entities.carrot_field, .Carrot, 3);
-    log("Harvest ready: 5 wheat, 3 carrots in fields", .{});
+    // One wheat appears in field
+    _ = engine.addToStorage(Entities.wheat_field, .Wheat);
+    log("Wheat harvested in field", .{});
 
     // Run simulation
-    const max_ticks = 100;
+    const max_ticks = 50;
     while (g_tick < max_ticks) {
         update();
 
-        // Check completion
-        const flour = engine.getStorageQuantity(Entities.flour_storage, .Flour);
-        const wheat_in_field = engine.getStorageQuantity(Entities.wheat_field, .Wheat);
-        const carrots_in_field = engine.getStorageQuantity(Entities.carrot_field, .Carrot);
-
-        // Stop when all crops harvested and some flour produced
-        if (wheat_in_field == 0 and carrots_in_field == 0 and flour >= 2) {
+        // Check completion - flour produced
+        if (engine.hasItem(Entities.flour_storage, .Flour)) {
             break;
         }
     }
@@ -347,32 +323,27 @@ pub fn main() !void {
 
     std.debug.print("\n--- Final State ---\n\n", .{});
 
-    const wheat_field = engine.getStorageQuantity(Entities.wheat_field, .Wheat);
-    const carrot_field = engine.getStorageQuantity(Entities.carrot_field, .Carrot);
-    const barn_wheat = engine.getStorageQuantity(Entities.barn_wheat, .Wheat);
-    const barn_carrots = engine.getStorageQuantity(Entities.barn_carrot, .Carrot);
-    const flour = engine.getStorageQuantity(Entities.flour_storage, .Flour);
+    const has_wheat_field = engine.hasItem(Entities.wheat_field, .Wheat);
+    const has_wheat_barn = engine.hasItem(Entities.barn, .Wheat);
+    const has_flour = engine.hasItem(Entities.flour_storage, .Flour);
     const cycles = engine.getCyclesCompleted(Entities.mill);
 
-    std.debug.print("  Fields:  wheat={d}, carrots={d}\n", .{ wheat_field, carrot_field });
-    std.debug.print("  Barn:    wheat={d}, carrots={d}\n", .{ barn_wheat, barn_carrots });
-    std.debug.print("  Flour:   {d} bags\n", .{flour});
-    std.debug.print("  Mill:    {d} cycles completed\n", .{cycles});
+    std.debug.print("  Field:   wheat={s}\n", .{if (has_wheat_field) "yes" else "no"});
+    std.debug.print("  Barn:    wheat={s}\n", .{if (has_wheat_barn) "yes" else "no"});
+    std.debug.print("  Storage: flour={s}\n", .{if (has_flour) "yes" else "no"});
+    std.debug.print("  Mill:    {d} cycle(s) completed\n", .{cycles});
 
     // Assertions
     std.debug.print("\n--- Assertions ---\n\n", .{});
 
-    std.debug.assert(wheat_field == 0);
-    std.debug.print("  [PASS] All wheat harvested\n", .{});
+    std.debug.assert(!has_wheat_field);
+    std.debug.print("  [PASS] Wheat harvested from field\n", .{});
 
-    std.debug.assert(carrot_field == 0);
-    std.debug.print("  [PASS] All carrots harvested\n", .{});
+    std.debug.assert(has_flour);
+    std.debug.print("  [PASS] Flour produced\n", .{});
 
-    std.debug.assert(flour >= 2);
-    std.debug.print("  [PASS] At least 2 flour produced\n", .{});
-
-    std.debug.assert(cycles >= 2);
-    std.debug.print("  [PASS] Mill ran at least 2 cycles\n", .{});
+    std.debug.assert(cycles == 1);
+    std.debug.print("  [PASS] Mill ran 1 cycle\n", .{});
 
     std.debug.print("\n========================================\n", .{});
     std.debug.print("    ALL ASSERTIONS PASSED!              \n", .{});

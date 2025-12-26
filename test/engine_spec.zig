@@ -119,18 +119,31 @@ pub const @"Engine" = struct {
 
             _ = eng.addStorage(100, .{ .item = .Vegetable });
 
-            try expect.equal(eng.getStorageQuantity(100, .Vegetable), 0);
+            try expect.equal(eng.isEmpty(100), true);
+            try expect.equal(eng.hasItem(100, .Vegetable), false);
         }
 
-        test "can add items to storage" {
+        test "can add item to storage" {
             var eng = TestEngine.init(std.testing.allocator);
             defer eng.deinit();
 
             _ = eng.addStorage(100, .{ .item = .Vegetable });
 
-            const added = eng.addToStorage(100, .Vegetable, 5);
-            try expect.equal(added, 5);
-            try expect.equal(eng.getStorageQuantity(100, .Vegetable), 5);
+            const added = eng.addToStorage(100, .Vegetable);
+            try expect.equal(added, true);
+            try expect.equal(eng.hasItem(100, .Vegetable), true);
+            try expect.equal(eng.isEmpty(100), false);
+        }
+
+        test "cannot add to full storage" {
+            var eng = TestEngine.init(std.testing.allocator);
+            defer eng.deinit();
+
+            _ = eng.addStorage(100, .{ .item = .Vegetable });
+
+            _ = eng.addToStorage(100, .Vegetable);
+            const added_again = eng.addToStorage(100, .Vegetable);
+            try expect.equal(added_again, false);
         }
 
     };
@@ -225,7 +238,7 @@ pub const @"Engine" = struct {
             try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
 
             // Add vegetable - now has item for recipe
-            _ = eng.addToStorage(10, .Vegetable, 1);
+            _ = eng.addToStorage(10, .Vegetable);
             try expect.equal(eng.getWorkstationStatus(100).?, .Queued);
         }
 
@@ -280,7 +293,7 @@ pub const @"Engine" = struct {
             });
 
             // Add ingredient (1 for recipe)
-            _ = eng.addToStorage(10, .Vegetable, 1);
+            _ = eng.addToStorage(10, .Vegetable);
 
             // Pickup should have started
             try expect.equal(g_pickup_started_calls, 1);
@@ -289,8 +302,8 @@ pub const @"Engine" = struct {
             eng.notifyPickupComplete(1);
 
             // EIS -> IIS transfer should have happened
-            try expect.equal(eng.getStorageQuantity(10, .Vegetable), 0);
-            try expect.equal(eng.getStorageQuantity(11, .Vegetable), 1);
+            try expect.equal(eng.hasItem(10, .Vegetable), false);
+            try expect.equal(eng.hasItem(11, .Vegetable), true);
 
             // Process should have started
             try expect.equal(g_process_started_calls, 1);
@@ -305,8 +318,8 @@ pub const @"Engine" = struct {
             try expect.equal(g_process_complete_calls, 1);
 
             // IIS -> IOS transformation
-            try expect.equal(eng.getStorageQuantity(11, .Vegetable), 0);
-            try expect.equal(eng.getStorageQuantity(12, .Meal), 1);
+            try expect.equal(eng.hasItem(11, .Vegetable), false);
+            try expect.equal(eng.hasItem(12, .Meal), true);
 
             // Store should have started
             try expect.equal(g_store_started_calls, 1);
@@ -315,8 +328,8 @@ pub const @"Engine" = struct {
             eng.notifyStoreComplete(1);
 
             // IOS -> EOS transfer
-            try expect.equal(eng.getStorageQuantity(12, .Meal), 0);
-            try expect.equal(eng.getStorageQuantity(13, .Meal), 1);
+            try expect.equal(eng.hasItem(12, .Meal), false);
+            try expect.equal(eng.hasItem(13, .Meal), true);
 
             // Worker should be released
             try expect.equal(g_worker_released_calls, 1);
@@ -351,7 +364,7 @@ pub const @"Engine" = struct {
             _ = eng.addWorker(1, .{});
 
             // Add item to source
-            _ = eng.addToStorage(10, .Meal, 1);
+            _ = eng.addToStorage(10, .Meal);
 
             // Transport should start (worker should be assigned)
             try expect.equal(g_transport_started_calls, 1);
@@ -361,8 +374,8 @@ pub const @"Engine" = struct {
             eng.notifyTransportComplete(1);
 
             // Item should be transferred
-            try expect.equal(eng.getStorageQuantity(10, .Meal), 0);
-            try expect.equal(eng.getStorageQuantity(20, .Meal), 1);
+            try expect.equal(eng.hasItem(10, .Meal), false);
+            try expect.equal(eng.hasItem(20, .Meal), true);
 
             // Worker should be idle
             try expect.equal(eng.getWorkerState(1).?, .Idle);
@@ -393,7 +406,7 @@ pub const @"Engine" = struct {
             });
 
             // Add ingredient and start (1 for recipe)
-            _ = eng.addToStorage(10, .Vegetable, 1);
+            _ = eng.addToStorage(10, .Vegetable);
 
             try expect.equal(eng.getWorkerState(1).?, .Working);
 
@@ -476,7 +489,7 @@ pub const @"Engine" = struct {
 
             // Process complete, IOS filled
             try expect.equal(g_process_complete_calls, 1);
-            try expect.equal(eng.getStorageQuantity(12, .Water), 1);
+            try expect.equal(eng.hasItem(12, .Water), true);
 
             // Store should have started
             try expect.equal(g_store_started_calls, 1);
@@ -485,8 +498,8 @@ pub const @"Engine" = struct {
             eng.notifyStoreComplete(1);
 
             // Water should be in EOS
-            try expect.equal(eng.getStorageQuantity(12, .Water), 0);
-            try expect.equal(eng.getStorageQuantity(13, .Water), 1);
+            try expect.equal(eng.hasItem(12, .Water), false);
+            try expect.equal(eng.hasItem(13, .Water), true);
 
             // Worker released and cycle counted
             try expect.equal(g_worker_released_calls, 1);
@@ -524,11 +537,11 @@ pub const @"Engine" = struct {
             try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
 
             // Add vegetable - still blocked (need meat)
-            _ = eng.addToStorage(10, .Vegetable, 1);
+            _ = eng.addToStorage(10, .Vegetable);
             try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
 
             // Add meat - now has full recipe (1 of each), should start
-            _ = eng.addToStorage(11, .Meat, 1);
+            _ = eng.addToStorage(11, .Meat);
             try expect.equal(eng.getWorkstationStatus(100).?, .Active);
         }
     };
@@ -557,7 +570,7 @@ pub const @"Engine" = struct {
             _ = eng.addWorker(1, .{});
 
             // Add item to source
-            _ = eng.addToStorage(10, .Water, 1);
+            _ = eng.addToStorage(10, .Water);
 
             // Transport should start
             try expect.equal(g_transport_started_calls, 1);
@@ -602,7 +615,7 @@ pub const @"Engine" = struct {
             try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
 
             // Add vegetable to garden
-            _ = eng.addToStorage(1, .Vegetable, 1);
+            _ = eng.addToStorage(1, .Vegetable);
 
             // Transport should start
             try expect.equal(g_transport_started_calls, 1);
@@ -611,7 +624,7 @@ pub const @"Engine" = struct {
             eng.notifyTransportComplete(1);
 
             // Vegetable now in kitchen EIS
-            try expect.equal(eng.getStorageQuantity(10, .Vegetable), 1);
+            try expect.equal(eng.hasItem(10, .Vegetable), true);
 
             // Kitchen should start (pickup)
             try expect.equal(g_pickup_started_calls, 1);
@@ -698,15 +711,15 @@ pub const @"Engine" = struct {
         }
     };
 
-    pub const @"integration: continuous production" = struct {
-        test "producer cycles continuously while EOS has space" {
+    pub const @"integration: single-item storage" = struct {
+        test "producer blocks when EOS is full" {
             resetCallbacks();
             var eng = TestEngine.init(std.testing.allocator);
             defer eng.deinit();
 
             eng.setFindBestWorker(testFindBestWorker);
 
-            // Producer with room for multiple items
+            // Producer workstation
             _ = eng.addStorage(12, .{ .item = .Water }); // IOS
             _ = eng.addStorage(13, .{ .item = .Water }); // EOS
 
@@ -717,19 +730,22 @@ pub const @"Engine" = struct {
                 .process_duration = 1,
             });
 
-            // Complete 3 cycles
-            var cycle: u32 = 0;
-            while (cycle < 3) : (cycle += 1) {
-                try expect.equal(eng.getWorkstationStatus(100).?, .Active);
-                eng.update(); // Process
-                eng.notifyStoreComplete(1);
-            }
+            // Complete first cycle
+            try expect.equal(eng.getWorkstationStatus(100).?, .Active);
+            eng.update(); // Process
+            eng.notifyStoreComplete(1);
 
-            // EOS has accumulated 3 water
-            try expect.equal(eng.getStorageQuantity(13, .Water), 3);
-            try expect.equal(eng.getCyclesCompleted(100), 3);
+            // EOS now has 1 water (full)
+            try expect.equal(eng.hasItem(13, .Water), true);
+            try expect.equal(eng.getCyclesCompleted(100), 1);
 
-            // Workstation continues (no capacity limit)
+            // Workstation should be blocked (EOS full)
+            try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
+
+            // Remove item from EOS
+            _ = eng.removeFromStorage(13, .Water);
+
+            // Workstation should resume
             try expect.equal(eng.getWorkstationStatus(100).?, .Active);
         }
     };
@@ -763,7 +779,7 @@ pub const @"Engine" = struct {
             });
 
             // Add item only to second EIS (1 for recipe)
-            _ = eng.addToStorage(20, .Vegetable, 1);
+            _ = eng.addToStorage(20, .Vegetable);
 
             // Workstation should start (second EIS has item)
             try expect.equal(eng.getWorkstationStatus(100).?, .Active);
@@ -771,8 +787,8 @@ pub const @"Engine" = struct {
 
             // Complete pickup - item from EIS 2 should transfer to IIS
             eng.notifyPickupComplete(1);
-            try expect.equal(eng.getStorageQuantity(20, .Vegetable), 0);
-            try expect.equal(eng.getStorageQuantity(11, .Vegetable), 1);
+            try expect.equal(eng.hasItem(20, .Vegetable), false);
+            try expect.equal(eng.hasItem(11, .Vegetable), true);
         }
 
         test "workstation blocked when no EIS has required items" {
@@ -800,13 +816,13 @@ pub const @"Engine" = struct {
             });
 
             // Add vegetable to EIS 1 - still need meat
-            _ = eng.addToStorage(10, .Vegetable, 1);
+            _ = eng.addToStorage(10, .Vegetable);
 
             // Workstation should be blocked (missing meat)
             try expect.equal(eng.getWorkstationStatus(100).?, .Blocked);
 
             // Add meat to EIS 2 - now has all items
-            _ = eng.addToStorage(20, .Meat, 1);
+            _ = eng.addToStorage(20, .Meat);
 
             // Now should be active
             try expect.equal(eng.getWorkstationStatus(100).?, .Active);
@@ -838,8 +854,8 @@ pub const @"Engine" = struct {
             eng.notifyStoreComplete(1);
 
             // Water should be in first EOS
-            try expect.equal(eng.getStorageQuantity(13, .Water), 1);
-            try expect.equal(eng.getStorageQuantity(23, .Water), 0);
+            try expect.equal(eng.hasItem(13, .Water), true);
+            try expect.equal(eng.hasItem(23, .Water), false);
         }
 
     };
@@ -872,12 +888,12 @@ pub const @"Engine" = struct {
             });
 
             // Add ingredient to start (need 1 for recipe)
-            _ = eng.addToStorage(10, .Vegetable, 1);
+            _ = eng.addToStorage(10, .Vegetable);
             try expect.equal(eng.getWorkstationStatus(100).?, .Active);
             try expect.equal(g_pickup_started_calls, 1);
 
             // Simulate item being removed while worker is en route
-            _ = eng.removeFromStorage(10, .Vegetable, 1);
+            _ = eng.removeFromStorage(10, .Vegetable);
 
             // Notify pickup complete - transfer should fail
             eng.notifyPickupComplete(1);
@@ -887,7 +903,7 @@ pub const @"Engine" = struct {
             try expect.equal(eng.getWorkerState(1).?, .Idle);
 
             // IIS should still be empty (no partial transfer)
-            try expect.equal(eng.getStorageQuantity(11, .Vegetable), 0);
+            try expect.equal(eng.hasItem(11, .Vegetable), false);
         }
     };
 

@@ -318,67 +318,74 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
             return self.storages.getPtr(storage_id);
         }
 
-        /// Add items to a storage. Returns amount actually added.
-        pub fn addToStorage(self: *Self, game_id: GameId, item: Item, quantity: u32) u32 {
-            const storage_id = self.storage_by_game_id.get(game_id) orelse return 0;
-            const storage = self.storages.get(storage_id) orelse return 0;
+        /// Add an item to a storage. Returns true if added, false if storage already full.
+        /// Each storage can hold at most one item.
+        pub fn addToStorage(self: *Self, game_id: GameId, item: Item) bool {
+            const storage_id = self.storage_by_game_id.get(game_id) orelse return false;
+            const storage = self.storages.get(storage_id) orelse return false;
 
             // Check if storage accepts this item type
-            if (!storage.isAllowed(item)) return 0;
+            if (!storage.isAllowed(item)) return false;
 
-            // Update quantity
-            const qty_ptr = self.storage_quantities.getPtr(storage_id) orelse return 0;
-            qty_ptr.* += quantity;
+            // Check if storage already has an item
+            const qty_ptr = self.storage_quantities.getPtr(storage_id) orelse return false;
+            if (qty_ptr.* > 0) return false;
 
-            if (quantity > 0) {
-                log.debug("storage add: storage={d}, item={s}, added={d}, new_qty={d}", .{
-                    fmtGameId(game_id),
-                    fmtItem(item),
-                    quantity,
-                    qty_ptr.*,
-                });
+            // Set to 1
+            qty_ptr.* = 1;
 
-                self.checkWorkstationsReadiness();
-                self.tryAssignAllIdleWorkersToTransports();
-            }
+            log.debug("storage add: storage={d}, item={s}", .{
+                fmtGameId(game_id),
+                fmtItem(item),
+            });
 
-            return quantity;
+            self.checkWorkstationsReadiness();
+            self.tryAssignAllIdleWorkersToTransports();
+
+            return true;
         }
 
-        /// Remove items from a storage. Returns amount actually removed.
-        pub fn removeFromStorage(self: *Self, game_id: GameId, item: Item, quantity: u32) u32 {
-            const storage_id = self.storage_by_game_id.get(game_id) orelse return 0;
-            const storage = self.storages.get(storage_id) orelse return 0;
+        /// Remove the item from a storage. Returns true if removed, false if storage was empty.
+        pub fn removeFromStorage(self: *Self, game_id: GameId, item: Item) bool {
+            const storage_id = self.storage_by_game_id.get(game_id) orelse return false;
+            const storage = self.storages.get(storage_id) orelse return false;
 
             // Check if storage accepts this item type
-            if (!storage.isAllowed(item)) return 0;
+            if (!storage.isAllowed(item)) return false;
 
-            // Update quantity
-            const qty_ptr = self.storage_quantities.getPtr(storage_id) orelse return 0;
-            const to_remove = @min(quantity, qty_ptr.*);
-            qty_ptr.* -= to_remove;
+            // Check if storage has an item
+            const qty_ptr = self.storage_quantities.getPtr(storage_id) orelse return false;
+            if (qty_ptr.* == 0) return false;
 
-            if (to_remove > 0) {
-                log.debug("storage remove: storage={d}, item={s}, removed={d}, new_qty={d}", .{
-                    fmtGameId(game_id),
-                    fmtItem(item),
-                    to_remove,
-                    qty_ptr.*,
-                });
-            }
+            // Clear the storage
+            qty_ptr.* = 0;
 
-            return to_remove;
+            log.debug("storage remove: storage={d}, item={s}", .{
+                fmtGameId(game_id),
+                fmtItem(item),
+            });
+
+            // Removing from EOS may unblock workstations
+            self.checkWorkstationsReadiness();
+
+            return true;
         }
 
-        /// Get quantity of an item in a storage.
-        pub fn getStorageQuantity(self: *Self, game_id: GameId, item: Item) u32 {
-            const storage_id = self.storage_by_game_id.get(game_id) orelse return 0;
-            const storage = self.storages.get(storage_id) orelse return 0;
+        /// Check if a storage has an item.
+        pub fn hasItem(self: *Self, game_id: GameId, item: Item) bool {
+            const storage_id = self.storage_by_game_id.get(game_id) orelse return false;
+            const storage = self.storages.get(storage_id) orelse return false;
 
             // Check if storage accepts this item type
-            if (!storage.isAllowed(item)) return 0;
+            if (!storage.isAllowed(item)) return false;
 
-            return self.storage_quantities.get(storage_id) orelse 0;
+            return (self.storage_quantities.get(storage_id) orelse 0) > 0;
+        }
+
+        /// Check if a storage is empty.
+        pub fn isEmpty(self: *Self, game_id: GameId) bool {
+            const storage_id = self.storage_by_game_id.get(game_id) orelse return true;
+            return (self.storage_quantities.get(storage_id) orelse 0) == 0;
         }
 
         /// Get quantity by storage ID (internal use).
@@ -953,17 +960,18 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
                 }
             }
 
-            // Check if any EOS can accept IOS outputs
+            // Check if any EOS can accept IOS outputs (has space)
             // Each IOS storage defines one output produced
             for (ws.ios) |ios_id| {
                 const ios = self.storages.get(ios_id) orelse return false;
 
-                // Find an EOS that accepts this item type
+                // Find an EOS that accepts this item type AND is empty
                 var found = false;
                 for (ws.eos) |eos_id| {
                     const eos = self.storages.get(eos_id) orelse continue;
-                    // Check if EOS accepts the same item type as IOS
-                    if (std.meta.eql(eos.item, ios.item)) {
+                    const eos_qty = self.getStorageQuantityById(eos_id);
+                    // Check if EOS accepts the same item type as IOS AND is empty
+                    if (std.meta.eql(eos.item, ios.item) and eos_qty == 0) {
                         found = true;
                         break;
                     }
@@ -996,14 +1004,16 @@ pub fn BaseEngine(comptime GameId: type, comptime Item: type) type {
             return null;
         }
 
-        /// Find an EOS that can accept the output items
-        /// Returns the first EOS that accepts any of the output items
+        /// Find an EOS that can accept the output items (is empty)
+        /// Returns the first EOS that accepts any of the output items and has space
         fn findSuitableEos(self: *Self, ws: *const Workstation) ?StorageId {
             if (ws.ios.len == 0) return null;
 
-            // Find an EOS that accepts any output item
+            // Find an EOS that accepts any output item AND is empty
             for (ws.eos) |eos_id| {
                 const eos = self.storages.get(eos_id) orelse continue;
+                const eos_qty = self.getStorageQuantityById(eos_id);
+                if (eos_qty > 0) continue; // Skip full EOS
                 // Check if this EOS accepts any item from IOS
                 for (ws.ios) |ios_id| {
                     const ios = self.storages.get(ios_id) orelse continue;

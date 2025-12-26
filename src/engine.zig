@@ -165,16 +165,20 @@ pub fn Engine(comptime GameId: type, comptime Item: type, comptime Dispatcher: t
             return self.base.addStorage(game_id, options);
         }
 
-        pub fn addToStorage(self: *Self, game_id: GameId, item: Item, quantity: u32) u32 {
-            return self.base.addToStorage(game_id, item, quantity);
+        pub fn addToStorage(self: *Self, game_id: GameId, item: Item) bool {
+            return self.base.addToStorage(game_id, item);
         }
 
-        pub fn removeFromStorage(self: *Self, game_id: GameId, item: Item, quantity: u32) u32 {
-            return self.base.removeFromStorage(game_id, item, quantity);
+        pub fn removeFromStorage(self: *Self, game_id: GameId, item: Item) bool {
+            return self.base.removeFromStorage(game_id, item);
         }
 
-        pub fn getStorageQuantity(self: *Self, game_id: GameId, item: Item) u32 {
-            return self.base.getStorageQuantity(game_id, item);
+        pub fn hasItem(self: *Self, game_id: GameId, item: Item) bool {
+            return self.base.hasItem(game_id, item);
+        }
+
+        pub fn isEmpty(self: *Self, game_id: GameId) bool {
+            return self.base.isEmpty(game_id);
         }
 
         pub fn getStorage(self: *Self, game_id: GameId) ?*Storage {
