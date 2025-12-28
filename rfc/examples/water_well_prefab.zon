@@ -1,32 +1,31 @@
 // Water well - producer workstation (no inputs)
 // Simplest workstation type: just produces items over time
+// Uses specific WellWorkstation type (0 EIS, 0 IIS, 1 IOS, 1 EOS)
 .{
     .name = "water_well",
     .components = .{
-        .TaskWorkstation = .{
-            .process_duration = 20,
-            .priority = .Low,
-        },
         .Position = .{ .x = 0, .y = 0 },
         .Sprite = .{ .id = "well" },
-    },
-    // Producer: no EIS/IIS children, only IOS/EOS
-    .children = .{
-        // IOS - Internal Output Storage (invisible)
-        .{
-            .components = .{
-                .TaskStorage = .{ .accepts = .{ .Water = true } },
-                .TaskStorageRole = .{ .role = .ios },
+        // Producer workstation - no inputs
+        .WellWorkstation = .{
+            .eis = .{},
+            .iis = .{},
+            .ios = .{
+                // IOS - Internal Output Storage (invisible)
+                .{ .components = .{ .TaskStorage = .{} } },
+            },
+            .eos = .{
+                // EOS - External Output Storage (visible)
+                .{
+                    .components = .{
+                        .TaskStorage = .{},
+                        .Position = .{ .x = 15, .y = 0 },
+                        .Sprite = .{ .id = "water_bucket" },
+                    },
+                },
             },
         },
-        // EOS - External Output Storage (visible)
-        .{
-            .components = .{
-                .TaskStorage = .{ .accepts = .{ .Water = true } },
-                .TaskStorageRole = .{ .role = .eos },
-                .Position = .{ .x = 15, .y = 0 },
-                .Sprite = .{ .id = "water_bucket" },
-            },
-        },
+        // Configuration and runtime state
+        .TaskWorkstationBinding = .{ .process_duration = 20, .priority = .Low },
     },
 }

@@ -1,17 +1,15 @@
-# RFC 026 Addendum: Comptime-Sized Workstation Arrays
+# RFC 026: Comptime-Sized Workstation Arrays
 
 **Status**: Draft
-**Parent RFC**: [026-prefab-integration.md](./026-prefab-integration.md)
+**Issue**: [#26](https://github.com/labelle-toolkit/labelle-tasks/issues/26)
 **Author**: @alexandrecalvao
 **Created**: 2025-12-26
 
 ## Summary
 
-Explore an alternative approach where workstations use comptime-sized arrays for storage references, with labelle-tasks managing a registry of workstation types.
+Workstations use comptime-sized arrays for storage references, with labelle-tasks managing a registry of workstation types.
 
 ## Motivation
-
-The parent RFC's Option E (parent-child with role components) separates storage binding from the workstation component. While this avoids slice management, it adds indirection and runtime mapping.
 
 Comptime-sized arrays offer:
 - Zero runtime allocation
@@ -247,21 +245,6 @@ pub fn WorkstationInterface(comptime T: type) type {
 }
 ```
 
-## Comparison with Parent RFC Options
-
-| Aspect | Option E (Parent-Child) | Comptime Arrays |
-|--------|------------------------|-----------------|
-| **Memory layout** | HashMap + ArrayLists per workstation | Fixed-size arrays in component |
-| **Runtime allocation** | Yes (dynamic binding) | None |
-| **Storage count** | Unlimited (runtime) | Fixed at comptime |
-| **Type safety** | Runtime errors if binding fails | Compile-time guarantees |
-| **ECS queries** | Single `TaskWorkstation` component | Multiple types + `TaskWorkstationBinding` |
-| **Prefab definition** | Generic `TaskWorkstation` component | Specific type (`KitchenWorkstation`) |
-| **Adding workstation variant** | Just create prefab | Define type + update components |
-| **Storage access** | HashMap lookup → ArrayList index | Direct array index |
-| **Component size** | Small (no storage refs) | Larger (embedded arrays) |
-| **Workstation data location** | Task engine internal state | ECS component |
-
 ## Trade-offs
 
 ### Advantages
@@ -351,11 +334,9 @@ All workstation types are comptime-defined. No dynamic/runtime workstation creat
 
 1. Prototype `TaskWorkstation` generic type with 2-3 workstation variants
 2. Test ECS integration with labelle-engine component system
-3. Implement prefab loader support for filling storage arrays from children
+3. Implement prefab loader support for filling storage arrays
 4. Implement `TaskWorkstationBinding` sync logic
-5. Benchmark against Option E (parent-child runtime mapping) approach
 
 ## References
 
-- [Parent RFC: 026-prefab-integration.md](./026-prefab-integration.md)
 - [Zig comptime generic patterns](https://ziglang.org/documentation/master/#Generic-Structs)
