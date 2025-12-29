@@ -1,4 +1,4 @@
-# RFC 028: Work Accumulation Model
+# RFC 028: Work Completion Model
 
 **Status**: Draft
 **Issue**: TBD
@@ -8,275 +8,241 @@
 
 ## Summary
 
-Define how work accumulation triggers the IIS → IOS transformation at workstations.
+Define how the game notifies the task engine that work is complete, triggering the IIS → IOS transformation.
 
 ## Motivation
 
-labelle-tasks is purely event-driven with no internal timers. The game controls all timing, including how long processing takes. This RFC defines the mechanism for:
+labelle-tasks is purely event-driven with no internal timers or state duplication. The game is the single source of truth for:
 
-1. Game reporting work progress to task engine
-2. Task engine tracking accumulated work
-3. Triggering transformation when work is complete
-4. Notifying game that transformation occurred
+- How long work takes (required time)
+- How much work has been done (accumulated time)
+- When work is complete
 
-## Design
+The task engine only needs to know **when** work is complete, not track progress.
 
-### Work Flow
+## Design Principle: Single Source of Truth
 
 ```
-┌─────────────┐          ┌──────────────┐          ┌─────────────┐
-│    Game     │          │ Task Engine  │          │    Game     │
-│  (caller)   │          │  (internal)  │          │ (observer)  │
-└──────┬──────┘          └──────┬───────┘          └──────┬──────┘
-       │                        │                         │
-       │  work(ws, dt)          │                         │
-       │───────────────────────>│                         │
-       │                        │ accumulated += dt       │
-       │                        │                         │
-       │  work(ws, dt)          │                         │
-       │───────────────────────>│                         │
-       │                        │ accumulated += dt       │
-       │                        │                         │
-       │  work(ws, dt)          │                         │
-       │───────────────────────>│                         │
-       │                        │ accumulated += dt       │
-       │                        │                         │
-       │                        │ if accumulated >= required:
-       │                        │   transform IIS → IOS   │
-       │                        │   emit work_completed ──────────>│
-       │                        │   advance to Store step │
-       │                        │                         │
+┌─────────────────────────────────────┐
+│              Game                    │
+│  - required_work: 5.0 seconds       │
+│  - accumulated_work: 0.0            │
+│  - tracks progress                   │
+│  - shows progress bar                │
+│  - decides when complete             │
+└──────────────────┬──────────────────┘
+                   │
+                   │ work_completed(workstation_id)
+                   ▼
+┌─────────────────────────────────────┐
+│          Task Engine                 │
+│  - receives notification             │
+│  - transforms IIS → IOS             │
+│  - advances to Store step            │
+│  - emits store_started hook          │
+└─────────────────────────────────────┘
 ```
 
-### Workstation State
+**No duplicated state.** Task engine doesn't track work progress.
 
-```zig
-const WorkstationState = struct {
-    // Configuration (set at creation)
-    required_work: f32,  // e.g., 5.0 seconds
+## GameHook: `work_completed`
 
-    // Runtime state
-    accumulated_work: f32 = 0,
-    current_step: Step = .Pickup,
-    assigned_worker: ?GameId = null,
-
-    // ... other fields
-};
-```
-
-### GameHook: `work`
-
-Called by game every frame while worker is processing:
+Called by game when processing work is complete:
 
 ```zig
 // In GameHookPayload
-work: struct {
+work_completed: struct {
     workstation_id: GameId,
-    delta_time: f32,
 },
 ```
 
-**Usage:**
+**Game usage:**
 ```zig
-// Game loop
+// Game tracks work internally
+const WorkProgress = struct {
+    workstation_id: u32,
+    required: f32,
+    accumulated: f32 = 0,
+};
+
 fn update(delta_time: f32) void {
-    for (workers) |worker| {
-        if (worker.state == .Processing) {
-            _ = engine.work(worker.assigned_workstation, delta_time);
+    for (work_in_progress.items) |*progress| {
+        progress.accumulated += delta_time;
+
+        if (progress.accumulated >= progress.required) {
+            // Notify task engine
+            _ = engine.handle(.{ .work_completed = .{
+                .workstation_id = progress.workstation_id,
+            }});
+            work_in_progress.remove(progress);
         }
     }
 }
 ```
 
-### Internal Handler
+## Task Engine Handler
 
 ```zig
-fn handleWork(self: *Self, workstation_id: GameId, delta_time: f32) bool {
+fn handleWorkCompleted(self: *Self, workstation_id: GameId) bool {
     const ws = self.workstations.getPtr(workstation_id) orelse {
-        log.err("work: unknown workstation {}", .{workstation_id});
+        log.err("work_completed: unknown workstation {}", .{workstation_id});
         return false;
     };
 
     // Must be in Process step
     if (ws.current_step != .Process) {
-        log.err("work: workstation {} not in Process step", .{workstation_id});
+        log.err("work_completed: workstation {} not in Process step", .{workstation_id});
         return false;
     }
 
     // Must have assigned worker
     const worker_id = ws.assigned_worker orelse {
-        log.err("work: workstation {} has no assigned worker", .{workstation_id});
+        log.err("work_completed: workstation {} has no assigned worker", .{workstation_id});
         return false;
     };
-
-    // Accumulate work
-    ws.accumulated_work += delta_time;
-
-    // Check if transformation should happen
-    if (ws.accumulated_work >= ws.required_work) {
-        self.completeWork(workstation_id, worker_id);
-    }
-
-    return true;
-}
-
-fn completeWork(self: *Self, workstation_id: GameId, worker_id: GameId) void {
-    const ws = self.workstations.getPtr(workstation_id).?;
 
     // Transform IIS → IOS
     self.transformItems(workstation_id);
 
-    // Reset for next cycle
-    ws.accumulated_work = 0;
-
     // Advance to Store step
     ws.current_step = .Store;
 
-    // Notify game
-    self.dispatchHook(.{ .work_completed = .{
-        .workstation_id = workstation_id,
-        .worker_id = worker_id,
-    }});
-
-    // Also emit store_started
+    // Notify game to start store movement
     self.dispatchHook(.{ .store_started = .{
         .worker_id = worker_id,
         .storage_id = self.selectEos(workstation_id),
     }});
+
+    return true;
 }
 ```
 
-### TaskHook: `work_completed`
+## Sequence Diagram
 
-Emitted when transformation completes:
-
-```zig
-// In TaskHookPayload
-work_completed: struct {
-    workstation_id: GameId,
-    worker_id: GameId,
-},
 ```
-
-**Game receives:**
-```zig
-const MyTaskHooks = struct {
-    pub fn work_completed(payload: TaskHookPayload(u32, Item)) void {
-        const info = payload.work_completed;
-        // Transformation done!
-        // - IIS items consumed
-        // - IOS items produced
-        // - Worker should now move to EOS
-        game.playSound("crafting_complete");
-    }
-};
+Game                              Task Engine
+  │                                    │
+  │  (worker arrives at workstation)   │
+  │──pickup_completed(worker)─────────>│
+  │                                    │
+  │<─────────────process_started───────│  "start processing"
+  │                                    │
+  │  Game: start timer/animation       │
+  │  Game: accumulate work             │
+  │  Game: show progress bar           │
+  │  Game: when done...                │
+  │                                    │
+  │──work_completed(workstation)──────>│
+  │                                    │  transform IIS → IOS
+  │<─────────────store_started─────────│  "go store"
+  │                                    │
+  │  (worker moves to EOS)             │
+  │──store_completed(worker)──────────>│
+  │                                    │
+  │<─────────────cycle_completed───────│  "done!"
 ```
 
 ## Edge Cases
 
-### 1. Worker Interrupted Mid-Work
+### Worker Interrupted Mid-Work
 
-If worker is pulled away (e.g., player takes control):
+If worker is pulled away before work completes:
 
 ```zig
-// Game notifies worker is unavailable
 engine.handle(.{ .worker_unavailable = .{ .worker_id = worker_id } });
 ```
 
-Task engine should:
-- Keep `accumulated_work` (work not lost)
-- Unassign worker from workstation
-- Workstation goes back to Queued status
-- When new worker assigned, continues from accumulated work
+**Game responsibility:**
+- Pause or continue tracking work progress (game decides)
+- Keep accumulated work for when worker returns
+- When new worker assigned and work resumes, continue from where left off
 
-**Or** reset accumulated work (configurable?):
+**Task engine:**
+- Unassigns worker from workstation
+- Workstation goes to Queued status
+- Waits for new worker assignment
+- Does NOT reset any work state (because it doesn't track any)
+
+### Workstation Configuration
+
+Where does `required_work` live?
+
+**Option A: Game only (recommended)**
 ```zig
-const WorkstationConfig = struct {
-    required_work: f32,
-    reset_on_interrupt: bool = false,  // If true, lose progress when worker leaves
+// Game knows recipe requirements
+const recipes = .{
+    .kitchen = .{ .required_work = 5.0 },
+    .well = .{ .required_work = 2.0 },
 };
 ```
 
-### 2. Multiple Workers at Same Workstation
-
-Current design: one worker per workstation. If needed later:
-- Multiple workers could contribute to same `accumulated_work`
-- Would need `work` to include `worker_id` for tracking
-
-### 3. Variable Work Rate
-
-Worker efficiency could modify delta_time:
-
+**Option B: Task engine stores but doesn't use**
 ```zig
-// Game applies worker efficiency
-const effective_dt = delta_time * worker.efficiency;  // e.g., 1.5x faster
-engine.work(workstation_id, effective_dt);
+// Task engine stores for reference, but game still decides when done
+const WorkstationConfig = struct {
+    required_work: f32,  // Informational only
+};
 ```
 
-Task engine doesn't need to know about efficiency - just accumulates what it receives.
+**Recommendation:** Option A. Task engine doesn't need this information.
 
-### 4. Work Progress Query
+### Progress Query
 
-Game might want to show progress bar:
+If UI needs progress, game provides it:
 
 ```zig
-// Add query method
-pub fn getWorkProgress(self: *Self, workstation_id: GameId) ?f32 {
-    const ws = self.workstations.get(workstation_id) orelse return null;
-    return ws.accumulated_work / ws.required_work;  // 0.0 to 1.0
+// Game API
+pub fn getWorkProgress(workstation_id: u32) f32 {
+    const progress = work_in_progress.get(workstation_id) orelse return 0;
+    return progress.accumulated / progress.required;
 }
 ```
 
-## Alternatives Considered
+Task engine has no progress information - it's not its responsibility.
 
-### A: Process Timer in Task Engine
+## What Task Engine Tracks
 
-Task engine owns timer, game just calls `update(delta_time)`:
-
-```zig
-engine.update(delta_time);  // Advances all timers
-```
-
-**Rejected because:**
-- Less control for game
-- Can't have variable work rates per worker
-- Mixes orchestration with timing
-
-### B: Game Tells Task Engine "Work Done"
-
-Game tracks time, calls when complete:
+For the Process step, task engine only tracks:
 
 ```zig
-engine.handle(.{ .process_completed = .{ .worker_id = worker_id } });
+const WorkstationState = struct {
+    current_step: Step,        // .Process during work
+    assigned_worker: ?GameId,  // Who is working
+    // NO accumulated_work
+    // NO required_work
+};
 ```
 
-**Rejected because:**
-- Game must track required_work per workstation (duplicated knowledge)
-- Task engine can't validate timing
-- Harder to show progress
+## Comparison with Previous Design
 
-### C: Discrete Work Units
+| Aspect | Previous (RFC draft) | Current |
+|--------|---------------------|---------|
+| Work tracking | Task engine | Game only |
+| required_work | Task engine | Game only |
+| accumulated_work | Task engine | Game only |
+| Progress query | Task engine | Game |
+| Hook frequency | Every frame | Once when done |
+| Transformation trigger | Task engine decides | Game decides |
 
-Game calls `addWork(amount)` instead of delta time:
+## Benefits
 
-```zig
-engine.addWork(workstation_id, 1);  // Add 1 unit of work
-```
-
-**Could work, but:**
-- Requires game to convert time → units
-- Less intuitive than delta time
-- Same result, more indirection
+1. **Single source of truth** - No state duplication
+2. **Simpler task engine** - Less state to manage
+3. **Game flexibility** - Game controls timing completely
+4. **Less coupling** - Task engine doesn't need recipe timings
+5. **Fewer hooks** - One `work_completed` vs many `work(dt)`
 
 ## Summary
 
-| Aspect | Design |
-|--------|--------|
-| Who tracks time | Task engine (accumulated_work) |
-| Who controls pace | Game (calls work every frame) |
-| Who decides "done" | Task engine (accumulated >= required) |
-| Who gets notified | Game (via work_completed hook) |
-| Progress visibility | Query method: getWorkProgress() |
+| Responsibility | Owner |
+|----------------|-------|
+| Track work progress | Game |
+| Know required time | Game |
+| Show progress UI | Game |
+| Decide when complete | Game |
+| Do transformation | Task Engine |
+| Advance workflow | Task Engine |
+| Emit hooks | Task Engine |
 
 ## References
 

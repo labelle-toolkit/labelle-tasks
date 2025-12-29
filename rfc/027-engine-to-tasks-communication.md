@@ -295,10 +295,8 @@ pub fn GameHookPayload(comptime GameId: type, comptime Item: type) type {
 
         // Step completion
         pickup_completed: struct { worker_id: GameId },
+        work_completed: struct { workstation_id: GameId },  // Game tracks timing
         store_completed: struct { worker_id: GameId },
-
-        // Work accumulation (called every frame while worker is processing)
-        work: struct { workstation_id: GameId, delta_time: f32 },
     };
 }
 ```
@@ -397,72 +395,58 @@ For states, use past participle: `worker_idled` sounds odd → use **`worker_ava
 | `workstation_disabled` | Workstation broken, unpowered |
 | `workstation_removed` | Workstation entity destroyed |
 | `pickup_completed` | Worker finished pickup movement (arrived at workstation with item in IIS) |
-| `work` | Every frame while worker is processing (accumulates work time) |
+| `work_completed` | Game's work timer finished (processing complete) |
 | `store_completed` | Worker finished store movement (arrived at EOS, item stored) |
 
 **Note:** Task engine internally manages items during task execution. External hooks (`item_added`, `item_removed`) are for changes **outside** of task workflow.
 
-### 5b. Work Accumulation and Transformation
+### 5b. Work Completion (Single Source of Truth)
 
-The `work` hook is special - it's called every frame while a worker is processing:
+**Game owns work timing.** Task engine does NOT track:
+- `required_work`
+- `accumulated_work`
+- Progress percentage
+
+Game tracks work internally and notifies when complete:
 
 ```zig
-// Game loop while worker is at workstation
+// Game tracks work progress
 fn update(delta_time: f32) void {
-    if (worker.state == .Processing) {
-        _ = engine.handle(.{ .work = .{
-            .workstation_id = worker.assigned_workstation,
-            .delta_time = delta_time,
-        }});
+    for (work_in_progress.items) |*progress| {
+        progress.accumulated += delta_time;
+
+        if (progress.accumulated >= progress.required) {
+            // Notify task engine - work is done
+            _ = engine.handle(.{ .work_completed = .{
+                .workstation_id = progress.workstation_id,
+            }});
+        }
     }
 }
 ```
 
-**Task engine internally:**
-1. Accumulates work time for the workstation
-2. When `accumulated_work >= workstation.required_work`:
-   - Transforms IIS items → IOS items
-   - Emits `work_completed` TaskHook to notify game
-   - Advances to Store step
-
+**Task engine handler:**
 ```zig
-// Inside engine.handleWork()
-fn handleWork(self: *Self, workstation_id: GameId, delta_time: f32) bool {
+fn handleWorkCompleted(self: *Self, workstation_id: GameId) bool {
     const ws = self.workstations.getPtr(workstation_id) orelse return false;
 
-    ws.accumulated_work += delta_time;
+    // Transform IIS → IOS
+    self.transformItems(workstation_id);
 
-    if (ws.accumulated_work >= ws.required_work) {
-        // Transform IIS → IOS
-        self.transformItems(workstation_id);
+    // Advance to store step
+    ws.current_step = .Store;
 
-        // Notify game
-        self.dispatchHook(.{ .work_completed = .{
-            .workstation_id = workstation_id,
-            .worker_id = ws.assigned_worker,
-        }});
-
-        // Advance to store step
-        ws.current_step = .Store;
-        ws.accumulated_work = 0;
-    }
+    // Emit store_started hook
+    self.dispatchHook(.{ .store_started = .{
+        .worker_id = ws.assigned_worker,
+        .storage_id = self.selectEos(workstation_id),
+    }});
 
     return true;
 }
 ```
 
-**TaskHook emitted (tasks → game):**
-```zig
-// In TaskHookPayload
-work_completed: struct {
-    workstation_id: GameId,
-    worker_id: GameId,
-},
-```
-
-The game receives `work_completed` and knows:
-- Transformation happened (IIS → IOS)
-- Worker should now move to EOS to store
+See [RFC 028: Work Completion Model](./028-work-accumulation.md) for details.
 
 ### 5b. Transport Responsibility
 
@@ -489,13 +473,12 @@ Task Engine                          Game
      │                                 │
      │──process_started(worker, ws)───>│  "Worker should process"
      │                                 │
-     │                                 │  Game: play animation
-     │<──work(ws, dt)──────────────────│  (every frame)
-     │<──work(ws, dt)──────────────────│  (every frame)
-     │<──work(ws, dt)──────────────────│  (every frame)
-     │   ... accumulated >= required   │
+     │                                 │  Game: play animation, track time
+     │                                 │  Game: when timer complete...
      │                                 │
-     │──work_completed(ws, worker)────>│  "IIS→IOS done, go store"
+     │<──work_completed(ws)────────────│  "Processing done"
+     │                                 │
+     │   (transform IIS → IOS)         │
      │                                 │
      │──store_started(worker, eos)────>│  "Worker should store at EOS"
      │                                 │
@@ -655,7 +638,7 @@ pub fn Engine(
                 .workstation_disabled => |p| self.handleWorkstationDisabled(p.workstation_id),
                 .workstation_removed => |p| self.handleWorkstationRemoved(p.workstation_id),
                 .pickup_completed => |p| self.handlePickupCompleted(p.worker_id),
-                .work => |p| self.handleWork(p.workstation_id, p.delta_time),
+                .work_completed => |p| self.handleWorkCompleted(p.workstation_id),
                 .store_completed => |p| self.handleStoreCompleted(p.worker_id),
             };
         }
@@ -669,8 +652,8 @@ pub fn Engine(
             return self.handle(.{ .worker_available = .{ .worker_id = worker_id } });
         }
 
-        pub fn work(self: *Self, workstation_id: GameId, delta_time: f32) bool {
-            return self.handle(.{ .work = .{ .workstation_id = workstation_id, .delta_time = delta_time } });
+        pub fn workCompleted(self: *Self, workstation_id: GameId) bool {
+            return self.handle(.{ .work_completed = .{ .workstation_id = workstation_id } });
         }
 
         // ... other convenience methods
@@ -770,24 +753,19 @@ pub const TasksPlugin = struct {
 | `workstation_disabled` | `workstation_id` | Workstation non-operational |
 | `workstation_removed` | `workstation_id` | Workstation entity destroyed |
 | `pickup_completed` | `worker_id` | Worker finished pickup step |
-| `work` | `workstation_id`, `delta_time` | Accumulate work (every frame) |
+| `work_completed` | `workstation_id` | Game's work timer finished |
 | `store_completed` | `worker_id` | Worker finished store step |
-
-### New TaskHook (tasks → game)
-
-| Hook | Payload Fields | Purpose |
-|------|----------------|---------|
-| `work_completed` | `workstation_id`, `worker_id` | Transformation done (IIS→IOS), advance to store |
 
 ### Key Points
 
-1. **No timers** - Game calls `work(delta_time)` every frame, task engine accumulates
+1. **No timers in task engine** - Game owns work timing, calls `work_completed` when done
 2. **No transport** - Game handles movement, task engine tracks state
 3. **Event-driven** - All state changes via hooks
 4. **Symmetric** - Both directions use typed payload unions
-5. **Transformation** - Happens automatically when work accumulates to required amount
+5. **Single source of truth** - No duplicated state between game and task engine
 
 ## References
 
 - [RFC 026: Comptime Workstations](./026-comptime-workstations.md)
+- [RFC 028: Work Completion Model](./028-work-accumulation.md)
 - [labelle-tasks hooks system](../src/hooks.zig)
