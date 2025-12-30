@@ -4,6 +4,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Get dependencies
+    const zspec_dep = b.dependency("zspec", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Main module (use underscore for Zig module naming convention)
     const tasks_mod = b.addModule("labelle_tasks", .{
         .root_source_file = b.path("src/root.zig"),
@@ -11,13 +17,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Unit tests
+    // Unit tests with zspec runner (from test/ folder)
+    const test_mod = b.createModule(.{
+        .root_source_file = b.path("test/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_mod.addImport("zspec", zspec_dep.module("zspec"));
+    test_mod.addImport("labelle_tasks", tasks_mod);
+
     const unit_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = test_mod,
+        .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);

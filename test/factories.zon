@@ -1,0 +1,45 @@
+.{
+    // Workstation type configurations
+    .oven = .{
+        .eis_count = 1,
+        .iis_count = 2,
+        .ios_count = 1,
+        .eos_count = 1,
+    },
+    .well = .{
+        .eis_count = 0,
+        .iis_count = 0,
+        .ios_count = 1,
+        .eos_count = 1,
+    },
+    .mixer = .{
+        .eis_count = 2,
+        .iis_count = 3,
+        .ios_count = 2,
+        .eos_count = 1,
+    },
+
+    // Binding configurations
+    .default_binding = .{
+        .process_duration = 5,
+        .priority = .Normal,
+    },
+    .fast_binding = .{
+        .process_duration = 1,
+        .priority = .High,
+    },
+
+    // Storage configurations
+    .empty_storage = .{
+        .priority = .Normal,
+        .has_item = false,
+    },
+    .full_storage = .{
+        .priority = .Normal,
+        .has_item = true,
+    },
+    .high_priority_storage = .{
+        .priority = .High,
+        .has_item = false,
+    },
+}
