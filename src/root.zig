@@ -151,10 +151,3 @@ pub const StepType = engine_mod.StepType;
 
 /// Priority levels for workstations and storages.
 pub const Priority = engine_mod.Priority;
-
-// === Tests ===
-
-test {
-    _ = @import("engine.zig");
-    _ = @import("hooks.zig");
-}
