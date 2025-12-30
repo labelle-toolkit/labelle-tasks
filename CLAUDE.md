@@ -4,152 +4,168 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**labelle-tasks** is a self-contained task orchestration engine for Zig games. It manages worker assignment, task progression, and workstation workflows with storage-based item management.
+**labelle-tasks** is a pure state machine task orchestration engine for Zig games. It tracks abstract workflow state and emits hooks to notify the game of events, but never mutates game state directly.
 
 **Purpose**: Enable games to coordinate multi-step tasks (cooking, crafting, farming) where workers move items between storages and process them at workstations.
+
+**Key Principle**: The engine is a pure state machine. It tracks abstract state (has_item, item_type, current_step) and emits hooks. The game owns all entity lifecycle, timing, and ECS state.
 
 ## Build Commands
 
 ```bash
-# Run unit tests (zspec BDD-style tests)
+# Run unit tests
 zig build test
-
-# Run individual examples
-zig build kitchen-sim   # Interactive kitchen simulator
-zig build components    # ECS component usage
-zig build farm          # Full engine workflow
-zig build hooks         # Hook-based event observation
-
-# Run all examples
-zig build examples
 ```
 
 ## Architecture
 
-### Core Concept
+### Pure State Machine
 
-The engine uses a **storage-based workflow**:
+The engine tracks **abstract workflow state** only:
+- `has_item: bool` - Does storage have an item?
+- `item_type: ?Item` - What type of item?
+- `current_step: StepType` - Pickup/Process/Store
+- `assigned_worker: ?GameId` - Which worker is assigned?
+
+The engine **never**:
+- Holds entity references
+- Manages timers or work progress
+- Instantiates or destroys prefabs
+- Accesses ECS components
+
+### Communication
+
+**Game → Tasks** (via `handle()`):
+```zig
+engine.handle(.{ .worker_available = .{ .worker_id = id } });
+engine.handle(.{ .pickup_completed = .{ .worker_id = id } });
+engine.handle(.{ .work_completed = .{ .workstation_id = id } });
+engine.handle(.{ .store_completed = .{ .worker_id = id } });
+```
+
+**Tasks → Game** (via hooks):
+```zig
+const MyHooks = struct {
+    pub fn process_completed(payload: anytype) void {
+        // Game destroys input entities, creates output entities
+    }
+    pub fn store_started(payload: anytype) void {
+        // Game starts worker movement animation
+    }
+};
+```
+
+### Storage-Based Workflow
+
+Items flow through storages: `EIS → IIS (Pickup) → IOS (Process) → EOS (Store)`
+
 - **EIS** (External Input Storage): Source of raw materials
-- **IIS** (Internal Input Storage): Recipe input - each IIS defines one ingredient needed per cycle
-- **IOS** (Internal Output Storage): Recipe output - each IOS defines one product per cycle
-- **EOS** (External Output Storage): Final product storage
+- **IIS** (Internal Input Storage): Recipe inputs
+- **IOS** (Internal Output Storage): Recipe outputs
+- **EOS** (External Output Storage): Final products
 
-Each storage holds **one item type** (quantity 0 or 1 in single-item model).
-For multi-item recipes, use multiple IIS storages (one for each unit of an ingredient required). For example, a recipe needing 2 Flour and 1 Meat would require three IIS storages: two for Flour and one for Meat.
+Each storage holds **one item** (has_item: bool).
 
-Workflow: `EIS → IIS (Pickup) → IOS (Process) → EOS (Store)`
+### State Ownership
 
-### Key Design Principles
+| State | Owner |
+|-------|-------|
+| `has_item`, `item_type` | Task Engine |
+| `current_step`, `assigned_worker` | Task Engine |
+| Entity references | Game |
+| Work timers, progress | Game |
+| Positions, sprites | Game |
+| Prefab instances | Game |
 
-1. **Generic over GameId, Item, and Dispatcher types** - `Engine(u32, MyItemEnum, MyDispatcher)`
-2. **Storage-based workflow** - Items flow through defined storage paths
-3. **Single-item storages** - Each storage holds one item type
-4. **Multiple storage support** - All storage references are slices for flexible routing
-5. **Transport tasks** - Recurring item movement between any storages
-6. **Hook-driven** - Games receive events via comptime hooks with zero overhead
+### Main Files
+
+- `src/root.zig` - Public API exports
+- `src/engine.zig` - Core Engine implementation
+- `src/hooks.zig` - Hook payloads and dispatcher
 
 ### Core Types
 
-**Worker States**: `.Idle`, `.Working`, `.Blocked`
+**Worker States**: `.Idle`, `.Working`, `.Unavailable`
 
 **Workstation Status**: `.Blocked`, `.Queued`, `.Active`
 
 **Step Types**: `.Pickup`, `.Process`, `.Store`
 
-### Main Files
+### Hook Types (Tasks → Game)
 
-- `src/root.zig` - Public API exports
-- `src/engine.zig` - Core Engine implementation with hook support
-- `src/storage.zig` - Storage management (item type definition only, quantities in engine)
-- `src/hooks.zig` - Hook system for event observation
-- `src/log.zig` - Scoped logging utilities
-
-### Hook System
-
-The engine uses a comptime hook system compatible with labelle-engine.
-
-**Hook Types:**
 - `pickup_started`, `process_started`, `process_completed`, `store_started` - Step lifecycle
 - `worker_assigned`, `worker_released` - Worker lifecycle
 - `workstation_blocked`, `workstation_queued`, `workstation_activated` - Workstation status
-- `transport_started`, `transport_completed` - Transport lifecycle
 - `cycle_completed` - Cycle lifecycle
+- `transport_started`, `transport_completed` - Transport lifecycle
 
-**Using Hooks:**
-```zig
-const MyHooks = struct {
-    pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
-        const info = payload.cycle_completed;
-        std.log.info("Cycle {d} completed!", .{info.cycles_completed});
-    }
-};
+### GameHook Types (Game → Tasks)
 
-// Simplified API - auto-wraps HookDispatcher
-var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
-
-// For an engine without hooks:
-// var engine = tasks.EngineWithHooks(u32, Item, struct {}).init(allocator);
-```
-
-### FindBestWorker Callback
-
-The only required callback selects which worker to assign:
-
-```zig
-engine.setFindBestWorker(fn(workstation_id: ?GameId, available_workers: []const GameId) ?GameId);
-```
+- `item_added`, `item_removed`, `storage_cleared` - Storage changes
+- `worker_available`, `worker_unavailable`, `worker_removed` - Worker changes
+- `workstation_enabled`, `workstation_disabled`, `workstation_removed` - Workstation changes
+- `pickup_completed`, `work_completed`, `store_completed` - Step completion
 
 ## Usage Pattern
 
 ```zig
+const tasks = @import("labelle-tasks");
 const Item = enum { Flour, Bread };
 
-// Define hooks (optional)
+// Define hooks to receive from task engine
 const MyHooks = struct {
-    pub fn process_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
-        // Play animation, etc.
+    game: *Game,
+
+    pub fn process_completed(self: *@This(), payload: anytype) void {
+        // Game handles entity transformation
+        self.game.transformWorkstationItems(payload.workstation_id);
+    }
+
+    pub fn store_started(self: *@This(), payload: anytype) void {
+        self.game.startWalkAnimation(payload.worker_id, payload.storage_id);
     }
 };
 
-// Create engine with hooks
-var engine = tasks.EngineWithHooks(u32, Item, MyHooks).init(allocator);
+// Create engine
+var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{ .game = &game });
 defer engine.deinit();
 
-engine.setFindBestWorker(findBestWorker);
+// Register entities (just IDs - engine doesn't know about game's data)
+try engine.addStorage(eis_id, .Flour);  // Has flour
+try engine.addStorage(iis_id, null);     // Empty
+try engine.addStorage(ios_id, null);     // Empty
+try engine.addStorage(eos_id, null);     // Empty
 
-// Create storages (each storage holds ONE item type)
-_ = engine.addStorage(EIS_ID, .{ .item = .Flour });
-_ = engine.addStorage(IIS_ID, .{ .item = .Flour });   // Recipe needs 1 flour
-_ = engine.addStorage(IOS_ID, .{ .item = .Bread });   // Produces 1 bread
-_ = engine.addStorage(EOS_ID, .{ .item = .Bread });
-
-// Create workstation (all storage references are slices)
-_ = engine.addWorkstation(BAKERY_ID, .{
-    .eis = &.{EIS_ID},
-    .iis = &.{IIS_ID},   // Multiple IIS for multi-ingredient recipes
-    .ios = &.{IOS_ID},   // Multiple IOS for multi-output recipes
-    .eos = &.{EOS_ID},
-    .process_duration = 3,
+try engine.addWorkstation(ws_id, .{
+    .eis = &.{eis_id},
+    .iis = &.{iis_id},
+    .ios = &.{ios_id},
+    .eos = &.{eos_id},
 });
 
-// Add worker and items
-_ = engine.addWorker(BAKER_ID, .{});
-_ = engine.addToStorage(EIS_ID, .Flour, 5);
+try engine.addWorker(worker_id);
 
-// Game loop notifications
-engine.notifyWorkerIdle(BAKER_ID);      // Worker available
-engine.update();                         // Process timers
-engine.notifyPickupComplete(BAKER_ID);   // Pickup done
-engine.notifyStoreComplete(BAKER_ID);    // Store done
+// Game notifies engine of events
+_ = engine.handle(.{ .worker_available = .{ .worker_id = worker_id } });
+// Engine emits pickup_started hook → game starts movement
+
+// When worker arrives at EIS...
+_ = engine.handle(.{ .pickup_completed = .{ .worker_id = worker_id } });
+// Engine emits process_started hook → game starts work timer
+
+// When game's work timer completes...
+_ = engine.handle(.{ .work_completed = .{ .workstation_id = ws_id } });
+// Engine emits process_completed, store_started hooks
+// Game destroys input entities, creates output entities, starts movement
+
+// When worker arrives at EOS...
+_ = engine.handle(.{ .store_completed = .{ .worker_id = worker_id } });
+// Engine emits cycle_completed hook
 ```
 
 ## Testing
 
-Tests use **zspec** (BDD-style) with factory helpers:
-- `test/engine_spec.zig` - Core behavior tests
-- `test/priority_spec.zig` - Priority selection tests
-- `test/factories.zig` - Test factories and helpers (KitchenFactory, ProducerFactory, etc.)
-- `test/factories.zon` - Factory default values
+Tests are in the source files using Zig's built-in test framework.
 
 Run with: `zig build test`
 
@@ -157,10 +173,10 @@ Run with: `zig build test`
 
 - **Language**: Zig 0.15+
 - **Build System**: Zig build system (`build.zig`)
-- **Testing**: zspec (BDD-style test runner)
 
-## Documentation
+## RFCs
 
-- **README.md** - High-level overview, concepts, API documentation
-- **uml/** - Visual diagrams (component, lifecycle, workflows)
-- **usage/** - Runnable examples demonstrating features
+Design decisions are documented in `rfc/`:
+- RFC 027: Engine-to-Tasks Communication
+- RFC 028: Work Completion Model
+- RFC 029: Task Engine as Pure State Machine

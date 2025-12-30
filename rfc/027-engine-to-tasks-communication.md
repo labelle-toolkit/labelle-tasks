@@ -4,22 +4,25 @@
 **Issue**: TBD
 **Author**: @alexandrecalvao
 **Created**: 2025-12-28
+**Updated**: 2025-12-29
 
 ## Summary
 
-Define how labelle-engine communicates state changes to labelle-tasks (e.g., storage item changes, worker availability).
+Define how labelle-engine communicates state changes to labelle-tasks via `GameHooks`. The task engine is a **pure state machine** - it tracks abstract workflow state and emits hooks, but never mutates game state.
 
 ## Context
 
-**Current communication flow:**
-- **Tasks → Engine**: labelle-tasks emits hooks (`cycle_completed`, `worker_assigned`, etc.) that labelle-engine observes
-- **Engine → Tasks**: Not yet defined
+**Communication flow:**
+- **Tasks → Game**: labelle-tasks emits hooks (`cycle_completed`, `worker_assigned`, etc.) that game observes
+- **Game → Tasks**: Game calls `engine.handle()` with `GameHookPayload` to notify of events
 
-**Key insight: labelle-tasks is purely event-driven.**
+**Key insight: labelle-tasks is a pure state machine.**
+- Tracks abstract workflow state only (has_item, item_type, current_step)
 - No internal timers or update loop
 - No transportation logic
-- Game controls all timing and movement
-- Tasks engine is a state machine / orchestrator
+- No entity references or ECS knowledge
+- Never mutates game state - only updates its own abstract state
+- Game controls all timing, movement, and entity lifecycle
 
 **Problem**: When game logic modifies state that affects tasks, how does labelle-tasks learn about it?
 
@@ -31,27 +34,30 @@ Examples:
 
 ## Design Goals
 
-1. **Decoupled** - labelle-tasks maintains its own internal state (workers, workstations, storages, items)
-2. **Explicit** - Clear contract of what notifications are expected
-3. **Efficient** - No polling, immediate notification
-4. **Symmetric** - Mirror the existing hooks pattern (tasks→engine) for engine→tasks
+1. **Pure state machine** - Task engine only tracks abstract state, never touches game entities
+2. **Decoupled** - labelle-tasks maintains its own internal state (workers, workstations, storages, items)
+3. **Explicit** - Clear contract of what notifications are expected
+4. **Efficient** - No polling, immediate notification
+5. **Symmetric** - Mirror the existing hooks pattern (tasks→game) for game→tasks
 
 ## Architecture
 
 ```
 ┌─────────────────┐                    ┌─────────────────┐
-│  labelle-engine │                    │  labelle-tasks  │
-│      (ECS)      │                    │ (internal state)│
+│      Game       │                    │  labelle-tasks  │
+│  (ECS, Entities)│                    │ (Abstract State)│
 ├─────────────────┤                    ├─────────────────┤
-│ TaskStorage     │───notifications───>│ storages map    │
-│ TaskWorker      │    (this RFC)      │ workers map     │
-│ KitchenWS       │                    │ workstations    │
-│ WellWS          │                    │                 │
-│ ...             │<──────hooks────────│ hooks system    │
-└─────────────────┘   (already exists) └─────────────────┘
+│ item_entity     │                    │ has_item: bool  │
+│ positions       │───GameHookPayload─>│ item_type: ?Item│
+│ prefabs         │    handle()        │ current_step    │
+│ timers          │                    │ worker_state    │
+│ ...             │<──TaskHookPayload──│ hooks system    │
+└─────────────────┘                    └─────────────────┘
 ```
 
-labelle-tasks owns its internal state. labelle-engine (or game code) must notify labelle-tasks when external changes occur that affect task state.
+**Key principle**: Task engine tracks **abstract state** (has_item, item_type), game tracks **concrete entities** (item_entity, positions). Task engine never references game entities.
+
+labelle-tasks owns its internal abstract state. Game must notify labelle-tasks when external changes occur that affect workflow state.
 
 ## Options
 
@@ -62,10 +68,10 @@ The game/engine calls task engine methods directly when state changes:
 ```zig
 // In game code when player drops item
 fn onPlayerDropItem(storage_entity: Entity, item: Item) void {
-    // Update ECS component
-    registry.getPtr(storage_entity, TaskStorage).?.item = item;
+    // Update game's own state (ECS, etc.)
+    game.addItemToStorage(storage_entity, item);
 
-    // Notify task engine
+    // Notify task engine (just the entity id)
     task_engine.notifyStorageChanged(storage_entity, .{ .item = item });
 }
 
@@ -216,45 +222,47 @@ pub fn notifyWorkstationRemoved(self: *Self, workstation_id: GameId) void;
 
 ## Integration with labelle-engine
 
-The `TasksPlugin` would wire ECS changes to these notifications:
+The game wires its own state changes to task engine notifications. This is game-specific - the task engine doesn't know about ECS or any specific data structures:
 
 ```zig
-pub const TasksPlugin = struct {
-    pub fn EngineHooks(comptime task_engine: *TaskEngine) type {
-        return struct {
-            // When ECS component changes, notify task engine
-            pub fn on_component_changed(entity: Entity, comptime C: type, old: C, new: C) void {
-                if (C == TaskStorage) {
-                    if (old.quantity < new.quantity) {
-                        task_engine.notifyItemAdded(entity, new.item, new.quantity - old.quantity);
-                    } else if (old.quantity > new.quantity) {
-                        task_engine.notifyItemRemoved(entity, old.item, old.quantity - new.quantity);
-                    }
-                }
-            }
+// Example: Game wires its own systems to notify task engine
+pub const GameTaskIntegration = struct {
+    task_engine: *TaskEngine,
 
-            // When entity destroyed
-            pub fn on_entity_destroyed(entity: Entity) void {
-                task_engine.notifyStorageCleared(entity);
-                task_engine.notifyWorkerRemoved(entity);
-                task_engine.notifyWorkstationRemoved(entity);
-            }
-        };
+    // Game calls this when its storage state changes
+    pub fn onStorageItemAdded(self: *@This(), entity_id: u32, item: Item) void {
+        _ = self.task_engine.handle(.{ .item_added = .{
+            .storage_id = entity_id,
+            .item = item,
+        }});
+    }
+
+    pub fn onStorageItemRemoved(self: *@This(), entity_id: u32) void {
+        _ = self.task_engine.handle(.{ .item_removed = .{
+            .storage_id = entity_id,
+        }});
+    }
+
+    // When entity destroyed
+    pub fn onEntityDestroyed(self: *@This(), entity_id: u32) void {
+        // Try all removal hooks (only relevant one will succeed)
+        _ = self.task_engine.handle(.{ .storage_cleared = .{ .storage_id = entity_id } });
+        _ = self.task_engine.handle(.{ .worker_removed = .{ .worker_id = entity_id } });
+        _ = self.task_engine.handle(.{ .workstation_removed = .{ .workstation_id = entity_id } });
     }
 };
 ```
 
-Or for games not using labelle-engine, direct calls:
+Or direct inline calls:
 
 ```zig
 // In game code
 fn onPlayerDropItem(storage_id: u32, item: Item) void {
-    // Update game state
-    game.storages[storage_id].item = item;
-    game.storages[storage_id].quantity += 1;
+    // Update game's own state (however the game stores it)
+    game.addItemToStorage(storage_id, item);
 
-    // Notify task engine
-    task_engine.notifyItemAdded(storage_id, item, 1);
+    // Notify task engine (just the entity id and item type)
+    _ = task_engine.handle(.{ .item_added = .{ .storage_id = storage_id, .item = item } });
 }
 ```
 
@@ -591,27 +599,31 @@ engine.deserialize(saved_state);
 
 ## Final Design
 
-### Architecture (Symmetric Hooks)
+### Architecture (Pure State Machine)
 
 ```
-┌─────────────────┐                      ┌─────────────────┐
-│  labelle-engine │                      │  labelle-tasks  │
-│      (ECS)      │                      │ (internal state)│
-├─────────────────┤                      ├─────────────────┤
-│                 │                      │                 │
-│ game.handle(    │───GameHookPayload───>│ engine.handle() │
-│   .item_added   │                      │   → updates     │
-│   .worker_avail │                      │     internal    │
-│   ...           │                      │     state       │
-│ )               │                      │   → returns     │
-│                 │                      │     bool        │
-│                 │                      │                 │
-│ MyTaskHooks.    │<──TaskHookPayload────│ dispatches via  │
-│   cycle_complete│                      │   TaskHooks     │
-│   worker_assign │                      │                 │
-│   ...           │                      │                 │
-└─────────────────┘                      └─────────────────┘
+┌─────────────────────────────────────┐    ┌─────────────────────────────────────┐
+│              Game                    │    │           Task Engine                │
+│        (Concrete State)              │    │        (Abstract State)              │
+├─────────────────────────────────────┤    ├─────────────────────────────────────┤
+│  item_entity: ?Entity               │    │  has_item: bool                     │
+│  position: Vec2                     │    │  item_type: ?Item                   │
+│  prefab instances                   │    │  current_step: Step                 │
+│  work_timer: f32                    │    │  assigned_worker: ?GameId           │
+│  accumulated_work: f32              │    │  workstation_status: Status         │
+├─────────────────────────────────────┤    ├─────────────────────────────────────┤
+│                                     │    │                                     │
+│  engine.handle(.{                   │───>│  Updates abstract state only        │
+│    .work_completed = ...            │    │  (has_item, current_step, etc.)     │
+│  })                                 │    │                                     │
+│                                     │    │                                     │
+│  MyTaskHooks.process_completed()    │<───│  Emits hooks to notify game         │
+│  MyTaskHooks.store_started()        │    │  (game reacts by mutating entities) │
+│                                     │    │                                     │
+└─────────────────────────────────────┘    └─────────────────────────────────────┘
 ```
+
+**Key principle**: Task engine tracks **abstract state** only. It never holds entity references, never instantiates prefabs, never mutates game state. All entity lifecycle is handled by the game in response to TaskHooks.
 
 ### Engine API
 
@@ -667,15 +679,33 @@ pub fn Engine(
 const Item = enum { Flour, Bread, Water };
 
 // Game's TaskHooks (receives from tasks)
+// Game reacts to hooks by mutating its own entity state
 const MyTaskHooks = struct {
-    pub fn cycle_completed(payload: tasks.TaskHookPayload(u32, Item)) void {
+    game: *Game,
+
+    pub fn cycle_completed(self: *@This(), payload: tasks.TaskHookPayload(u32, Item)) void {
         const info = payload.cycle_completed;
-        game.playSound("production_complete");
+        self.game.playSound("production_complete");
     }
 
-    pub fn worker_assigned(payload: tasks.TaskHookPayload(u32, Item)) void {
+    pub fn worker_assigned(self: *@This(), payload: tasks.TaskHookPayload(u32, Item)) void {
         const info = payload.worker_assigned;
-        game.startWalkAnimation(info.worker_id, info.workstation_id);
+        self.game.startWalkAnimation(info.worker_id, info.workstation_id);
+    }
+
+    // Game handles entity transformation when processing completes
+    pub fn process_completed(self: *@This(), payload: tasks.TaskHookPayload(u32, Item)) void {
+        const info = payload.process_completed;
+
+        // Game uses workstation_id to look up its own data
+        // Task engine doesn't know about game's data structures
+        self.game.transformWorkstationItems(info.workstation_id);
+    }
+
+    pub fn store_started(self: *@This(), payload: tasks.TaskHookPayload(u32, Item)) void {
+        const info = payload.store_started;
+        // Start worker movement to EOS
+        self.game.startWalkAnimation(info.worker_id, info.storage_id);
     }
 };
 
@@ -696,33 +726,33 @@ fn onWorkerFinishedEating(worker_id: u32) void {
 }
 ```
 
-### labelle-engine Integration (TasksPlugin)
+### Game Integration Pattern
+
+The game is responsible for notifying the task engine when state changes. How it does this is up to the game - the task engine doesn't prescribe any specific pattern:
 
 ```zig
-pub const TasksPlugin = struct {
+// Example: Game notifies task engine when its storage state changes
+pub const GameTaskBridge = struct {
     engine: *TaskEngine,
 
-    // Wire ECS observers to GameHooks
-    pub fn onComponentChanged(self: *Self, entity: Entity, comptime C: type, old: C, new: C) void {
-        if (C == TaskStorage) {
-            if (old.item == null and new.item != null) {
-                _ = self.engine.handle(.{ .item_added = .{
-                    .storage_id = entity,
-                    .item = new.item.?,
-                } });
-            } else if (old.item != null and new.item == null) {
-                _ = self.engine.handle(.{ .item_removed = .{
-                    .storage_id = entity,
-                } });
-            }
-        }
+    pub fn onItemAddedToStorage(self: *@This(), entity_id: u32, item: Item) void {
+        _ = self.engine.handle(.{ .item_added = .{
+            .storage_id = entity_id,
+            .item = item,
+        }});
     }
 
-    pub fn onEntityDestroyed(self: *Self, entity: Entity) void {
+    pub fn onItemRemovedFromStorage(self: *@This(), entity_id: u32) void {
+        _ = self.engine.handle(.{ .item_removed = .{
+            .storage_id = entity_id,
+        }});
+    }
+
+    pub fn onEntityDestroyed(self: *@This(), entity_id: u32) void {
         // Try all removal hooks (only relevant one will succeed)
-        _ = self.engine.handle(.{ .storage_cleared = .{ .storage_id = entity } });
-        _ = self.engine.handle(.{ .worker_removed = .{ .worker_id = entity } });
-        _ = self.engine.handle(.{ .workstation_removed = .{ .workstation_id = entity } });
+        _ = self.engine.handle(.{ .storage_cleared = .{ .storage_id = entity_id } });
+        _ = self.engine.handle(.{ .worker_removed = .{ .worker_id = entity_id } });
+        _ = self.engine.handle(.{ .workstation_removed = .{ .workstation_id = entity_id } });
     }
 };
 ```
@@ -758,14 +788,29 @@ pub const TasksPlugin = struct {
 
 ### Key Points
 
-1. **No timers in task engine** - Game owns work timing, calls `work_completed` when done
-2. **No transport** - Game handles movement, task engine tracks state
-3. **Event-driven** - All state changes via hooks
-4. **Symmetric** - Both directions use typed payload unions
-5. **Single source of truth** - No duplicated state between game and task engine
+1. **Pure state machine** - Task engine tracks abstract state only, never mutates game entities
+2. **No timers in task engine** - Game owns work timing, calls `work_completed` when done
+3. **No transport** - Game handles movement, task engine tracks workflow step
+4. **No entity references** - Task engine uses GameId for correlation, not entity pointers
+5. **Game handles entity lifecycle** - Destruction/creation of items in response to TaskHooks
+6. **Event-driven** - All state changes via hooks
+7. **Symmetric** - Both directions use typed payload unions
+
+### State Ownership Summary
+
+| State | Owner | Description |
+|-------|-------|-------------|
+| `has_item` | Task Engine | Abstract: "does this storage have an item?" |
+| `item_type` | Task Engine | Abstract: "what type of item?" |
+| `current_step` | Task Engine | Workflow: Pickup/Process/Store |
+| `assigned_worker` | Task Engine | Which worker is assigned |
+| `item_entity` | Game | Concrete: actual entity reference |
+| `position` | Game | Where things are in the world |
+| `work_timer` | Game | How long until processing completes |
+| `prefab_instance` | Game | Visual representation |
 
 ## References
 
-- [RFC 026: Comptime Workstations](./026-comptime-workstations.md)
 - [RFC 028: Work Completion Model](./028-work-accumulation.md)
+- [RFC 029: Task Engine as Pure State Machine](./029-engine-actions-api.md)
 - [labelle-tasks hooks system](../src/hooks.zig)

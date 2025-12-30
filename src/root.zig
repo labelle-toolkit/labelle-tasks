@@ -1,19 +1,43 @@
-//! labelle-tasks: Comptime workstation task system for labelle-engine
+//! labelle-tasks: Pure state machine task orchestration engine
 //!
-//! This module provides a task orchestration system using comptime-sized
-//! workstation types. Each workstation variant is a distinct ECS component
-//! with fixed storage array sizes.
+//! This module provides a task orchestration engine that tracks abstract workflow
+//! state and emits hooks to notify the game of events. The engine never mutates
+//! game state directly - it only updates its internal abstract state.
 //!
 //! ## Quick Start
 //!
 //! ```zig
 //! const tasks = @import("labelle-tasks");
 //!
-//! // Create workstation types with specific storage counts
-//! pub const OvenWorkstation = tasks.TaskWorkstation(1, 2, 1, 1);
-//! pub const WellWorkstation = tasks.TaskWorkstation(0, 0, 1, 1);
+//! const Item = enum { Flour, Bread };
 //!
-//! // Register as ECS components alongside TaskWorkstationBinding
+//! // Define hooks to receive from task engine
+//! const MyHooks = struct {
+//!     pub fn process_completed(payload: anytype) void {
+//!         // Game handles entity transformation
+//!     }
+//!     pub fn cycle_completed(payload: anytype) void {
+//!         // Cycle finished
+//!     }
+//! };
+//!
+//! // Create engine
+//! var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{});
+//! defer engine.deinit();
+//!
+//! // Register entities
+//! engine.addStorage(eis_id, .Flour);
+//! engine.addStorage(iis_id, null);
+//! engine.addStorage(ios_id, null);
+//! engine.addStorage(eos_id, null);
+//! engine.addWorkstation(ws_id, .{ .eis = &.{eis_id}, .iis = &.{iis_id}, ... });
+//! engine.addWorker(worker_id);
+//!
+//! // Game notifies engine of events
+//! engine.handle(.{ .worker_available = .{ .worker_id = worker_id } });
+//! engine.handle(.{ .pickup_completed = .{ .worker_id = worker_id } });
+//! engine.handle(.{ .work_completed = .{ .workstation_id = ws_id } });
+//! engine.handle(.{ .store_completed = .{ .worker_id = worker_id } });
 //! ```
 //!
 //! ## Workflow
@@ -21,133 +45,116 @@
 //! Items flow through storages: EIS → IIS (Pickup) → IOS (Process) → EOS (Store)
 //!
 //! - **EIS**: External Input Storage - source of raw materials
-//! - **IIS**: Internal Input Storage - recipe inputs (define ingredient count)
+//! - **IIS**: Internal Input Storage - recipe inputs
 //! - **IOS**: Internal Output Storage - recipe outputs
 //! - **EOS**: External Output Storage - finished products
+//!
+//! ## Architecture
+//!
+//! The engine is a pure state machine:
+//! - Tracks abstract state (has_item, item_type, current_step, assigned_worker)
+//! - Receives notifications from game via handle(GameHookPayload)
+//! - Emits hooks to game via TaskHookPayload
+//! - Never mutates game state (no entity references, no timers)
+//!
+//! Game owns:
+//! - Entity lifecycle (prefabs, creation, destruction)
+//! - Work timing (timers, accumulated work)
+//! - Movement/pathfinding
+//! - All ECS state
 
-const workstation = @import("workstation.zig");
-const binding = @import("binding.zig");
-const storage = @import("storage.zig");
+const engine_mod = @import("engine.zig");
+const hooks_mod = @import("hooks.zig");
 
-// === Core Types ===
+// === Core Engine ===
 
-/// Generic comptime-sized workstation type.
-/// Create workstation variants with specific storage counts.
-pub const TaskWorkstation = workstation.TaskWorkstation;
+/// Pure state machine task orchestration engine.
+/// Generic over GameId (entity identifier), Item (item enum), and TaskHooks (hook receiver).
+pub const Engine = engine_mod.Engine;
 
-/// Interface for working with any workstation type generically.
-pub const WorkstationInterface = workstation.WorkstationInterface;
+/// Convenience alias for Engine with hooks.
+pub const EngineWithHooks = engine_mod.EngineWithHooks;
 
-/// Common binding component for all workstation types.
-/// Holds configuration and runtime state.
-pub const TaskWorkstationBinding = binding.TaskWorkstationBinding;
+// === Hooks ===
 
-/// Storage component for items in the task system.
-pub const TaskStorage = storage.TaskStorage;
+/// Payload for events emitted by task engine to game.
+/// Game subscribes to these hooks to react to workflow events.
+pub const TaskHookPayload = hooks_mod.TaskHookPayload;
 
-/// Role marker for storage entities (eis/iis/ios/eos).
-pub const TaskStorageRole = storage.TaskStorageRole;
+/// Payload for events sent by game to task engine.
+/// Game calls engine.handle() with these payloads.
+pub const GameHookPayload = hooks_mod.GameHookPayload;
+
+/// Hook dispatcher for calling comptime hook methods.
+pub const HookDispatcher = hooks_mod.HookDispatcher;
+
+/// Empty hooks struct for engines that don't need hooks.
+pub const NoHooks = hooks_mod.NoHooks;
+
+// === Hooks Namespace (backward compatibility) ===
+
+/// Namespace for hook-related types and utilities.
+/// Provides backward compatibility with existing code that uses `labelle_tasks.hooks.*`
+pub const hooks = struct {
+    pub const TaskHookPayload = hooks_mod.TaskHookPayload;
+    pub const GameHookPayload = hooks_mod.GameHookPayload;
+    pub const HookDispatcher = hooks_mod.HookDispatcher;
+    pub const NoHooks = hooks_mod.NoHooks;
+
+    /// Alias for TaskHookPayload (backward compatibility)
+    pub fn HookPayload(comptime GameId: type, comptime Item: type) type {
+        return hooks_mod.TaskHookPayload(GameId, Item);
+    }
+
+    /// Merges multiple hook structs into a single struct.
+    /// For the new pure state machine architecture, this simply returns the first
+    /// non-empty hook struct from the tuple, as hooks are now handled locally.
+    ///
+    /// Usage:
+    /// ```zig
+    /// const MergedHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ HooksA, HooksB });
+    /// ```
+    pub fn MergeTasksHooks(
+        comptime GameId: type,
+        comptime Item: type,
+        comptime hook_structs: anytype,
+    ) type {
+        _ = GameId;
+        _ = Item;
+
+        const info = @typeInfo(@TypeOf(hook_structs));
+        if (info != .@"struct") {
+            @compileError("MergeTasksHooks expects a tuple of hook structs");
+        }
+
+        const fields = info.@"struct".fields;
+        if (fields.len == 0) {
+            return hooks_mod.NoHooks;
+        }
+
+        // Return the first hook struct type
+        // In the new architecture, each script manages its own hooks internally
+        return fields[0].type;
+    }
+};
 
 // === Enums ===
 
-/// Entity reference type.
-pub const Entity = workstation.Entity;
-
-/// Priority levels for workstations and storages.
-pub const Priority = workstation.Priority;
+/// Worker state in the task engine.
+pub const WorkerState = engine_mod.WorkerState;
 
 /// Workstation status in the task pipeline.
-pub const WorkstationStatus = workstation.WorkstationStatus;
+pub const WorkstationStatus = engine_mod.WorkstationStatus;
 
 /// Current step in the workstation cycle.
-pub const StepType = workstation.StepType;
+pub const StepType = engine_mod.StepType;
 
-/// Storage role in the workstation workflow.
-pub const StorageRole = storage.StorageRole;
-
-/// Storage slot configuration for workstation prefabs.
-pub const StorageSlot = workstation.StorageSlot;
-
-// === Components Export ===
-
-/// All components provided by labelle-tasks for ECS registration.
-pub const Components = struct {
-    pub const TaskWorkstationBinding = binding.TaskWorkstationBinding;
-    pub const TaskStorage = storage.TaskStorage;
-    pub const TaskStorageRole = storage.TaskStorageRole;
-};
-
-// === Plugin ===
-
-/// Plugin configuration
-pub const PluginConfig = struct {
-    /// Workstation types created with TaskWorkstation()
-    workstations: []const type = &.{},
-};
-
-/// Creates a tasks plugin with registered workstation types.
-///
-/// Usage:
-/// ```zig
-/// const Tasks = tasks.TasksPlugin(.{
-///     .workstations = &.{ OvenWorkstation, MixerWorkstation },
-/// });
-/// ```
-pub fn TasksPlugin(comptime config: PluginConfig) type {
-    return struct {
-        pub const workstations = config.workstations;
-        pub const workstation_count = config.workstations.len;
-
-        /// Check if a type is a registered workstation
-        pub fn isRegistered(comptime T: type) bool {
-            inline for (config.workstations) |W| {
-                if (T == W) return true;
-            }
-            return false;
-        }
-
-        /// Get workstation info by index
-        pub fn getWorkstationInfo(comptime index: usize) struct {
-            type: type,
-            eis_count: usize,
-            iis_count: usize,
-            ios_count: usize,
-            eos_count: usize,
-        } {
-            const W = config.workstations[index];
-            return .{
-                .type = W,
-                .eis_count = W.EIS_COUNT,
-                .iis_count = W.IIS_COUNT,
-                .ios_count = W.IOS_COUNT,
-                .eos_count = W.EOS_COUNT,
-            };
-        }
-    };
-}
+/// Priority levels for workstations and storages.
+pub const Priority = engine_mod.Priority;
 
 // === Tests ===
 
 test {
-    _ = @import("workstation.zig");
-    _ = @import("binding.zig");
-    _ = @import("storage.zig");
-}
-
-test "TasksPlugin registration" {
-    const Oven = TaskWorkstation(1, 2, 1, 1);
-    const Well = TaskWorkstation(0, 0, 1, 1);
-
-    const Tasks = TasksPlugin(.{
-        .workstations = &.{ Oven, Well },
-    });
-
-    try @import("std").testing.expectEqual(2, Tasks.workstation_count);
-    try @import("std").testing.expectEqual(true, Tasks.isRegistered(Oven));
-    try @import("std").testing.expectEqual(true, Tasks.isRegistered(Well));
-    try @import("std").testing.expectEqual(false, Tasks.isRegistered(TaskWorkstation(3, 3, 3, 3)));
-
-    const oven_info = Tasks.getWorkstationInfo(0);
-    try @import("std").testing.expectEqual(1, oven_info.eis_count);
-    try @import("std").testing.expectEqual(2, oven_info.iis_count);
+    _ = @import("engine.zig");
+    _ = @import("hooks.zig");
 }

@@ -4,11 +4,12 @@
 **Issue**: TBD
 **Author**: @alexandrecalvao
 **Created**: 2025-12-28
-**Related**: [RFC 027: Engine-to-Tasks Communication](./027-engine-to-tasks-communication.md)
+**Updated**: 2025-12-29
+**Related**: [RFC 027: Engine-to-Tasks Communication](./027-engine-to-tasks-communication.md), [RFC 029: Task Engine as Pure State Machine](./029-engine-actions-api.md)
 
 ## Summary
 
-Define how the game notifies the task engine that work is complete, triggering the IIS → IOS transformation.
+Define how the game notifies the task engine that work is complete. The task engine updates its **abstract state** (IIS cleared, IOS populated) and emits hooks. The **game** handles actual entity transformation (destroy input prefabs, create output prefabs) in response to hooks.
 
 ## Motivation
 
@@ -25,25 +26,42 @@ The task engine only needs to know **when** work is complete, not track progress
 ```
 ┌─────────────────────────────────────┐
 │              Game                    │
+│  (Concrete State)                    │
 │  - required_work: 5.0 seconds       │
 │  - accumulated_work: 0.0            │
 │  - tracks progress                   │
 │  - shows progress bar                │
 │  - decides when complete             │
+│  - owns entity lifecycle             │
 └──────────────────┬──────────────────┘
                    │
                    │ work_completed(workstation_id)
                    ▼
 ┌─────────────────────────────────────┐
 │          Task Engine                 │
+│  (Abstract State Only)               │
 │  - receives notification             │
-│  - transforms IIS → IOS             │
+│  - updates abstract state:           │
+│      IIS: has_item = false           │
+│      IOS: has_item = true            │
 │  - advances to Store step            │
+│  - emits process_completed hook      │
 │  - emits store_started hook          │
+│  - NEVER touches game entities       │
+└─────────────────────────────────────┘
+                   │
+                   │ process_completed hook
+                   ▼
+┌─────────────────────────────────────┐
+│              Game                    │
+│  (Reacts to Hook)                    │
+│  - destroys input entity prefabs     │
+│  - creates output entity prefabs     │
+│  - starts worker movement to EOS     │
 └─────────────────────────────────────┘
 ```
 
-**No duplicated state.** Task engine doesn't track work progress.
+**No duplicated state.** Task engine doesn't track work progress or entity references. Game handles all entity lifecycle.
 
 ## GameHook: `work_completed`
 
@@ -82,6 +100,8 @@ fn update(delta_time: f32) void {
 
 ## Task Engine Handler
 
+The task engine only updates **abstract state** - it never touches game entities:
+
 ```zig
 fn handleWorkCompleted(self: *Self, workstation_id: GameId) bool {
     const ws = self.workstations.getPtr(workstation_id) orelse {
@@ -101,8 +121,25 @@ fn handleWorkCompleted(self: *Self, workstation_id: GameId) bool {
         return false;
     };
 
-    // Transform IIS → IOS
-    self.transformItems(workstation_id);
+    // Update ABSTRACT state only (no entity manipulation)
+    // Clear IIS abstract state
+    for (self.getIisStorages(workstation_id)) |iis_id| {
+        const storage = self.storages.getPtr(iis_id);
+        storage.has_item = false;
+        storage.item_type = null;
+    }
+    // Populate IOS abstract state
+    for (self.getIosStorages(workstation_id)) |ios_id| {
+        const storage = self.storages.getPtr(ios_id);
+        storage.has_item = true;
+        storage.item_type = self.getOutputItemType(workstation_id);
+    }
+
+    // Emit process_completed hook - game reacts by doing entity transformation
+    self.dispatchHook(.{ .process_completed = .{
+        .workstation_id = workstation_id,
+        .worker_id = worker_id,
+    }});
 
     // Advance to Store step
     ws.current_step = .Store;
@@ -116,6 +153,8 @@ fn handleWorkCompleted(self: *Self, workstation_id: GameId) bool {
     return true;
 }
 ```
+
+**Note**: The task engine updates `has_item` and `item_type` flags. The game, upon receiving `process_completed`, destroys input entity prefabs and creates output entity prefabs.
 
 ## Sequence Diagram
 
@@ -133,14 +172,25 @@ Game                              Task Engine
   │  Game: when done...                │
   │                                    │
   │──work_completed(workstation)──────>│
-  │                                    │  transform IIS → IOS
-  │<─────────────store_started─────────│  "go store"
+  │                                    │  Updates abstract state:
+  │                                    │    IIS.has_item = false
+  │                                    │    IOS.has_item = true
+  │<─────────────process_completed─────│  "processing done"
   │                                    │
-  │  (worker moves to EOS)             │
+  │  Game: destroy input entities      │
+  │  Game: create output entities      │
+  │                                    │
+  │<─────────────store_started─────────│  "go store at EOS"
+  │                                    │
+  │  Game: move worker to EOS          │
   │──store_completed(worker)──────────>│
-  │                                    │
-  │<─────────────cycle_completed───────│  "done!"
+  │                                    │  Updates abstract state:
+  │                                    │    IOS.has_item = false
+  │                                    │    EOS.has_item = true
+  │<─────────────cycle_completed───────│  "cycle done!"
 ```
+
+**Key insight**: Task engine emits `process_completed` and `store_started` hooks. Game reacts to `process_completed` by handling entity transformation. Task engine never manipulates game entities.
 
 ## Edge Cases
 
@@ -234,17 +284,24 @@ const WorkstationState = struct {
 
 ## Summary
 
-| Responsibility | Owner |
-|----------------|-------|
-| Track work progress | Game |
-| Know required time | Game |
-| Show progress UI | Game |
-| Decide when complete | Game |
-| Do transformation | Task Engine |
-| Advance workflow | Task Engine |
-| Emit hooks | Task Engine |
+| Responsibility | Owner | Details |
+|----------------|-------|---------|
+| Track work progress | Game | `accumulated_work`, `required_work` |
+| Know required time | Game | Recipe data, configuration |
+| Show progress UI | Game | Progress bars, animations |
+| Decide when complete | Game | Calls `work_completed` |
+| Update abstract state | Task Engine | `has_item`, `item_type` flags |
+| Advance workflow | Task Engine | `current_step` transitions |
+| Emit hooks | Task Engine | `process_completed`, `store_started` |
+| Destroy input entities | Game | Reacts to `process_completed` hook |
+| Create output entities | Game | Reacts to `process_completed` hook |
+| Move worker | Game | Reacts to `store_started` hook |
+
+### Key Principle
+
+**Task engine is a pure state machine.** It tracks abstract workflow state and emits hooks. The game owns all entity lifecycle and reacts to hooks by manipulating its own ECS state.
 
 ## References
 
 - [RFC 027: Engine-to-Tasks Communication](./027-engine-to-tasks-communication.md)
-- [RFC 026: Comptime Workstations](./026-comptime-workstations.md)
+- [RFC 029: Task Engine as Pure State Machine](./029-engine-actions-api.md)
