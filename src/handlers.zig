@@ -359,9 +359,9 @@ pub fn Handlers(
                 worker.dangling_task = null;
                 worker.state = .Idle;
 
-                // Try to find new work
-                engine.tryAssignWorkers();
+                // Try to find new work - dangling items first, then workstations
                 engine.evaluateDanglingItems();
+                engine.tryAssignWorkers();
 
                 return true;
             }
