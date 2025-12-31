@@ -70,6 +70,14 @@ pub fn TaskHookPayload(comptime GameId: type, comptime Item: type) type {
             item_type: Item,
             target_eis_id: GameId,
         },
+
+        // Item delivery (when any item is placed in storage)
+        item_delivered: struct {
+            worker_id: GameId,
+            item_id: GameId,
+            item_type: Item,
+            storage_id: GameId,
+        },
     };
 }
 
@@ -151,6 +159,7 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
                 .transport_started => |p| self.call("transport_started", p),
                 .transport_completed => |p| self.call("transport_completed", p),
                 .pickup_dangling_started => |p| self.call("pickup_dangling_started", p),
+                .item_delivered => |p| self.call("item_delivered", p),
             }
         }
 

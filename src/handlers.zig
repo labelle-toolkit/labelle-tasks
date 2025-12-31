@@ -172,6 +172,22 @@ pub fn Handlers(
                 return false;
             };
 
+            // Handle dangling item delivery
+            if (worker.dangling_task) |task| {
+                const item_type = engine.dangling_items.get(task.item_id) orelse {
+                    log.err("pickup_completed: dangling item {} no longer exists", .{task.item_id});
+                    return false;
+                };
+
+                // Dispatch store_started to move worker to EIS
+                engine.dispatcher.dispatch(.{ .store_started = .{
+                    .worker_id = worker_id,
+                    .storage_id = task.target_eis_id,
+                    .item = item_type,
+                } });
+                return true;
+            }
+
             const ws_id = worker.assigned_workstation orelse {
                 log.err("pickup_completed: worker {} not assigned to workstation", .{worker_id});
                 return false;
@@ -314,6 +330,41 @@ pub fn Handlers(
                 log.err("store_completed: unknown worker {}", .{worker_id});
                 return false;
             };
+
+            // Handle dangling item delivery completion
+            if (worker.dangling_task) |task| {
+                const item_type = engine.dangling_items.get(task.item_id) orelse {
+                    log.err("store_completed: dangling item {} no longer exists", .{task.item_id});
+                    return false;
+                };
+
+                // Update EIS state - now has the item
+                if (engine.storages.getPtr(task.target_eis_id)) |storage| {
+                    storage.has_item = true;
+                    storage.item_type = item_type;
+                }
+
+                // Dispatch item_delivered hook before removing (game can move item visual)
+                engine.dispatcher.dispatch(.{ .item_delivered = .{
+                    .worker_id = worker_id,
+                    .item_id = task.item_id,
+                    .item_type = item_type,
+                    .storage_id = task.target_eis_id,
+                } });
+
+                // Remove from dangling items tracking
+                engine.removeDanglingItem(task.item_id);
+
+                // Clear worker task and set to idle
+                worker.dangling_task = null;
+                worker.state = .Idle;
+
+                // Try to find new work
+                engine.tryAssignWorkers();
+                engine.evaluateDanglingItems();
+
+                return true;
+            }
 
             const ws_id = worker.assigned_workstation orelse {
                 log.err("store_completed: worker {} not assigned to workstation", .{worker_id});
