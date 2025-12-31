@@ -140,6 +140,8 @@ pub const hooks = struct {
 
 // === Enums ===
 
+const state_mod = @import("state.zig");
+
 /// Worker state in the task engine.
 pub const WorkerState = engine_mod.WorkerState;
 
@@ -151,3 +153,6 @@ pub const StepType = engine_mod.StepType;
 
 /// Priority levels for workstations and storages.
 pub const Priority = engine_mod.Priority;
+
+/// Storage role in the workflow (EIS, IIS, IOS, EOS).
+pub const StorageRole = state_mod.StorageRole;

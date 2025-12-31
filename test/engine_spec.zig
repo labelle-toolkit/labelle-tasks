@@ -9,7 +9,7 @@ pub const Engine = zspec.describe("Engine", struct {
     pub const initialization = zspec.describe("initialization", struct {
         pub fn @"creates empty engine"() !void {
             const TestHooks = struct {};
-            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{});
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
             // Engine starts empty
@@ -22,10 +22,10 @@ pub const Engine = zspec.describe("Engine", struct {
     pub const storage = zspec.describe("storage", struct {
         pub fn @"adds storage with item"() !void {
             const TestHooks = struct {};
-            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{});
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
-            try engine.addStorage(1, .Flour);
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
 
             try std.testing.expect(engine.getStorageHasItem(1).? == true);
             try std.testing.expect(engine.getStorageItemType(1).? == .Flour);
@@ -33,10 +33,10 @@ pub const Engine = zspec.describe("Engine", struct {
 
         pub fn @"adds empty storage"() !void {
             const TestHooks = struct {};
-            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{});
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
-            try engine.addStorage(1, null);
+            try engine.addStorage(1, .{ .role = .eis });
 
             try std.testing.expect(engine.getStorageHasItem(1).? == false);
             try std.testing.expect(engine.getStorageItemType(1) == null);
@@ -44,10 +44,10 @@ pub const Engine = zspec.describe("Engine", struct {
 
         pub fn @"updates storage on item_added"() !void {
             const TestHooks = struct {};
-            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{});
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
-            try engine.addStorage(1, null);
+            try engine.addStorage(1, .{ .role = .eis });
             _ = engine.itemAdded(1, .Water);
 
             try std.testing.expect(engine.getStorageHasItem(1).? == true);
@@ -58,7 +58,7 @@ pub const Engine = zspec.describe("Engine", struct {
     pub const worker = zspec.describe("worker", struct {
         pub fn @"adds worker in idle state"() !void {
             const TestHooks = struct {};
-            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{});
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
             try engine.addWorker(10);
@@ -70,13 +70,13 @@ pub const Engine = zspec.describe("Engine", struct {
     pub const workstation = zspec.describe("workstation", struct {
         pub fn @"adds workstation with storages"() !void {
             const TestHooks = struct {};
-            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{});
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
-            try engine.addStorage(1, .Flour);
-            try engine.addStorage(2, null);
-            try engine.addStorage(3, null);
-            try engine.addStorage(4, null);
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
 
             try engine.addWorkstation(100, .{
                 .eis = &.{1},
@@ -91,13 +91,13 @@ pub const Engine = zspec.describe("Engine", struct {
 
         pub fn @"workstation blocked when no inputs"() !void {
             const TestHooks = struct {};
-            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{});
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
-            try engine.addStorage(1, null); // EIS empty
-            try engine.addStorage(2, null);
-            try engine.addStorage(3, null);
-            try engine.addStorage(4, null);
+            try engine.addStorage(1, .{ .role = .eis }); // EIS empty
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
 
             try engine.addWorkstation(100, .{
                 .eis = &.{1},
@@ -124,13 +124,14 @@ pub const Engine = zspec.describe("Engine", struct {
             var engine = tasks.Engine(u32, Item, TestHooks).init(
                 std.testing.allocator,
                 .{ .assigned_ptr = &assigned },
+                null,
             );
             defer engine.deinit();
 
-            try engine.addStorage(1, .Flour);
-            try engine.addStorage(2, null);
-            try engine.addStorage(3, null);
-            try engine.addStorage(4, null);
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
 
             try engine.addWorkstation(100, .{
                 .eis = &.{1},

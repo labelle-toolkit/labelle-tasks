@@ -62,6 +62,14 @@ pub fn TaskHookPayload(comptime GameId: type, comptime Item: type) type {
             to_storage_id: GameId,
             item: Item,
         },
+
+        // Dangling item lifecycle
+        pickup_dangling_started: struct {
+            worker_id: GameId,
+            item_id: GameId,
+            item_type: Item,
+            target_eis_id: GameId,
+        },
     };
 }
 
@@ -142,6 +150,7 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
                 .cycle_completed => |p| self.call("cycle_completed", p),
                 .transport_started => |p| self.call("transport_started", p),
                 .transport_completed => |p| self.call("transport_completed", p),
+                .pickup_dangling_started => |p| self.call("pickup_dangling_started", p),
             }
         }
 

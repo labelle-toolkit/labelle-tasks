@@ -32,6 +32,9 @@ pub fn Engine(
         pub const GamePayload = hooks_mod.GameHookPayload(GameId, Item);
         const Dispatcher = hooks_mod.HookDispatcher(GameId, Item, TaskHooks);
 
+        /// Distance function type - returns distance between two entities, or null if no path
+        pub const DistanceFn = *const fn (from_id: GameId, to_id: GameId) ?f32;
+
         // Import state types
         const StorageState = state_mod.StorageState(Item);
         const WorkerData = state_mod.WorkerData(GameId);
@@ -46,20 +49,26 @@ pub fn Engine(
         storages: std.AutoHashMap(GameId, StorageState),
         workers: std.AutoHashMap(GameId, WorkerData),
         workstations: std.AutoHashMap(GameId, WorkstationData),
+        dangling_items: std.AutoHashMap(GameId, Item),
 
         // Hook dispatcher
         dispatcher: Dispatcher,
 
+        // Optional distance function for spatial queries
+        distance_fn: ?DistanceFn = null,
+
         // Callback for worker selection
         find_best_worker_fn: ?*const fn (workstation_id: ?GameId, available_workers: []const GameId) ?GameId = null,
 
-        pub fn init(allocator: Allocator, task_hooks: TaskHooks) Self {
+        pub fn init(allocator: Allocator, task_hooks: TaskHooks, distance_fn: ?DistanceFn) Self {
             return .{
                 .allocator = allocator,
                 .storages = std.AutoHashMap(GameId, StorageState).init(allocator),
                 .workers = std.AutoHashMap(GameId, WorkerData).init(allocator),
                 .workstations = std.AutoHashMap(GameId, WorkstationData).init(allocator),
+                .dangling_items = std.AutoHashMap(GameId, Item).init(allocator),
                 .dispatcher = Dispatcher.init(task_hooks),
+                .distance_fn = distance_fn,
             };
         }
 
@@ -75,18 +84,36 @@ pub fn Engine(
             self.workstations.deinit();
             self.workers.deinit();
             self.storages.deinit();
+            self.dangling_items.deinit();
         }
 
         // ============================================
         // Registration API
         // ============================================
 
+        // Re-export StorageRole for convenience
+        pub const StorageRole = state_mod.StorageRole;
+
+        /// Storage configuration for registration
+        pub const StorageConfig = struct {
+            role: StorageRole = .eis,
+            accepts: ?Item = null, // null = accepts any item type
+            initial_item: ?Item = null,
+        };
+
         /// Register a storage with the engine
-        pub fn addStorage(self: *Self, storage_id: GameId, item_type: ?Item) !void {
+        pub fn addStorage(self: *Self, storage_id: GameId, config: StorageConfig) !void {
             try self.storages.put(storage_id, .{
-                .has_item = item_type != null,
-                .item_type = item_type,
+                .has_item = config.initial_item != null,
+                .item_type = config.initial_item,
+                .role = config.role,
+                .accepts = config.accepts,
             });
+
+            // If an empty EIS was added, check if any dangling items can be delivered
+            if (config.role == .eis and config.initial_item == null) {
+                self.evaluateDanglingItems();
+            }
         }
 
         /// Register a worker with the engine
@@ -228,6 +255,135 @@ pub fn Engine(
         pub fn getStorageItemType(self: *const Self, storage_id: GameId) ?Item {
             const storage = self.storages.get(storage_id) orelse return null;
             return storage.item_type;
+        }
+
+        // ============================================
+        // Distance API
+        // ============================================
+
+        /// Get distance between two entities.
+        /// Returns null only if distance_fn returns null (no path exists).
+        /// If no distance_fn provided, assumes distance is 1.0.
+        pub fn getDistance(self: *const Self, from: GameId, to: GameId) ?f32 {
+            if (self.distance_fn) |df| {
+                return df(from, to);
+            }
+            return 1.0; // No distance service - assume all distances are equal
+        }
+
+        /// Find nearest entity to a target from a list of candidates.
+        /// Works for any entity type: workers, storages, workstations.
+        /// Returns null if candidates is empty or all candidates are unreachable.
+        pub fn findNearest(self: *const Self, target: GameId, candidates: []const GameId) ?GameId {
+            if (candidates.len == 0) return null;
+
+            var best: ?GameId = null;
+            var best_dist: f32 = std.math.floatMax(f32);
+
+            for (candidates) |candidate| {
+                if (self.getDistance(candidate, target)) |dist| {
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best = candidate;
+                    }
+                }
+            }
+            return best;
+        }
+
+        // ============================================
+        // Dangling Items API
+        // ============================================
+
+        /// Register a dangling item (item not in any storage)
+        pub fn addDanglingItem(self: *Self, item_id: GameId, item_type: Item) !void {
+            try self.dangling_items.put(item_id, item_type);
+            // Evaluate if any idle worker can pick up this item
+            self.evaluateDanglingItems();
+        }
+
+        /// Remove a dangling item (picked up or despawned)
+        pub fn removeDanglingItem(self: *Self, item_id: GameId) void {
+            _ = self.dangling_items.remove(item_id);
+        }
+
+        /// Get the item type of a dangling item
+        pub fn getDanglingItemType(self: *const Self, item_id: GameId) ?Item {
+            return self.dangling_items.get(item_id);
+        }
+
+        /// Find an empty EIS that accepts the given item type.
+        /// Returns null if no suitable EIS found.
+        pub fn findEmptyEisForItem(self: *const Self, item_type: Item) ?GameId {
+            var iter = self.storages.iterator();
+            while (iter.next()) |entry| {
+                const storage = entry.value_ptr.*;
+                // Must be EIS, must be empty, must accept this item type
+                if (storage.role == .eis and !storage.has_item) {
+                    // accepts == null means accepts any item
+                    if (storage.accepts == null or storage.accepts.? == item_type) {
+                        return entry.key_ptr.*;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// Get list of idle workers (allocated, caller must free)
+        pub fn getIdleWorkers(self: *Self) ![]GameId {
+            var list = std.ArrayListUnmanaged(GameId){};
+            errdefer list.deinit(self.allocator);
+
+            var iter = self.workers.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.state == .Idle) {
+                    try list.append(self.allocator, entry.key_ptr.*);
+                }
+            }
+            return list.toOwnedSlice(self.allocator);
+        }
+
+        /// Evaluate dangling items and try to assign workers
+        pub fn evaluateDanglingItems(self: *Self) void {
+            // Get idle workers (we need to free this later)
+            const idle_workers = self.getIdleWorkers() catch return;
+            defer self.allocator.free(idle_workers);
+
+            if (idle_workers.len == 0) return;
+
+            // For each dangling item, try to find a worker and EIS
+            var dangling_iter = self.dangling_items.iterator();
+            while (dangling_iter.next()) |entry| {
+                const item_id = entry.key_ptr.*;
+                const item_type = entry.value_ptr.*;
+
+                // Find an empty EIS that accepts this item type
+                const target_eis = self.findEmptyEisForItem(item_type) orelse continue;
+
+                // Find nearest idle worker to the dangling item
+                const worker_id = self.findNearest(item_id, idle_workers) orelse continue;
+
+                // Assign worker to pick up this dangling item
+                if (self.workers.getPtr(worker_id)) |worker| {
+                    worker.state = .Working;
+                    worker.dangling_task = .{
+                        .item_id = item_id,
+                        .target_eis_id = target_eis,
+                    };
+
+                    // Dispatch hook to notify game
+                    self.dispatcher.dispatch(.{ .pickup_dangling_started = .{
+                        .worker_id = worker_id,
+                        .item_id = item_id,
+                        .item_type = item_type,
+                        .target_eis_id = target_eis,
+                    } });
+
+                    // Only assign one item per evaluation cycle
+                    // (we'd need to refresh idle_workers list for more)
+                    return;
+                }
+            }
         }
     };
 }
