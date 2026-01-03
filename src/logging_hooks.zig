@@ -22,6 +22,13 @@ const std = @import("std");
 
 /// Default logging implementation for all task engine hooks.
 pub const LoggingHooks = struct {
+    pub fn process_started(payload: anytype) void {
+        std.log.info("[TaskEngine] process_started: workstation={d}, worker={d}", .{
+            payload.workstation_id,
+            payload.worker_id,
+        });
+    }
+
     pub fn process_completed(payload: anytype) void {
         std.log.info("[TaskEngine] process_completed: workstation={d}, worker={d}", .{
             payload.workstation_id,
@@ -95,6 +102,23 @@ pub const LoggingHooks = struct {
             payload.worker_id,
             payload.item_id,
             payload.storage_id,
+        });
+    }
+
+    pub fn transport_started(payload: anytype) void {
+        std.log.info("[TaskEngine] transport_started: worker={d}, from={d}, to={d}, item={}", .{
+            payload.worker_id,
+            payload.from_storage_id,
+            payload.to_storage_id,
+            payload.item,
+        });
+    }
+
+    pub fn transport_completed(payload: anytype) void {
+        std.log.info("[TaskEngine] transport_completed: worker={d}, to={d}, item={}", .{
+            payload.worker_id,
+            payload.to_storage_id,
+            payload.item,
         });
     }
 };
