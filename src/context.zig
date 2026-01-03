@@ -224,9 +224,10 @@ pub fn TaskEngineContext(
         }
 
         /// Notify that a dangling pickup was completed.
+        /// Uses the same handler as regular pickup - the engine differentiates
+        /// based on worker.dangling_task state.
         pub fn danglingPickupCompleted(worker_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            return eng.danglingPickupCompleted(worker_id);
+            return pickupCompleted(worker_id);
         }
 
         /// Re-evaluate dangling items (call after scene load).
