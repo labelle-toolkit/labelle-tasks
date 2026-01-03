@@ -29,22 +29,22 @@ pub fn build(b: *std.Build) void {
     tasks_mod.addImport("labelle-engine", engine_mod);
     tasks_mod.addImport("ecs", ecs_mod);
 
-    // Also export a version without engine dependencies for consuming projects
-    // that want to provide their own labelle-engine module
-    _ = b.addModule("labelle_tasks_core", .{
-        .root_source_file = b.path("src/root.zig"),
+    // Core module without ECS dependencies (for tests and simple usage)
+    const core_mod = b.addModule("labelle_tasks_core", .{
+        .root_source_file = b.path("src/core.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Unit tests with zspec runner (from test/ folder)
+    // Uses core module to avoid graphics dependencies
     const test_mod = b.createModule(.{
         .root_source_file = b.path("test/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     test_mod.addImport("zspec", zspec_dep.module("zspec"));
-    test_mod.addImport("labelle_tasks", tasks_mod);
+    test_mod.addImport("labelle_tasks", core_mod);
 
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
