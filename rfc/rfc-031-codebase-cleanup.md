@@ -102,25 +102,20 @@ pub const hooks = struct {
 
 ### Phase 2: Remove Unused Features
 
-#### 2.1 Remove Priority system
+#### 2.1 ~~Remove Priority system~~ KEEP AND EXTEND
 
-```zig
-// REMOVE from types.zig
-pub const Priority = enum(u8) {
-    Low = 0,
-    Normal = 1,
-    High = 2,
-    Critical = 3,
-};
+**Decision:** Keep Priority system and extend it to Storage.
 
-// REMOVE priority field from WorkstationData in state.zig
-priority: Priority = .Normal,
+**Current state:**
+- `Priority` enum exists in `types.zig`
+- `WorkstationData.priority` field exists but is never consulted
 
-// REMOVE from WorkstationConfig in engine.zig
-priority: Priority = .Normal,
-```
-
-**Rationale:** Never consulted in any logic. Workstations are processed in hashmap iteration order regardless of priority.
+**Future work (separate issue):**
+- Add `priority` field to `StorageState` in `state.zig`
+- Add `priority` to `StorageConfig` in `engine.zig`
+- Add `priority` to `Storage` component
+- Implement priority-based selection in `selectEis()` and `selectEos()`
+- Implement priority-based worker assignment in `tryAssignWorkers()`
 
 #### 2.2 ~~Remove transport hooks~~ KEEP
 
@@ -293,11 +288,10 @@ var view = registry.view(.{ MovementTarget, Position });
 | Remove `EngineWithHooks` | 3 | None | Clarity |
 | Remove `Components()` | 8 | None | Clarity |
 | Remove `hooks` namespace | 45 | Low | Clarity |
-| Remove Priority | 15 | Low | Simplicity |
 | Remove movement queue | 50 | Medium | Simplicity |
 | Simplify MergeHooks | 70 | Medium | Maintainability |
 | Simplify hook wrappers | 80 | Medium | Maintainability |
-| **Total** | **~270 lines** | | |
+| **Total** | **~255 lines** | | |
 
 ## Testing Strategy
 
@@ -315,8 +309,7 @@ var view = registry.view(.{ MovementTarget, Position });
 
 ## Open Questions
 
-1. Should Priority be kept but documented as "planned feature"?
-2. Is the `hooks` namespace used by any other games in the ecosystem?
+1. Is the `hooks` namespace used by any other games in the ecosystem?
 
 ## References
 
