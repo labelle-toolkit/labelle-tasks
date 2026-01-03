@@ -537,12 +537,3 @@ pub fn Engine(
         }
     };
 }
-
-// ============================================
-// Convenience wrapper
-// ============================================
-
-/// Create an engine with hooks
-pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Hooks: type) type {
-    return Engine(GameId, Item, Hooks);
-}

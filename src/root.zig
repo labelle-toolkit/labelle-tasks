@@ -72,9 +72,6 @@ const hooks_mod = @import("hooks.zig");
 /// Generic over GameId (entity identifier), Item (item enum), and TaskHooks (hook receiver).
 pub const Engine = engine_mod.Engine;
 
-/// Convenience alias for Engine with hooks.
-pub const EngineWithHooks = engine_mod.EngineWithHooks;
-
 // === Hooks ===
 
 /// Payload for events emitted by task engine to game.
@@ -112,53 +109,6 @@ pub const LoggingHooks = logging_hooks_mod.LoggingHooks;
 /// const Hooks = tasks.MergeHooks(MyHooks, tasks.LoggingHooks);
 /// ```
 pub const MergeHooks = logging_hooks_mod.MergeHooks;
-
-// === Hooks Namespace (backward compatibility) ===
-
-/// Namespace for hook-related types and utilities.
-/// Provides backward compatibility with existing code that uses `labelle_tasks.hooks.*`
-pub const hooks = struct {
-    pub const TaskHookPayload = hooks_mod.TaskHookPayload;
-    pub const GameHookPayload = hooks_mod.GameHookPayload;
-    pub const HookDispatcher = hooks_mod.HookDispatcher;
-    pub const NoHooks = hooks_mod.NoHooks;
-
-    /// Alias for TaskHookPayload (backward compatibility)
-    pub fn HookPayload(comptime GameId: type, comptime Item: type) type {
-        return hooks_mod.TaskHookPayload(GameId, Item);
-    }
-
-    /// Merges multiple hook structs into a single struct.
-    /// For the new pure state machine architecture, this simply returns the first
-    /// non-empty hook struct from the tuple, as hooks are now handled locally.
-    ///
-    /// Usage:
-    /// ```zig
-    /// const MergedHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ HooksA, HooksB });
-    /// ```
-    pub fn MergeTasksHooks(
-        comptime GameId: type,
-        comptime Item: type,
-        comptime hook_structs: anytype,
-    ) type {
-        _ = GameId;
-        _ = Item;
-
-        const info = @typeInfo(@TypeOf(hook_structs));
-        if (info != .@"struct") {
-            @compileError("MergeTasksHooks expects a tuple of hook structs");
-        }
-
-        const fields = info.@"struct".fields;
-        if (fields.len == 0) {
-            return hooks_mod.NoHooks;
-        }
-
-        // Return the first hook struct type
-        // In the new architecture, each script manages its own hooks internally
-        return fields[0].type;
-    }
-};
 
 // === Enums ===
 
@@ -258,29 +208,6 @@ pub fn Workstation(comptime Item: type) type {
     return components_mod.Workstation(Item);
 }
 
-/// Component types for labelle-tasks plugin.
-/// Use in project.labelle with `.components = "Components(main_module.Items)"`.
-///
-/// Example:
-/// ```zig
-/// // project.labelle
-/// .plugins = .{
-///     .{
-///         .name = "labelle-tasks",
-///         .path = "../../labelle-tasks",
-///         .components = "Components(main_module.Items)",
-///     },
-/// },
-/// ```
-pub fn Components(comptime Item: type) type {
-    return struct {
-        pub const Storage = components_mod.Storage(Item);
-        pub const Worker = components_mod.Worker(Item);
-        pub const DanglingItem = components_mod.DanglingItem(Item);
-        pub const Workstation = components_mod.Workstation(Item);
-    };
-}
-
 /// Bind function for plugin component integration.
 /// Returns a struct with all component types parameterized by Item.
 /// The generator iterates public decls to find component types.
@@ -317,10 +244,9 @@ pub fn bind(comptime Item: type) type {
 ///
 /// Returns a struct containing:
 /// - Context: The TaskEngineContext for accessing engine/registry
-/// - MovementAction: Enum for movement types (pickup, store, pickup_dangling)
-/// - PendingMovement: Struct for queued movements
 /// - game_init, scene_load, game_deinit: Engine hooks
 ///
+/// Hook payloads are enriched with .registry and .game pointers for direct ECS access.
 /// A default distance function (euclidean distance using Position components) is used.
 /// To override, call Context.setDistanceFunction() after initialization.
 ///
@@ -330,15 +256,14 @@ pub fn bind(comptime Item: type) type {
 ///
 /// const GameHooks = struct {
 ///     pub fn store_started(payload: anytype) void {
-///         const pos = getStoragePosition(payload.storage_id);
-///         TaskHooks.Context.queueMovement(payload.worker_id, pos.x, pos.y, .store);
+///         const registry = payload.registry orelse return;
+///         const worker = engine.entityFromU64(payload.worker_id);
+///         registry.set(worker, MovementTarget{ ... });
 ///     }
 /// };
 ///
 /// pub const TaskHooks = tasks.createEngineHooks(u64, ItemType, GameHooks);
 /// pub const Context = TaskHooks.Context;
-/// pub const MovementAction = TaskHooks.MovementAction;
-/// pub const PendingMovement = TaskHooks.PendingMovement;
 /// ```
 pub fn createEngineHooks(
     comptime GameId: type,
@@ -384,104 +309,29 @@ pub fn createEngineHooks(
             };
         }
 
-        // Hook wrappers that enrich payloads before forwarding to GameHooks
-        pub fn store_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "store_started")) {
+        /// Dispatch to GameHooks if it has the declaration, enriching the payload.
+        inline fn dispatch(comptime name: []const u8, payload: anytype) void {
+            if (@hasDecl(GameHooks, name)) {
                 const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.store_started(enriched);
+                @field(GameHooks, name)(enriched);
             }
         }
 
-        pub fn pickup_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "pickup_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.pickup_started(enriched);
-            }
-        }
-
-        pub fn pickup_dangling_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "pickup_dangling_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.pickup_dangling_started(enriched);
-            }
-        }
-
-        pub fn item_delivered(payload: anytype) void {
-            if (@hasDecl(GameHooks, "item_delivered")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.item_delivered(enriched);
-            }
-        }
-
-        pub fn process_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "process_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.process_started(enriched);
-            }
-        }
-
-        pub fn process_completed(payload: anytype) void {
-            if (@hasDecl(GameHooks, "process_completed")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.process_completed(enriched);
-            }
-        }
-
-        pub fn worker_assigned(payload: anytype) void {
-            if (@hasDecl(GameHooks, "worker_assigned")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.worker_assigned(enriched);
-            }
-        }
-
-        pub fn worker_released(payload: anytype) void {
-            if (@hasDecl(GameHooks, "worker_released")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.worker_released(enriched);
-            }
-        }
-
-        pub fn workstation_blocked(payload: anytype) void {
-            if (@hasDecl(GameHooks, "workstation_blocked")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.workstation_blocked(enriched);
-            }
-        }
-
-        pub fn workstation_queued(payload: anytype) void {
-            if (@hasDecl(GameHooks, "workstation_queued")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.workstation_queued(enriched);
-            }
-        }
-
-        pub fn workstation_activated(payload: anytype) void {
-            if (@hasDecl(GameHooks, "workstation_activated")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.workstation_activated(enriched);
-            }
-        }
-
-        pub fn cycle_completed(payload: anytype) void {
-            if (@hasDecl(GameHooks, "cycle_completed")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.cycle_completed(enriched);
-            }
-        }
-
-        pub fn transport_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "transport_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.transport_started(enriched);
-            }
-        }
-
-        pub fn transport_completed(payload: anytype) void {
-            if (@hasDecl(GameHooks, "transport_completed")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.transport_completed(enriched);
-            }
-        }
+        // Hook forwarding - each calls dispatch with its name
+        pub fn store_started(payload: anytype) void { dispatch("store_started", payload); }
+        pub fn pickup_started(payload: anytype) void { dispatch("pickup_started", payload); }
+        pub fn pickup_dangling_started(payload: anytype) void { dispatch("pickup_dangling_started", payload); }
+        pub fn item_delivered(payload: anytype) void { dispatch("item_delivered", payload); }
+        pub fn process_started(payload: anytype) void { dispatch("process_started", payload); }
+        pub fn process_completed(payload: anytype) void { dispatch("process_completed", payload); }
+        pub fn worker_assigned(payload: anytype) void { dispatch("worker_assigned", payload); }
+        pub fn worker_released(payload: anytype) void { dispatch("worker_released", payload); }
+        pub fn workstation_blocked(payload: anytype) void { dispatch("workstation_blocked", payload); }
+        pub fn workstation_queued(payload: anytype) void { dispatch("workstation_queued", payload); }
+        pub fn workstation_activated(payload: anytype) void { dispatch("workstation_activated", payload); }
+        pub fn cycle_completed(payload: anytype) void { dispatch("cycle_completed", payload); }
+        pub fn transport_started(payload: anytype) void { dispatch("transport_started", payload); }
+        pub fn transport_completed(payload: anytype) void { dispatch("transport_completed", payload); }
     };
 
     const MergedHooks = logging_hooks_mod.MergeHooks(WrappedHooks, logging_hooks_mod.LoggingHooks);
@@ -489,8 +339,6 @@ pub fn createEngineHooks(
 
     return struct {
         pub const Context = Ctx;
-        pub const MovementAction = Ctx.MovementAction;
-        pub const PendingMovement = Ctx.PendingMovement;
 
         const std = @import("std");
 

@@ -12,9 +12,6 @@ const state_mod = @import("state.zig");
 /// Pure state machine task orchestration engine.
 pub const Engine = engine_mod.Engine;
 
-/// Convenience alias for Engine with hooks.
-pub const EngineWithHooks = engine_mod.EngineWithHooks;
-
 // === Hooks ===
 
 /// Payload for events emitted by task engine to game.
@@ -28,40 +25,6 @@ pub const HookDispatcher = hooks_mod.HookDispatcher;
 
 /// Empty hooks struct for engines that don't need hooks.
 pub const NoHooks = hooks_mod.NoHooks;
-
-// === Hooks Namespace (backward compatibility) ===
-
-pub const hooks = struct {
-    pub const TaskHookPayload = hooks_mod.TaskHookPayload;
-    pub const GameHookPayload = hooks_mod.GameHookPayload;
-    pub const HookDispatcher = hooks_mod.HookDispatcher;
-    pub const NoHooks = hooks_mod.NoHooks;
-
-    pub fn HookPayload(comptime GameId: type, comptime Item: type) type {
-        return hooks_mod.TaskHookPayload(GameId, Item);
-    }
-
-    pub fn MergeTasksHooks(
-        comptime GameId: type,
-        comptime Item: type,
-        comptime hook_structs: anytype,
-    ) type {
-        _ = GameId;
-        _ = Item;
-
-        const info = @typeInfo(@TypeOf(hook_structs));
-        if (info != .@"struct") {
-            @compileError("MergeTasksHooks expects a tuple of hook structs");
-        }
-
-        const fields = info.@"struct".fields;
-        if (fields.len == 0) {
-            return hooks_mod.NoHooks;
-        }
-
-        return fields[0].type;
-    }
-};
 
 // === Enums ===
 

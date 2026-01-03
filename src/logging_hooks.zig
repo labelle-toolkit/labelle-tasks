@@ -22,6 +22,13 @@ const std = @import("std");
 
 /// Default logging implementation for all task engine hooks.
 pub const LoggingHooks = struct {
+    pub fn process_started(payload: anytype) void {
+        std.log.info("[TaskEngine] process_started: workstation={d}, worker={d}", .{
+            payload.workstation_id,
+            payload.worker_id,
+        });
+    }
+
     pub fn process_completed(payload: anytype) void {
         std.log.info("[TaskEngine] process_completed: workstation={d}, worker={d}", .{
             payload.workstation_id,
@@ -97,121 +104,52 @@ pub const LoggingHooks = struct {
             payload.storage_id,
         });
     }
+
+    pub fn transport_started(payload: anytype) void {
+        std.log.info("[TaskEngine] transport_started: worker={d}, from={d}, to={d}, item={}", .{
+            payload.worker_id,
+            payload.from_storage_id,
+            payload.to_storage_id,
+            payload.item,
+        });
+    }
+
+    pub fn transport_completed(payload: anytype) void {
+        std.log.info("[TaskEngine] transport_completed: worker={d}, to={d}, item={}", .{
+            payload.worker_id,
+            payload.to_storage_id,
+            payload.item,
+        });
+    }
 };
 
 /// Merges two hook structs, with Primary taking precedence over Fallback.
 /// If Primary has a hook, it's used; otherwise Fallback's hook is used.
 pub fn MergeHooks(comptime Primary: type, comptime Fallback: type) type {
     return struct {
-        const hook_names = [_][]const u8{
-            "process_completed",
-            "cycle_completed",
-            "pickup_started",
-            "store_started",
-            "worker_assigned",
-            "worker_released",
-            "workstation_queued",
-            "workstation_blocked",
-            "workstation_activated",
-            "pickup_dangling_started",
-            "item_delivered",
-        };
-
-        inline fn getHook(comptime name: []const u8) ?*const fn (anytype) void {
+        /// Dispatch to Primary if it has the hook, otherwise Fallback.
+        inline fn dispatch(comptime name: []const u8, payload: anytype) void {
             if (@hasDecl(Primary, name)) {
-                return &@field(Primary, name);
+                @field(Primary, name)(payload);
             } else if (@hasDecl(Fallback, name)) {
-                return &@field(Fallback, name);
-            }
-            return null;
-        }
-
-        pub fn process_completed(payload: anytype) void {
-            if (@hasDecl(Primary, "process_completed")) {
-                Primary.process_completed(payload);
-            } else if (@hasDecl(Fallback, "process_completed")) {
-                Fallback.process_completed(payload);
+                @field(Fallback, name)(payload);
             }
         }
 
-        pub fn cycle_completed(payload: anytype) void {
-            if (@hasDecl(Primary, "cycle_completed")) {
-                Primary.cycle_completed(payload);
-            } else if (@hasDecl(Fallback, "cycle_completed")) {
-                Fallback.cycle_completed(payload);
-            }
-        }
-
-        pub fn pickup_started(payload: anytype) void {
-            if (@hasDecl(Primary, "pickup_started")) {
-                Primary.pickup_started(payload);
-            } else if (@hasDecl(Fallback, "pickup_started")) {
-                Fallback.pickup_started(payload);
-            }
-        }
-
-        pub fn store_started(payload: anytype) void {
-            if (@hasDecl(Primary, "store_started")) {
-                Primary.store_started(payload);
-            } else if (@hasDecl(Fallback, "store_started")) {
-                Fallback.store_started(payload);
-            }
-        }
-
-        pub fn worker_assigned(payload: anytype) void {
-            if (@hasDecl(Primary, "worker_assigned")) {
-                Primary.worker_assigned(payload);
-            } else if (@hasDecl(Fallback, "worker_assigned")) {
-                Fallback.worker_assigned(payload);
-            }
-        }
-
-        pub fn worker_released(payload: anytype) void {
-            if (@hasDecl(Primary, "worker_released")) {
-                Primary.worker_released(payload);
-            } else if (@hasDecl(Fallback, "worker_released")) {
-                Fallback.worker_released(payload);
-            }
-        }
-
-        pub fn workstation_queued(payload: anytype) void {
-            if (@hasDecl(Primary, "workstation_queued")) {
-                Primary.workstation_queued(payload);
-            } else if (@hasDecl(Fallback, "workstation_queued")) {
-                Fallback.workstation_queued(payload);
-            }
-        }
-
-        pub fn workstation_blocked(payload: anytype) void {
-            if (@hasDecl(Primary, "workstation_blocked")) {
-                Primary.workstation_blocked(payload);
-            } else if (@hasDecl(Fallback, "workstation_blocked")) {
-                Fallback.workstation_blocked(payload);
-            }
-        }
-
-        pub fn workstation_activated(payload: anytype) void {
-            if (@hasDecl(Primary, "workstation_activated")) {
-                Primary.workstation_activated(payload);
-            } else if (@hasDecl(Fallback, "workstation_activated")) {
-                Fallback.workstation_activated(payload);
-            }
-        }
-
-        pub fn pickup_dangling_started(payload: anytype) void {
-            if (@hasDecl(Primary, "pickup_dangling_started")) {
-                Primary.pickup_dangling_started(payload);
-            } else if (@hasDecl(Fallback, "pickup_dangling_started")) {
-                Fallback.pickup_dangling_started(payload);
-            }
-        }
-
-        pub fn item_delivered(payload: anytype) void {
-            if (@hasDecl(Primary, "item_delivered")) {
-                Primary.item_delivered(payload);
-            } else if (@hasDecl(Fallback, "item_delivered")) {
-                Fallback.item_delivered(payload);
-            }
-        }
+        // Hook forwarding - each calls dispatch with its name
+        pub fn pickup_started(payload: anytype) void { dispatch("pickup_started", payload); }
+        pub fn process_started(payload: anytype) void { dispatch("process_started", payload); }
+        pub fn process_completed(payload: anytype) void { dispatch("process_completed", payload); }
+        pub fn store_started(payload: anytype) void { dispatch("store_started", payload); }
+        pub fn worker_assigned(payload: anytype) void { dispatch("worker_assigned", payload); }
+        pub fn worker_released(payload: anytype) void { dispatch("worker_released", payload); }
+        pub fn workstation_blocked(payload: anytype) void { dispatch("workstation_blocked", payload); }
+        pub fn workstation_queued(payload: anytype) void { dispatch("workstation_queued", payload); }
+        pub fn workstation_activated(payload: anytype) void { dispatch("workstation_activated", payload); }
+        pub fn cycle_completed(payload: anytype) void { dispatch("cycle_completed", payload); }
+        pub fn transport_started(payload: anytype) void { dispatch("transport_started", payload); }
+        pub fn transport_completed(payload: anytype) void { dispatch("transport_completed", payload); }
+        pub fn pickup_dangling_started(payload: anytype) void { dispatch("pickup_dangling_started", payload); }
+        pub fn item_delivered(payload: anytype) void { dispatch("item_delivered", payload); }
     };
 }
