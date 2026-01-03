@@ -87,6 +87,11 @@ pub fn Engine(
             self.dangling_items.deinit();
         }
 
+        /// Set or update the distance function for spatial queries.
+        pub fn setDistanceFunction(self: *Self, func: ?DistanceFn) void {
+            self.distance_fn = func;
+        }
+
         // ============================================
         // Registration API
         // ============================================

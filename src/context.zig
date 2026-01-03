@@ -5,6 +5,7 @@
 //! - Custom vtable with ensureContext callback
 //! - Init/deinit lifecycle
 //! - Movement queue for hook-triggered worker movements
+//! - Default distance function using Position components
 //!
 //! Usage:
 //! ```zig
@@ -19,9 +20,9 @@
 //!
 //! pub const Context = tasks.TaskEngineContext(u64, Item, MyHooks);
 //!
-//! // In game init hook:
+//! // In game init hook - uses default distance function:
 //! pub fn game_init(payload: engine.HookPayload) void {
-//!     Context.init(payload.game_init.allocator, getEntityDistance) catch return;
+//!     Context.init(payload.game_init.allocator) catch return;
 //! }
 //!
 //! // In game deinit hook:
@@ -33,6 +34,7 @@
 const std = @import("std");
 const ecs_bridge = @import("ecs_bridge.zig");
 const engine_mod = @import("engine.zig");
+const labelle_engine = @import("labelle-engine");
 
 /// Context for managing task engine lifecycle and game integration.
 /// Eliminates boilerplate for vtable wrapping, global state, and movement queuing.
@@ -65,19 +67,17 @@ pub fn TaskEngineContext(
         // Lifecycle
         // ============================================
 
-        /// Initialize the task engine context.
+        /// Initialize the task engine context with default distance function.
         /// Call this during game initialization (e.g., in game_init hook).
-        pub fn init(
-            allocator: std.mem.Allocator,
-            distance_function: ?*const fn (GameId, GameId) ?f32,
-        ) !void {
+        /// Uses euclidean distance based on Position components by default.
+        pub fn init(allocator: std.mem.Allocator) !void {
             if (task_engine != null) return;
 
             engine_allocator = allocator;
-            distance_fn = distance_function;
+            distance_fn = defaultDistanceFn;
 
             const eng = try allocator.create(Engine);
-            eng.* = Engine.init(allocator, .{}, distance_function);
+            eng.* = Engine.init(allocator, .{}, defaultDistanceFn);
             task_engine = eng;
 
             // Set up ECS interface with ensureContext callback
@@ -92,6 +92,32 @@ pub fn TaskEngineContext(
             InterfaceStorage.setInterface(custom_iface);
 
             std.log.info("[TaskEngineContext] Initialized", .{});
+        }
+
+        /// Set a custom distance function (overrides default).
+        /// Call after init() if you need custom distance calculations.
+        pub fn setDistanceFunction(func: *const fn (GameId, GameId) ?f32) void {
+            distance_fn = func;
+            if (task_engine) |eng| {
+                eng.setDistanceFunction(func);
+            }
+        }
+
+        /// Default distance function using Position components.
+        /// Calculates euclidean distance between two entities.
+        fn defaultDistanceFn(from_id: GameId, to_id: GameId) ?f32 {
+            const registry = getRegistry(labelle_engine.Registry) orelse return null;
+            const Position = labelle_engine.render.Position;
+
+            const from_entity = labelle_engine.entityFromU64(from_id);
+            const to_entity = labelle_engine.entityFromU64(to_id);
+
+            const from_pos = registry.tryGet(Position, from_entity) orelse return null;
+            const to_pos = registry.tryGet(Position, to_entity) orelse return null;
+
+            const dx = to_pos.x - from_pos.x;
+            const dy = to_pos.y - from_pos.y;
+            return @sqrt(dx * dx + dy * dy);
         }
 
         /// Deinitialize the task engine context.
