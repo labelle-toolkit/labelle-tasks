@@ -36,6 +36,27 @@ const ecs_bridge = @import("ecs_bridge.zig");
 const engine_mod = @import("engine.zig");
 const labelle_engine = @import("labelle-engine");
 
+// ============================================
+// Shared Global State (accessible from hooks without Context type)
+// ============================================
+// These are set by TaskEngineContext.ensureContext and can be accessed
+// by enriched hook payloads without knowing the specific Context type.
+
+var shared_registry: ?*anyopaque = null;
+var shared_game: ?*anyopaque = null;
+
+/// Get the shared registry pointer (for use by enriched hook payloads)
+pub fn getSharedRegistry(comptime RegistryType: type) ?*RegistryType {
+    const ptr = shared_registry orelse return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
+/// Get the shared game pointer (for use by enriched hook payloads)
+pub fn getSharedGame(comptime GameType: type) ?*GameType {
+    const ptr = shared_game orelse return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
 /// Context for managing task engine lifecycle and game integration.
 /// Eliminates boilerplate for vtable wrapping, global state, and movement queuing.
 pub fn TaskEngineContext(
@@ -134,6 +155,9 @@ pub fn TaskEngineContext(
             engine_allocator = null;
             game_registry = null;
             game_ptr = null;
+            // Clear shared globals
+            shared_registry = null;
+            shared_game = null;
             clearMovementQueue();
             std.log.info("[TaskEngineContext] Deinitialized", .{});
         }
@@ -142,9 +166,13 @@ pub fn TaskEngineContext(
         fn ensureContext(game_ptr_raw: *anyopaque, registry_ptr_raw: *anyopaque) void {
             if (game_registry == null) {
                 game_registry = registry_ptr_raw;
+                // Also set shared globals for hook payload enrichment
+                shared_registry = registry_ptr_raw;
             }
             if (game_ptr == null) {
                 game_ptr = game_ptr_raw;
+                // Also set shared globals for hook payload enrichment
+                shared_game = game_ptr_raw;
             }
         }
 

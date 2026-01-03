@@ -345,7 +345,146 @@ pub fn createEngineHooks(
     comptime ItemType: type,
     comptime GameHooks: type,
 ) type {
-    const MergedHooks = logging_hooks_mod.MergeHooks(GameHooks, logging_hooks_mod.LoggingHooks);
+    const labelle_engine = @import("labelle-engine");
+    const Registry = labelle_engine.Registry;
+    const Game = labelle_engine.Game;
+
+    // Create a wrapper that enriches payloads with registry and game.
+    // Uses shared global storage from context module (set by ensureContext).
+    const WrappedHooks = struct {
+        /// Create an enriched payload struct type that includes registry and game.
+        fn EnrichedPayload(comptime Original: type) type {
+            return struct {
+                // Copy original payload fields
+                worker_id: if (@hasField(Original, "worker_id")) @FieldType(Original, "worker_id") else void = if (@hasField(Original, "worker_id")) undefined else {},
+                storage_id: if (@hasField(Original, "storage_id")) @FieldType(Original, "storage_id") else void = if (@hasField(Original, "storage_id")) undefined else {},
+                workstation_id: if (@hasField(Original, "workstation_id")) @FieldType(Original, "workstation_id") else void = if (@hasField(Original, "workstation_id")) undefined else {},
+                item: if (@hasField(Original, "item")) @FieldType(Original, "item") else void = if (@hasField(Original, "item")) undefined else {},
+                item_id: if (@hasField(Original, "item_id")) @FieldType(Original, "item_id") else void = if (@hasField(Original, "item_id")) undefined else {},
+                item_type: if (@hasField(Original, "item_type")) @FieldType(Original, "item_type") else void = if (@hasField(Original, "item_type")) undefined else {},
+                target_eis_id: if (@hasField(Original, "target_eis_id")) @FieldType(Original, "target_eis_id") else void = if (@hasField(Original, "target_eis_id")) undefined else {},
+                from_storage_id: if (@hasField(Original, "from_storage_id")) @FieldType(Original, "from_storage_id") else void = if (@hasField(Original, "from_storage_id")) undefined else {},
+                to_storage_id: if (@hasField(Original, "to_storage_id")) @FieldType(Original, "to_storage_id") else void = if (@hasField(Original, "to_storage_id")) undefined else {},
+                cycles_completed: if (@hasField(Original, "cycles_completed")) @FieldType(Original, "cycles_completed") else void = if (@hasField(Original, "cycles_completed")) undefined else {},
+
+                // Added context fields
+                registry: ?*Registry,
+                game: ?*Game,
+
+                fn create(original: Original) @This() {
+                    var result: @This() = .{
+                        .registry = context_mod.getSharedRegistry(Registry),
+                        .game = context_mod.getSharedGame(Game),
+                    };
+                    inline for (@typeInfo(Original).@"struct".fields) |field| {
+                        @field(result, field.name) = @field(original, field.name);
+                    }
+                    return result;
+                }
+            };
+        }
+
+        // Hook wrappers that enrich payloads before forwarding to GameHooks
+        pub fn store_started(payload: anytype) void {
+            if (@hasDecl(GameHooks, "store_started")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.store_started(enriched);
+            }
+        }
+
+        pub fn pickup_started(payload: anytype) void {
+            if (@hasDecl(GameHooks, "pickup_started")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.pickup_started(enriched);
+            }
+        }
+
+        pub fn pickup_dangling_started(payload: anytype) void {
+            if (@hasDecl(GameHooks, "pickup_dangling_started")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.pickup_dangling_started(enriched);
+            }
+        }
+
+        pub fn item_delivered(payload: anytype) void {
+            if (@hasDecl(GameHooks, "item_delivered")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.item_delivered(enriched);
+            }
+        }
+
+        pub fn process_started(payload: anytype) void {
+            if (@hasDecl(GameHooks, "process_started")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.process_started(enriched);
+            }
+        }
+
+        pub fn process_completed(payload: anytype) void {
+            if (@hasDecl(GameHooks, "process_completed")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.process_completed(enriched);
+            }
+        }
+
+        pub fn worker_assigned(payload: anytype) void {
+            if (@hasDecl(GameHooks, "worker_assigned")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.worker_assigned(enriched);
+            }
+        }
+
+        pub fn worker_released(payload: anytype) void {
+            if (@hasDecl(GameHooks, "worker_released")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.worker_released(enriched);
+            }
+        }
+
+        pub fn workstation_blocked(payload: anytype) void {
+            if (@hasDecl(GameHooks, "workstation_blocked")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.workstation_blocked(enriched);
+            }
+        }
+
+        pub fn workstation_queued(payload: anytype) void {
+            if (@hasDecl(GameHooks, "workstation_queued")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.workstation_queued(enriched);
+            }
+        }
+
+        pub fn workstation_activated(payload: anytype) void {
+            if (@hasDecl(GameHooks, "workstation_activated")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.workstation_activated(enriched);
+            }
+        }
+
+        pub fn cycle_completed(payload: anytype) void {
+            if (@hasDecl(GameHooks, "cycle_completed")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.cycle_completed(enriched);
+            }
+        }
+
+        pub fn transport_started(payload: anytype) void {
+            if (@hasDecl(GameHooks, "transport_started")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.transport_started(enriched);
+            }
+        }
+
+        pub fn transport_completed(payload: anytype) void {
+            if (@hasDecl(GameHooks, "transport_completed")) {
+                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
+                GameHooks.transport_completed(enriched);
+            }
+        }
+    };
+
+    const MergedHooks = logging_hooks_mod.MergeHooks(WrappedHooks, logging_hooks_mod.LoggingHooks);
     const Ctx = context_mod.TaskEngineContext(GameId, ItemType, MergedHooks);
 
     return struct {
@@ -354,7 +493,6 @@ pub fn createEngineHooks(
         pub const PendingMovement = Ctx.PendingMovement;
 
         const std = @import("std");
-        const labelle_engine = @import("labelle-engine");
 
         /// Initialize task engine during game initialization.
         /// Uses default euclidean distance function based on Position components.
