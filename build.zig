@@ -1,8 +1,28 @@
 const std = @import("std");
 
+/// Graphics backend selection (must match labelle-engine)
+pub const Backend = enum {
+    raylib,
+    sokol,
+    sdl,
+    bgfx,
+    zgpu,
+};
+
+/// ECS backend selection (must match labelle-engine)
+pub const EcsBackend = enum {
+    zig_ecs,
+    zflecs,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // Backend options - forwarded from parent project to ensure module compatibility
+    const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
+    const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
+    const physics_enabled = b.option(bool, "physics", "Enable physics module (default: false)") orelse false;
 
     // Get dependencies
     const zspec_dep = b.dependency("zspec", .{
@@ -11,16 +31,18 @@ pub fn build(b: *std.Build) void {
     });
 
     // labelle-engine dependency for standalone use and tests
+    // Forward backend options to ensure module compatibility with parent project
     const engine_dep = b.dependency("labelle-engine", .{
         .target = target,
         .optimize = optimize,
+        .backend = backend,
+        .ecs_backend = ecs_backend,
+        .physics = physics_enabled,
     });
     const engine_mod = engine_dep.module("labelle-engine");
     const ecs_mod = engine_dep.module("ecs");
 
     // Main module (use underscore for Zig module naming convention)
-    // Note: When used as a dependency, the consuming project should use
-    // addTasksModule() to provide its own labelle-engine module.
     const tasks_mod = b.addModule("labelle_tasks", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
