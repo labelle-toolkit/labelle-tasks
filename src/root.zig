@@ -306,3 +306,86 @@ pub fn bind(comptime Item: type) type {
         pub const Workstation = components_mod.Workstation(Item);
     };
 }
+
+/// Creates engine hooks for task engine lifecycle management.
+/// Reduces game boilerplate by providing standard game_init, scene_load, and game_deinit hooks.
+///
+/// The game provides:
+/// - GameId: Entity identifier type (usually u64)
+/// - ItemType: Item enum for the task system
+/// - GameHooks: Game-specific task hook handlers (store_started, pickup_dangling_started, etc.)
+/// - getDistanceFn: Spatial distance function for nearest-entity queries
+///
+/// Returns a struct containing:
+/// - Context: The TaskEngineContext for accessing engine/registry
+/// - MovementAction: Enum for movement types (pickup, store, pickup_dangling)
+/// - PendingMovement: Struct for queued movements
+/// - game_init, scene_load, game_deinit: Engine hooks
+///
+/// Example:
+/// ```zig
+/// const tasks = @import("labelle-tasks");
+///
+/// const GameHooks = struct {
+///     pub fn store_started(payload: anytype) void {
+///         const pos = getStoragePosition(payload.storage_id);
+///         TaskHooks.Context.queueMovement(payload.worker_id, pos.x, pos.y, .store);
+///     }
+/// };
+///
+/// fn getEntityDistance(from_id: u64, to_id: u64) ?f32 {
+///     // Game-specific distance calculation
+/// }
+///
+/// pub const TaskHooks = tasks.createEngineHooks(u64, ItemType, GameHooks, getEntityDistance);
+/// pub const Context = TaskHooks.Context;
+/// pub const MovementAction = TaskHooks.MovementAction;
+/// pub const PendingMovement = TaskHooks.PendingMovement;
+/// ```
+pub fn createEngineHooks(
+    comptime GameId: type,
+    comptime ItemType: type,
+    comptime GameHooks: type,
+    comptime getDistanceFn: *const fn (GameId, GameId) ?f32,
+) type {
+    const MergedHooks = logging_hooks_mod.MergeHooks(GameHooks, logging_hooks_mod.LoggingHooks);
+    const Ctx = context_mod.TaskEngineContext(GameId, ItemType, MergedHooks);
+
+    return struct {
+        pub const Context = Ctx;
+        pub const MovementAction = Ctx.MovementAction;
+        pub const PendingMovement = Ctx.PendingMovement;
+
+        const std = @import("std");
+        const labelle_engine = @import("labelle-engine");
+
+        /// Initialize task engine during game initialization
+        pub fn game_init(payload: labelle_engine.HookPayload) void {
+            const info = payload.game_init;
+
+            Context.init(info.allocator, getDistanceFn) catch |err| {
+                std.log.err("[labelle-tasks] Failed to initialize task engine: {}", .{err});
+                return;
+            };
+
+            std.log.info("[labelle-tasks] Task engine initialized", .{});
+        }
+
+        /// Re-evaluate dangling items after scene is loaded (all entities now registered)
+        pub fn scene_load(payload: labelle_engine.HookPayload) void {
+            const info = payload.scene_load;
+            std.log.debug("[labelle-tasks] scene_load: {s} - re-evaluating dangling items", .{info.name});
+
+            if (Context.getEngine()) |task_eng| {
+                task_eng.evaluateDanglingItems();
+            }
+        }
+
+        /// Clean up task engine on game deinit
+        pub fn game_deinit(payload: labelle_engine.HookPayload) void {
+            _ = payload;
+            Context.deinit();
+            std.log.info("[labelle-tasks] Task engine cleaned up", .{});
+        }
+    };
+}
