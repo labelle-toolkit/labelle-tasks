@@ -257,3 +257,52 @@ pub fn DanglingItem(comptime Item: type) type {
 pub fn Workstation(comptime Item: type) type {
     return components_mod.Workstation(Item);
 }
+
+/// Component types for labelle-tasks plugin.
+/// Use in project.labelle with `.components = "Components(main_module.Items)"`.
+///
+/// Example:
+/// ```zig
+/// // project.labelle
+/// .plugins = .{
+///     .{
+///         .name = "labelle-tasks",
+///         .path = "../../labelle-tasks",
+///         .components = "Components(main_module.Items)",
+///     },
+/// },
+/// ```
+pub fn Components(comptime Item: type) type {
+    return struct {
+        pub const Storage = components_mod.Storage(Item);
+        pub const Worker = components_mod.Worker(Item);
+        pub const DanglingItem = components_mod.DanglingItem(Item);
+        pub const Workstation = components_mod.Workstation(Item);
+    };
+}
+
+/// Bind function for plugin component integration.
+/// Returns a struct with all component types parameterized by Item.
+/// The generator iterates public decls to find component types.
+///
+/// Example:
+/// ```zig
+/// // project.labelle
+/// .plugins = .{
+///     .{
+///         .name = "labelle-tasks",
+///         .path = "../../labelle-tasks",
+///         .bind = .{
+///             .{ .func = "bind", .args = .{"enums.items.ItemType"} },
+///         },
+///     },
+/// },
+/// ```
+pub fn bind(comptime Item: type) type {
+    return struct {
+        pub const Storage = components_mod.Storage(Item);
+        pub const Worker = components_mod.Worker(Item);
+        pub const DanglingItem = components_mod.DanglingItem(Item);
+        pub const Workstation = components_mod.Workstation(Item);
+    };
+}
