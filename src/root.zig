@@ -309,104 +309,29 @@ pub fn createEngineHooks(
             };
         }
 
-        // Hook wrappers that enrich payloads before forwarding to GameHooks
-        pub fn store_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "store_started")) {
+        /// Dispatch to GameHooks if it has the declaration, enriching the payload.
+        inline fn dispatch(comptime name: []const u8, payload: anytype) void {
+            if (@hasDecl(GameHooks, name)) {
                 const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.store_started(enriched);
+                @field(GameHooks, name)(enriched);
             }
         }
 
-        pub fn pickup_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "pickup_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.pickup_started(enriched);
-            }
-        }
-
-        pub fn pickup_dangling_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "pickup_dangling_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.pickup_dangling_started(enriched);
-            }
-        }
-
-        pub fn item_delivered(payload: anytype) void {
-            if (@hasDecl(GameHooks, "item_delivered")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.item_delivered(enriched);
-            }
-        }
-
-        pub fn process_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "process_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.process_started(enriched);
-            }
-        }
-
-        pub fn process_completed(payload: anytype) void {
-            if (@hasDecl(GameHooks, "process_completed")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.process_completed(enriched);
-            }
-        }
-
-        pub fn worker_assigned(payload: anytype) void {
-            if (@hasDecl(GameHooks, "worker_assigned")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.worker_assigned(enriched);
-            }
-        }
-
-        pub fn worker_released(payload: anytype) void {
-            if (@hasDecl(GameHooks, "worker_released")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.worker_released(enriched);
-            }
-        }
-
-        pub fn workstation_blocked(payload: anytype) void {
-            if (@hasDecl(GameHooks, "workstation_blocked")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.workstation_blocked(enriched);
-            }
-        }
-
-        pub fn workstation_queued(payload: anytype) void {
-            if (@hasDecl(GameHooks, "workstation_queued")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.workstation_queued(enriched);
-            }
-        }
-
-        pub fn workstation_activated(payload: anytype) void {
-            if (@hasDecl(GameHooks, "workstation_activated")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.workstation_activated(enriched);
-            }
-        }
-
-        pub fn cycle_completed(payload: anytype) void {
-            if (@hasDecl(GameHooks, "cycle_completed")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.cycle_completed(enriched);
-            }
-        }
-
-        pub fn transport_started(payload: anytype) void {
-            if (@hasDecl(GameHooks, "transport_started")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.transport_started(enriched);
-            }
-        }
-
-        pub fn transport_completed(payload: anytype) void {
-            if (@hasDecl(GameHooks, "transport_completed")) {
-                const enriched = EnrichedPayload(@TypeOf(payload)).create(payload);
-                GameHooks.transport_completed(enriched);
-            }
-        }
+        // Hook forwarding - each calls dispatch with its name
+        pub fn store_started(payload: anytype) void { dispatch("store_started", payload); }
+        pub fn pickup_started(payload: anytype) void { dispatch("pickup_started", payload); }
+        pub fn pickup_dangling_started(payload: anytype) void { dispatch("pickup_dangling_started", payload); }
+        pub fn item_delivered(payload: anytype) void { dispatch("item_delivered", payload); }
+        pub fn process_started(payload: anytype) void { dispatch("process_started", payload); }
+        pub fn process_completed(payload: anytype) void { dispatch("process_completed", payload); }
+        pub fn worker_assigned(payload: anytype) void { dispatch("worker_assigned", payload); }
+        pub fn worker_released(payload: anytype) void { dispatch("worker_released", payload); }
+        pub fn workstation_blocked(payload: anytype) void { dispatch("workstation_blocked", payload); }
+        pub fn workstation_queued(payload: anytype) void { dispatch("workstation_queued", payload); }
+        pub fn workstation_activated(payload: anytype) void { dispatch("workstation_activated", payload); }
+        pub fn cycle_completed(payload: anytype) void { dispatch("cycle_completed", payload); }
+        pub fn transport_started(payload: anytype) void { dispatch("transport_started", payload); }
+        pub fn transport_completed(payload: anytype) void { dispatch("transport_completed", payload); }
     };
 
     const MergedHooks = logging_hooks_mod.MergeHooks(WrappedHooks, logging_hooks_mod.LoggingHooks);
