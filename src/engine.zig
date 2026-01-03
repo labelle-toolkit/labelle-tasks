@@ -154,6 +154,62 @@ pub fn Engine(
             self.evaluateWorkstationStatus(workstation_id);
         }
 
+        /// Remove a workstation from the engine
+        pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
+            if (self.workstations.fetchRemove(workstation_id)) |kv| {
+                self.allocator.free(kv.value.eis);
+                self.allocator.free(kv.value.iis);
+                self.allocator.free(kv.value.ios);
+                self.allocator.free(kv.value.eos);
+            }
+        }
+
+        /// Attach a storage to a workstation dynamically.
+        /// This allows storages to register themselves with their parent workstation
+        /// using the parent reference convention (RFC #169).
+        pub fn attachStorageToWorkstation(self: *Self, storage_id: GameId, workstation_id: GameId, role: StorageRole) !void {
+            const ws = self.workstations.getPtr(workstation_id) orelse {
+                std.log.warn("[tasks] attachStorageToWorkstation: workstation {d} not found", .{workstation_id});
+                return error.WorkstationNotFound;
+            };
+
+            // Append storage to appropriate array based on role
+            // Create new slice with additional element, copy old data, free old slice
+            switch (role) {
+                .eis => {
+                    const new_eis = try self.allocator.alloc(GameId, ws.eis.len + 1);
+                    @memcpy(new_eis[0..ws.eis.len], ws.eis);
+                    new_eis[ws.eis.len] = storage_id;
+                    self.allocator.free(ws.eis);
+                    ws.eis = new_eis;
+                },
+                .iis => {
+                    const new_iis = try self.allocator.alloc(GameId, ws.iis.len + 1);
+                    @memcpy(new_iis[0..ws.iis.len], ws.iis);
+                    new_iis[ws.iis.len] = storage_id;
+                    self.allocator.free(ws.iis);
+                    ws.iis = new_iis;
+                },
+                .ios => {
+                    const new_ios = try self.allocator.alloc(GameId, ws.ios.len + 1);
+                    @memcpy(new_ios[0..ws.ios.len], ws.ios);
+                    new_ios[ws.ios.len] = storage_id;
+                    self.allocator.free(ws.ios);
+                    ws.ios = new_ios;
+                },
+                .eos => {
+                    const new_eos = try self.allocator.alloc(GameId, ws.eos.len + 1);
+                    @memcpy(new_eos[0..ws.eos.len], ws.eos);
+                    new_eos[ws.eos.len] = storage_id;
+                    self.allocator.free(ws.eos);
+                    ws.eos = new_eos;
+                },
+            }
+
+            // Re-evaluate workstation status after adding storage
+            self.evaluateWorkstationStatus(workstation_id);
+        }
+
         /// Set the callback for worker selection
         pub fn setFindBestWorker(self: *Self, callback: *const fn (workstation_id: ?GameId, available_workers: []const GameId) ?GameId) void {
             self.find_best_worker_fn = callback;
@@ -384,6 +440,95 @@ pub fn Engine(
                     return;
                 }
             }
+        }
+
+        // ============================================
+        // ECS Bridge Interface
+        // ============================================
+
+        const ecs_bridge = @import("ecs_bridge.zig");
+        pub const EcsInterface = ecs_bridge.EcsInterface(GameId, Item);
+
+        /// Get the ECS bridge interface for this engine.
+        /// Used by games to connect tasks components to the engine.
+        ///
+        /// Usage:
+        /// ```zig
+        /// var task_engine = tasks.Engine(u64, Item, Hooks).init(allocator, .{});
+        /// tasks.setEngineInterface(u64, Item, task_engine.interface());
+        /// ```
+        pub fn interface(self: *Self) EcsInterface {
+            return .{
+                .ptr = self,
+                .vtable = &vtable,
+            };
+        }
+
+        const vtable = EcsInterface.VTable{
+            .addStorage = addStorageVTable,
+            .removeStorage = removeStorageVTable,
+            .attachStorageToWorkstation = attachStorageToWorkstationVTable,
+            .addWorker = addWorkerVTable,
+            .removeWorker = removeWorkerVTable,
+            .workerAvailable = workerAvailableVTable,
+            .addDanglingItem = addDanglingItemVTable,
+            .removeDanglingItem = removeDanglingItemVTable,
+            .addWorkstation = addWorkstationVTable,
+            .removeWorkstation = removeWorkstationVTable,
+        };
+
+        fn addStorageVTable(ptr: *anyopaque, id: GameId, role: StorageRole, initial_item: ?Item, accepts: ?Item) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addStorage(id, .{
+                .role = role,
+                .initial_item = initial_item,
+                .accepts = accepts,
+            });
+        }
+
+        fn removeStorageVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            _ = self.storages.remove(id);
+        }
+
+        fn attachStorageToWorkstationVTable(ptr: *anyopaque, storage_id: GameId, workstation_id: GameId, role: StorageRole) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.attachStorageToWorkstation(storage_id, workstation_id, role);
+        }
+
+        fn addWorkerVTable(ptr: *anyopaque, id: GameId) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addWorker(id);
+        }
+
+        fn removeWorkerVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            _ = self.handle(.{ .worker_removed = .{ .worker_id = id } });
+        }
+
+        fn workerAvailableVTable(ptr: *anyopaque, id: GameId) bool {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            return self.handle(.{ .worker_available = .{ .worker_id = id } });
+        }
+
+        fn addDanglingItemVTable(ptr: *anyopaque, id: GameId, item_type: Item) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addDanglingItem(id, item_type);
+        }
+
+        fn removeDanglingItemVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            self.removeDanglingItem(id);
+        }
+
+        fn addWorkstationVTable(ptr: *anyopaque, id: GameId) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addWorkstation(id, .{});
+        }
+
+        fn removeWorkstationVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            self.removeWorkstation(id);
         }
     };
 }

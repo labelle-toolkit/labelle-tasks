@@ -156,3 +156,55 @@ pub const Priority = engine_mod.Priority;
 
 /// Storage role in the workflow (EIS, IIS, IOS, EOS).
 pub const StorageRole = state_mod.StorageRole;
+
+// === ECS Integration (RFC #28) ===
+
+const ecs_bridge = @import("ecs_bridge.zig");
+const components_mod = @import("components.zig");
+
+/// Type-erased interface for ECS operations.
+pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
+    return ecs_bridge.EcsInterface(GameId, Item);
+}
+
+/// Set the ECS interface for auto-registering components.
+/// Call this during game initialization after creating the task engine.
+///
+/// Example:
+/// ```zig
+/// var task_engine = tasks.Engine(u64, Item, Hooks).init(allocator, .{});
+/// tasks.setEngineInterface(u64, Item, task_engine.interface());
+/// ```
+pub fn setEngineInterface(comptime GameId: type, comptime Item: type, iface: EcsInterface(GameId, Item)) void {
+    ecs_bridge.InterfaceStorage(GameId, Item).setInterface(iface);
+}
+
+/// Clear the ECS interface (for cleanup).
+pub fn clearEngineInterface(comptime GameId: type, comptime Item: type) void {
+    ecs_bridge.InterfaceStorage(GameId, Item).clearInterface();
+}
+
+/// Storage component for the task engine.
+/// Auto-registers with task engine when added to an entity.
+pub fn Storage(comptime Item: type) type {
+    return components_mod.Storage(Item);
+}
+
+/// Worker component for the task engine.
+/// Auto-registers with task engine when added to an entity.
+pub fn Worker(comptime Item: type) type {
+    return components_mod.Worker(Item);
+}
+
+/// Dangling item component for the task engine.
+/// Auto-registers with task engine when added to an entity.
+pub fn DanglingItem(comptime Item: type) type {
+    return components_mod.DanglingItem(Item);
+}
+
+/// Workstation component for the task engine.
+/// Auto-registers with task engine when added to an entity.
+/// Nested Storage components will auto-attach via parent reference.
+pub fn Workstation(comptime Item: type) type {
+    return components_mod.Workstation(Item);
+}

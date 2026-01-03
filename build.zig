@@ -10,8 +10,28 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // labelle-engine dependency for standalone use and tests
+    const engine_dep = b.dependency("labelle-engine", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const engine_mod = engine_dep.module("labelle-engine");
+    const ecs_mod = engine_dep.module("ecs");
+
     // Main module (use underscore for Zig module naming convention)
+    // Note: When used as a dependency, the consuming project should use
+    // addTasksModule() to provide its own labelle-engine module.
     const tasks_mod = b.addModule("labelle_tasks", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    tasks_mod.addImport("labelle-engine", engine_mod);
+    tasks_mod.addImport("ecs", ecs_mod);
+
+    // Also export a version without engine dependencies for consuming projects
+    // that want to provide their own labelle-engine module
+    _ = b.addModule("labelle_tasks_core", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,

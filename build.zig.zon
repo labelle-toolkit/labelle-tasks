@@ -8,6 +8,10 @@
             .url = "https://github.com/apotema/zspec/archive/refs/heads/main.tar.gz",
             .hash = "zspec-0.6.0-jaKLbU5DAwAYa0jR0cnFGuIbSrxD6ojh-oyXj9ooyb3V",
         },
+        // labelle-engine for ECS integration (RFC #28)
+        .@"labelle-engine" = .{
+            .path = "../labelle-engine",
+        },
     },
     .paths = .{
         "build.zig",
