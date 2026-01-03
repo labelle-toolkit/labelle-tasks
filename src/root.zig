@@ -72,9 +72,6 @@ const hooks_mod = @import("hooks.zig");
 /// Generic over GameId (entity identifier), Item (item enum), and TaskHooks (hook receiver).
 pub const Engine = engine_mod.Engine;
 
-/// Convenience alias for Engine with hooks.
-pub const EngineWithHooks = engine_mod.EngineWithHooks;
-
 // === Hooks ===
 
 /// Payload for events emitted by task engine to game.
@@ -112,53 +109,6 @@ pub const LoggingHooks = logging_hooks_mod.LoggingHooks;
 /// const Hooks = tasks.MergeHooks(MyHooks, tasks.LoggingHooks);
 /// ```
 pub const MergeHooks = logging_hooks_mod.MergeHooks;
-
-// === Hooks Namespace (backward compatibility) ===
-
-/// Namespace for hook-related types and utilities.
-/// Provides backward compatibility with existing code that uses `labelle_tasks.hooks.*`
-pub const hooks = struct {
-    pub const TaskHookPayload = hooks_mod.TaskHookPayload;
-    pub const GameHookPayload = hooks_mod.GameHookPayload;
-    pub const HookDispatcher = hooks_mod.HookDispatcher;
-    pub const NoHooks = hooks_mod.NoHooks;
-
-    /// Alias for TaskHookPayload (backward compatibility)
-    pub fn HookPayload(comptime GameId: type, comptime Item: type) type {
-        return hooks_mod.TaskHookPayload(GameId, Item);
-    }
-
-    /// Merges multiple hook structs into a single struct.
-    /// For the new pure state machine architecture, this simply returns the first
-    /// non-empty hook struct from the tuple, as hooks are now handled locally.
-    ///
-    /// Usage:
-    /// ```zig
-    /// const MergedHooks = tasks.hooks.MergeTasksHooks(u32, Item, .{ HooksA, HooksB });
-    /// ```
-    pub fn MergeTasksHooks(
-        comptime GameId: type,
-        comptime Item: type,
-        comptime hook_structs: anytype,
-    ) type {
-        _ = GameId;
-        _ = Item;
-
-        const info = @typeInfo(@TypeOf(hook_structs));
-        if (info != .@"struct") {
-            @compileError("MergeTasksHooks expects a tuple of hook structs");
-        }
-
-        const fields = info.@"struct".fields;
-        if (fields.len == 0) {
-            return hooks_mod.NoHooks;
-        }
-
-        // Return the first hook struct type
-        // In the new architecture, each script manages its own hooks internally
-        return fields[0].type;
-    }
-};
 
 // === Enums ===
 
@@ -258,29 +208,6 @@ pub fn Workstation(comptime Item: type) type {
     return components_mod.Workstation(Item);
 }
 
-/// Component types for labelle-tasks plugin.
-/// Use in project.labelle with `.components = "Components(main_module.Items)"`.
-///
-/// Example:
-/// ```zig
-/// // project.labelle
-/// .plugins = .{
-///     .{
-///         .name = "labelle-tasks",
-///         .path = "../../labelle-tasks",
-///         .components = "Components(main_module.Items)",
-///     },
-/// },
-/// ```
-pub fn Components(comptime Item: type) type {
-    return struct {
-        pub const Storage = components_mod.Storage(Item);
-        pub const Worker = components_mod.Worker(Item);
-        pub const DanglingItem = components_mod.DanglingItem(Item);
-        pub const Workstation = components_mod.Workstation(Item);
-    };
-}
-
 /// Bind function for plugin component integration.
 /// Returns a struct with all component types parameterized by Item.
 /// The generator iterates public decls to find component types.
@@ -317,10 +244,9 @@ pub fn bind(comptime Item: type) type {
 ///
 /// Returns a struct containing:
 /// - Context: The TaskEngineContext for accessing engine/registry
-/// - MovementAction: Enum for movement types (pickup, store, pickup_dangling)
-/// - PendingMovement: Struct for queued movements
 /// - game_init, scene_load, game_deinit: Engine hooks
 ///
+/// Hook payloads are enriched with .registry and .game pointers for direct ECS access.
 /// A default distance function (euclidean distance using Position components) is used.
 /// To override, call Context.setDistanceFunction() after initialization.
 ///
@@ -330,15 +256,14 @@ pub fn bind(comptime Item: type) type {
 ///
 /// const GameHooks = struct {
 ///     pub fn store_started(payload: anytype) void {
-///         const pos = getStoragePosition(payload.storage_id);
-///         TaskHooks.Context.queueMovement(payload.worker_id, pos.x, pos.y, .store);
+///         const registry = payload.registry orelse return;
+///         const worker = engine.entityFromU64(payload.worker_id);
+///         registry.set(worker, MovementTarget{ ... });
 ///     }
 /// };
 ///
 /// pub const TaskHooks = tasks.createEngineHooks(u64, ItemType, GameHooks);
 /// pub const Context = TaskHooks.Context;
-/// pub const MovementAction = TaskHooks.MovementAction;
-/// pub const PendingMovement = TaskHooks.PendingMovement;
 /// ```
 pub fn createEngineHooks(
     comptime GameId: type,
@@ -489,8 +414,6 @@ pub fn createEngineHooks(
 
     return struct {
         pub const Context = Ctx;
-        pub const MovementAction = Ctx.MovementAction;
-        pub const PendingMovement = Ctx.PendingMovement;
 
         const std = @import("std");
 

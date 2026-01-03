@@ -158,7 +158,6 @@ pub fn TaskEngineContext(
             // Clear shared globals
             shared_registry = null;
             shared_game = null;
-            clearMovementQueue();
             std.log.info("[TaskEngineContext] Deinitialized", .{});
         }
 
@@ -235,58 +234,6 @@ pub fn TaskEngineContext(
             if (task_engine) |eng| {
                 eng.evaluateDanglingItems();
             }
-        }
-
-        // ============================================
-        // Movement Queue
-        // ============================================
-
-        pub const MovementAction = enum {
-            pickup,
-            store,
-            pickup_dangling,
-        };
-
-        pub const PendingMovement = struct {
-            worker_id: GameId,
-            target_x: f32,
-            target_y: f32,
-            action: MovementAction,
-        };
-
-        var pending_movements: std.ArrayListUnmanaged(PendingMovement) = .{};
-        var movements_allocator: std.mem.Allocator = std.heap.page_allocator;
-
-        /// Queue a movement for a worker (call from hooks).
-        pub fn queueMovement(worker_id: GameId, target_x: f32, target_y: f32, action: MovementAction) void {
-            pending_movements.append(movements_allocator, .{
-                .worker_id = worker_id,
-                .target_x = target_x,
-                .target_y = target_y,
-                .action = action,
-            }) catch |err| {
-                std.log.err("[TaskEngineContext] Failed to queue movement: {}", .{err});
-            };
-        }
-
-        /// Take all pending movements (transfers ownership to caller).
-        pub fn takePendingMovements() []PendingMovement {
-            if (pending_movements.items.len == 0) {
-                return &.{};
-            }
-            return pending_movements.toOwnedSlice(movements_allocator) catch &.{};
-        }
-
-        /// Free a slice returned by takePendingMovements.
-        pub fn freePendingMovements(slice: []PendingMovement) void {
-            if (slice.len > 0) {
-                movements_allocator.free(slice);
-            }
-        }
-
-        fn clearMovementQueue() void {
-            pending_movements.deinit(movements_allocator);
-            pending_movements = .{};
         }
     };
 }
