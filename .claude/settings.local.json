@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh issue create --title \"Use labelle hook system for simpler labelle-engine integration\" --body \"$\\(cat <<''EOF''\n## Summary\n\nThe new version of labelle CLI introduces a hook system. We should explore using it to simplify the integration between labelle-tasks and labelle-engine.\n\n## Current State\n\nlabelle-tasks currently uses a callback-driven pattern where games must explicitly:\n1. Register callbacks \\(`setFindBestWorker\\(\\)`, `setOnStepStarted\\(\\)`, `setOnStepCompleted\\(\\)`, etc.\\)\n2. Manually notify the engine of events \\(`notifyResourcesAvailable\\(\\)`, `notifyStepComplete\\(\\)`, `notifyWorkerIdle\\(\\)`\\)\n\nWhile this provides flexibility, it requires significant boilerplate and manual wiring.\n\n## Proposal\n\nInvestigate using labelle''s hook system to:\n- Automatically wire engine events to game systems\n- Reduce boilerplate for common integration patterns\n- Provide lifecycle hooks for task state changes \\(worker assigned, step started/completed, task finished\\)\n- Enable declarative integration configuration\n\n## Potential Benefits\n\n- Less manual callback registration\n- Standardized integration patterns across labelle-engine projects\n- Easier onboarding for new projects using labelle-tasks\n- Better alignment with labelle ecosystem conventions\n\n## Tasks\n\n- [ ] Review labelle hook system documentation/implementation\n- [ ] Identify which callbacks could become hooks\n- [ ] Design hook-based API that complements existing callback API\n- [ ] Implement hook integration layer\n- [ ] Update documentation with hook-based examples\nEOF\n\\)\")",
+      "Bash(git checkout:*)"
+    ]
+  }
+}

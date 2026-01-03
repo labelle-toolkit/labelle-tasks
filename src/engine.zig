@@ -1,455 +1,543 @@
-//! labelle-tasks Engine
-//!
-//! A self-contained task orchestration engine for games with storage management.
-//!
-//! The engine manages:
-//! - Workers and workstations with game entity IDs
-//! - Storages (EIS, IIS, IOS, EOS) as separate entities
-//! - Automatic step derivation based on storage configuration
-//! - Process timing with configurable duration
-//! - Recurring transport tasks between storages
-//! - Hook-based event emission for lifecycle events
-//!
-//! Example:
-//! ```zig
-//! const tasks = @import("labelle_tasks");
-//! const Item = enum { Vegetable, Meat, Meal };
-//!
-//! // Define hook handlers (optional)
-//! const MyHooks = struct {
-//!     pub fn cycle_completed(payload: tasks.hooks.HookPayload(u32, Item)) void {
-//!         const info = payload.cycle_completed;
-//!         std.log.info("Cycle {d} completed!", .{info.cycles_completed});
-//!     }
-//! };
-//!
-//! const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-//! var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
-//! defer engine.deinit();
-//!
-//! // Create storages (each storage holds one item type)
-//! _ = engine.addStorage(VEG_EIS_ID, .{ .item = .Vegetable });
-//! _ = engine.addStorage(MEAT_EIS_ID, .{ .item = .Meat });
-//! _ = engine.addStorage(VEG_IIS_ID, .{ .item = .Vegetable });  // Recipe needs 1 vegetable
-//! _ = engine.addStorage(MEAT_IIS_ID, .{ .item = .Meat });      // Recipe needs 1 meat
-//! _ = engine.addStorage(KITCHEN_IOS_ID, .{ .item = .Meal });   // Produces 1 meal
-//! _ = engine.addStorage(KITCHEN_EOS_ID, .{ .item = .Meal });
-//!
-//! // Create workstation referencing storages
-//! _ = engine.addWorkstation(KITCHEN_ID, .{
-//!     .eis = &.{ VEG_EIS_ID, MEAT_EIS_ID },
-//!     .iis = &.{ VEG_IIS_ID, MEAT_IIS_ID },  // Recipe: 1 veg + 1 meat
-//!     .ios = &.{KITCHEN_IOS_ID},              // Produces: 1 meal
-//!     .eos = &.{KITCHEN_EOS_ID},
-//!     .process_duration = 40,
-//!     .priority = .High,
-//! });
-//! ```
+//! Pure state machine task orchestration engine
+//! Tracks abstract workflow state, emits hooks to game
+//! Never mutates game state - only updates internal abstract state
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// Import submodules
-const base_mod = @import("engine/base.zig");
-const types_mod = @import("engine/types.zig");
 const hooks_mod = @import("hooks.zig");
+const types = @import("types.zig");
+const state_mod = @import("state.zig");
+const handlers_mod = @import("handlers.zig");
+const helpers_mod = @import("helpers.zig");
 
-// Re-export types
-pub const Priority = types_mod.Priority;
-pub const StepType = types_mod.StepType;
+// Re-export types for convenience
+pub const WorkerState = types.WorkerState;
+pub const WorkstationStatus = types.WorkstationStatus;
+pub const StepType = types.StepType;
+pub const Priority = types.Priority;
 
-// Re-export BaseEngine for internal use (accessible via base field)
-pub const BaseEngine = base_mod.BaseEngine;
-
-// ============================================================================
-// Engine with Hooks
-// ============================================================================
-
-/// Task orchestration engine with hook support.
-///
-/// The engine manages workers, workstations, storages, and transports,
-/// emitting hooks for lifecycle events. Use hooks to observe engine events
-/// without using callbacks, ideal for labelle-engine integration.
-///
-/// The `Dispatcher` parameter should be a type created by `hooks.HookDispatcher`
-/// or `hooks.MergeTasksHooks`. Use `hooks.NoOpDispatcher` if you don't need hooks.
-///
-/// Example:
-/// ```zig
-/// const MyHooks = struct {
-///     pub fn pickup_started(payload: tasks.hooks.HookPayload(u32, Item)) void {
-///         const info = payload.pickup_started;
-///         std.log.info("Pickup started!", .{});
-///     }
-/// };
-///
-/// const Dispatcher = tasks.hooks.HookDispatcher(u32, Item, MyHooks);
-/// var engine = tasks.Engine(u32, Item, Dispatcher).init(allocator);
-/// ```
-pub fn Engine(comptime GameId: type, comptime Item: type, comptime Dispatcher: type) type {
-    const Base = BaseEngine(GameId, Item);
-
+/// Pure state machine task orchestration engine
+/// Tracks abstract workflow state, emits hooks to game
+/// Never mutates game state - only updates internal abstract state
+pub fn Engine(
+    comptime GameId: type,
+    comptime Item: type,
+    comptime TaskHooks: type,
+) type {
     return struct {
         const Self = @This();
 
-        // Re-export types from base engine
-        pub const Storage = Base.Storage;
-        pub const WorkerId = Base.WorkerId;
-        pub const WorkstationId = Base.WorkstationId;
-        pub const StorageId = Base.StorageId;
-        pub const TransportId = Base.TransportId;
-        pub const WorkerState = Base.WorkerState;
-        pub const WorkstationStatus = Base.WorkstationStatus;
-        pub const FindBestWorkerFn = Base.FindBestWorkerFn;
-        pub const AddWorkerOptions = Base.AddWorkerOptions;
-        pub const AddWorkstationOptions = Base.AddWorkstationOptions;
-        pub const AddStorageOptions = Base.AddStorageOptions;
-        pub const AddTransportOptions = Base.AddTransportOptions;
+        pub const TaskPayload = hooks_mod.TaskHookPayload(GameId, Item);
+        pub const GamePayload = hooks_mod.GameHookPayload(GameId, Item);
+        const Dispatcher = hooks_mod.HookDispatcher(GameId, Item, TaskHooks);
 
-        /// The underlying base engine.
-        base: Base,
+        /// Distance function type - returns distance between two entities, or null if no path
+        pub const DistanceFn = *const fn (from_id: GameId, to_id: GameId) ?f32;
 
-        // ====================================================================
-        // Initialization
-        // ====================================================================
+        // Import state types
+        const StorageState = state_mod.StorageState(Item);
+        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkstationData = state_mod.WorkstationData(GameId);
 
-        pub fn init(allocator: Allocator) Self {
-            var base = Base.init(allocator);
+        // Import handlers and helpers
+        const EventHandlers = handlers_mod.Handlers(GameId, Item, Self);
+        const EngineHelpers = helpers_mod.Helpers(GameId, Item, Self);
 
-            // Wire up internal callbacks to emit hooks
-            base.on_pickup_started = emitPickupStarted;
-            base.on_process_started = emitProcessStarted;
-            base.on_process_complete = emitProcessComplete;
-            base.on_store_started = emitStoreStarted;
-            base.on_worker_released = emitWorkerReleased;
-            base.on_transport_started = emitTransportStarted;
+        // State maps
+        allocator: Allocator,
+        storages: std.AutoHashMap(GameId, StorageState),
+        workers: std.AutoHashMap(GameId, WorkerData),
+        workstations: std.AutoHashMap(GameId, WorkstationData),
+        dangling_items: std.AutoHashMap(GameId, Item),
 
-            return .{ .base = base };
+        // Hook dispatcher
+        dispatcher: Dispatcher,
+
+        // Optional distance function for spatial queries
+        distance_fn: ?DistanceFn = null,
+
+        // Callback for worker selection
+        find_best_worker_fn: ?*const fn (workstation_id: ?GameId, available_workers: []const GameId) ?GameId = null,
+
+        pub fn init(allocator: Allocator, task_hooks: TaskHooks, distance_fn: ?DistanceFn) Self {
+            return .{
+                .allocator = allocator,
+                .storages = std.AutoHashMap(GameId, StorageState).init(allocator),
+                .workers = std.AutoHashMap(GameId, WorkerData).init(allocator),
+                .workstations = std.AutoHashMap(GameId, WorkstationData).init(allocator),
+                .dangling_items = std.AutoHashMap(GameId, Item).init(allocator),
+                .dispatcher = Dispatcher.init(task_hooks),
+                .distance_fn = distance_fn,
+            };
         }
 
         pub fn deinit(self: *Self) void {
-            self.base.deinit();
+            // Free workstation storage slices
+            var ws_iter = self.workstations.valueIterator();
+            while (ws_iter.next()) |ws| {
+                self.allocator.free(ws.eis);
+                self.allocator.free(ws.iis);
+                self.allocator.free(ws.ios);
+                self.allocator.free(ws.eos);
+            }
+            self.workstations.deinit();
+            self.workers.deinit();
+            self.storages.deinit();
+            self.dangling_items.deinit();
         }
 
-        // ====================================================================
-        // Callback Registration (for decision callbacks)
-        // ====================================================================
+        // ============================================
+        // Registration API
+        // ============================================
 
-        /// Set custom FindBestWorker callback.
-        /// This callback is still required for worker selection logic.
-        pub fn setFindBestWorker(self: *Self, callback: FindBestWorkerFn) void {
-            self.base.find_best_worker = callback;
+        // Re-export StorageRole for convenience
+        pub const StorageRole = state_mod.StorageRole;
+
+        /// Storage configuration for registration
+        pub const StorageConfig = struct {
+            role: StorageRole = .eis,
+            accepts: ?Item = null, // null = accepts any item type
+            initial_item: ?Item = null,
+        };
+
+        /// Register a storage with the engine
+        pub fn addStorage(self: *Self, storage_id: GameId, config: StorageConfig) !void {
+            try self.storages.put(storage_id, .{
+                .has_item = config.initial_item != null,
+                .item_type = config.initial_item,
+                .role = config.role,
+                .accepts = config.accepts,
+            });
+
+            // If an empty EIS was added, check if any dangling items can be delivered
+            if (config.role == .eis and config.initial_item == null) {
+                self.evaluateDanglingItems();
+            }
         }
 
-        // ====================================================================
-        // Worker Management
-        // ====================================================================
-
-        pub fn addWorker(self: *Self, game_id: GameId, options: AddWorkerOptions) WorkerId {
-            return self.base.addWorker(game_id, options);
+        /// Register a worker with the engine
+        pub fn addWorker(self: *Self, worker_id: GameId) !void {
+            try self.workers.put(worker_id, .{});
         }
 
-        pub fn removeWorker(self: *Self, game_id: GameId) void {
-            self.base.removeWorker(game_id);
+        /// Workstation configuration for registration
+        pub const WorkstationConfig = struct {
+            eis: []const GameId = &.{},
+            iis: []const GameId = &.{},
+            ios: []const GameId = &.{},
+            eos: []const GameId = &.{},
+            priority: Priority = .Normal,
+        };
+
+        /// Register a workstation with the engine
+        pub fn addWorkstation(self: *Self, workstation_id: GameId, config: WorkstationConfig) !void {
+            // Copy the storage ID slices since they may be stack-allocated
+            const eis = try self.allocator.dupe(GameId, config.eis);
+            errdefer self.allocator.free(eis);
+            const iis = try self.allocator.dupe(GameId, config.iis);
+            errdefer self.allocator.free(iis);
+            const ios = try self.allocator.dupe(GameId, config.ios);
+            errdefer self.allocator.free(ios);
+            const eos = try self.allocator.dupe(GameId, config.eos);
+            errdefer self.allocator.free(eos);
+
+            try self.workstations.put(workstation_id, .{
+                .eis = eis,
+                .iis = iis,
+                .ios = ios,
+                .eos = eos,
+                .priority = config.priority,
+            });
+
+            // Evaluate initial status
+            self.evaluateWorkstationStatus(workstation_id);
         }
 
-        pub fn getWorkerState(self: *Self, game_id: GameId) ?WorkerState {
-            return self.base.getWorkerState(game_id);
+        /// Remove a workstation from the engine
+        pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
+            if (self.workstations.fetchRemove(workstation_id)) |kv| {
+                self.allocator.free(kv.value.eis);
+                self.allocator.free(kv.value.iis);
+                self.allocator.free(kv.value.ios);
+                self.allocator.free(kv.value.eos);
+            }
         }
 
-        // ====================================================================
-        // Storage Management
-        // ====================================================================
+        /// Attach a storage to a workstation dynamically.
+        /// This allows storages to register themselves with their parent workstation
+        /// using the parent reference convention (RFC #169).
+        pub fn attachStorageToWorkstation(self: *Self, storage_id: GameId, workstation_id: GameId, role: StorageRole) !void {
+            const ws = self.workstations.getPtr(workstation_id) orelse {
+                std.log.warn("[tasks] attachStorageToWorkstation: workstation {d} not found", .{workstation_id});
+                return error.WorkstationNotFound;
+            };
 
-        pub fn addStorage(self: *Self, game_id: GameId, options: AddStorageOptions) StorageId {
-            return self.base.addStorage(game_id, options);
-        }
-
-        pub fn addToStorage(self: *Self, game_id: GameId, item: Item) bool {
-            return self.base.addToStorage(game_id, item);
-        }
-
-        pub fn removeFromStorage(self: *Self, game_id: GameId, item: Item) bool {
-            return self.base.removeFromStorage(game_id, item);
-        }
-
-        pub fn hasItem(self: *Self, game_id: GameId, item: Item) bool {
-            return self.base.hasItem(game_id, item);
-        }
-
-        pub fn isEmpty(self: *Self, game_id: GameId) bool {
-            return self.base.isEmpty(game_id);
-        }
-
-        pub fn getStorage(self: *Self, game_id: GameId) ?*Storage {
-            return self.base.getStorage(game_id);
-        }
-
-        /// Get storage quantity by game ID.
-        /// With single-item storage model, returns 0 or 1.
-        pub fn getStorageQuantity(self: *Self, game_id: GameId, item: Item) u32 {
-            return self.base.getStorageQuantity(game_id, item);
-        }
-
-        // ====================================================================
-        // Workstation Management
-        // ====================================================================
-
-        pub fn addWorkstation(self: *Self, game_id: GameId, options: AddWorkstationOptions) WorkstationId {
-            const ws_id = self.base.addWorkstation(game_id, options);
-
-            // Check if workstation is immediately ready
-            if (self.base.canWorkstationStart(ws_id)) {
-                const ws = self.base.workstations.get(ws_id) orelse return ws_id;
-                Dispatcher.emit(.{ .workstation_queued = .{
-                    .workstation_id = game_id,
-                    .priority = ws.priority,
-                } });
+            // Append storage to appropriate array based on role
+            // Create new slice with additional element, copy old data, free old slice
+            switch (role) {
+                .eis => {
+                    const new_eis = try self.allocator.alloc(GameId, ws.eis.len + 1);
+                    @memcpy(new_eis[0..ws.eis.len], ws.eis);
+                    new_eis[ws.eis.len] = storage_id;
+                    self.allocator.free(ws.eis);
+                    ws.eis = new_eis;
+                },
+                .iis => {
+                    const new_iis = try self.allocator.alloc(GameId, ws.iis.len + 1);
+                    @memcpy(new_iis[0..ws.iis.len], ws.iis);
+                    new_iis[ws.iis.len] = storage_id;
+                    self.allocator.free(ws.iis);
+                    ws.iis = new_iis;
+                },
+                .ios => {
+                    const new_ios = try self.allocator.alloc(GameId, ws.ios.len + 1);
+                    @memcpy(new_ios[0..ws.ios.len], ws.ios);
+                    new_ios[ws.ios.len] = storage_id;
+                    self.allocator.free(ws.ios);
+                    ws.ios = new_ios;
+                },
+                .eos => {
+                    const new_eos = try self.allocator.alloc(GameId, ws.eos.len + 1);
+                    @memcpy(new_eos[0..ws.eos.len], ws.eos);
+                    new_eos[ws.eos.len] = storage_id;
+                    self.allocator.free(ws.eos);
+                    ws.eos = new_eos;
+                },
             }
 
-            return ws_id;
+            // Re-evaluate workstation status after adding storage
+            self.evaluateWorkstationStatus(workstation_id);
         }
 
-        pub fn removeWorkstation(self: *Self, game_id: GameId) void {
-            self.base.removeWorkstation(game_id);
+        /// Set the callback for worker selection
+        pub fn setFindBestWorker(self: *Self, callback: *const fn (workstation_id: ?GameId, available_workers: []const GameId) ?GameId) void {
+            self.find_best_worker_fn = callback;
         }
 
-        pub fn getWorkstationStatus(self: *Self, game_id: GameId) ?WorkstationStatus {
-            return self.base.getWorkstationStatus(game_id);
+        // ============================================
+        // Game → Tasks: handle() API
+        // ============================================
+
+        /// Main entry point for game notifications
+        pub fn handle(self: *Self, payload: GamePayload) bool {
+            return switch (payload) {
+                .item_added => |p| EventHandlers.handleItemAdded(self, p.storage_id, p.item),
+                .item_removed => |p| EventHandlers.handleItemRemoved(self, p.storage_id),
+                .storage_cleared => |p| EventHandlers.handleStorageCleared(self, p.storage_id),
+                .worker_available => |p| EventHandlers.handleWorkerAvailable(self, p.worker_id),
+                .worker_unavailable => |p| EventHandlers.handleWorkerUnavailable(self, p.worker_id),
+                .worker_removed => |p| EventHandlers.handleWorkerRemoved(self, p.worker_id),
+                .workstation_enabled => |p| EventHandlers.handleWorkstationEnabled(self, p.workstation_id),
+                .workstation_disabled => |p| EventHandlers.handleWorkstationDisabled(self, p.workstation_id),
+                .workstation_removed => |p| EventHandlers.handleWorkstationRemoved(self, p.workstation_id),
+                .pickup_completed => |p| EventHandlers.handlePickupCompleted(self, p.worker_id),
+                .work_completed => |p| EventHandlers.handleWorkCompleted(self, p.workstation_id),
+                .store_completed => |p| EventHandlers.handleStoreCompleted(self, p.worker_id),
+            };
         }
 
-        // ====================================================================
-        // Transport Management
-        // ====================================================================
+        // ============================================
+        // Convenience methods for handle()
+        // ============================================
 
-        pub fn addTransport(self: *Self, options: AddTransportOptions) TransportId {
-            return self.base.addTransport(options);
+        pub fn itemAdded(self: *Self, storage_id: GameId, item: Item) bool {
+            return self.handle(.{ .item_added = .{ .storage_id = storage_id, .item = item } });
         }
 
-        // ====================================================================
-        // Event Notifications (Game -> Engine)
-        // ====================================================================
-
-        /// Notify that a worker completed their pickup step.
-        pub fn notifyPickupComplete(self: *Self, worker_game_id: GameId) void {
-            self.base.notifyPickupComplete(worker_game_id);
+        pub fn itemRemoved(self: *Self, storage_id: GameId) bool {
+            return self.handle(.{ .item_removed = .{ .storage_id = storage_id } });
         }
 
-        /// Notify that a worker completed their store step.
-        /// Emits: cycle_completed, worker_assigned (if re-assigned), workstation_activated hooks
-        pub fn notifyStoreComplete(self: *Self, worker_game_id: GameId) void {
-            // Get state before
-            const worker_id = self.base.worker_by_game_id.get(worker_game_id) orelse return;
-            const worker = self.base.workers.get(worker_id) orelse return;
-            const ws_id = worker.assigned_to orelse return;
-            const old_cycles = self.base.cycles.get(ws_id) orelse 0;
+        pub fn workerAvailable(self: *Self, worker_id: GameId) bool {
+            return self.handle(.{ .worker_available = .{ .worker_id = worker_id } });
+        }
 
-            self.base.notifyStoreComplete(worker_game_id);
+        pub fn pickupCompleted(self: *Self, worker_id: GameId) bool {
+            return self.handle(.{ .pickup_completed = .{ .worker_id = worker_id } });
+        }
 
-            // Check if cycle completed
-            const new_cycles = self.base.cycles.get(ws_id) orelse 0;
-            if (new_cycles > old_cycles) {
-                const ws = self.base.workstations.get(ws_id) orelse return;
-                Dispatcher.emit(.{ .cycle_completed = .{
-                    .workstation_id = ws.game_id,
-                    .worker_id = worker_game_id,
-                    .cycles_completed = new_cycles,
-                } });
+        pub fn workCompleted(self: *Self, workstation_id: GameId) bool {
+            return self.handle(.{ .work_completed = .{ .workstation_id = workstation_id } });
+        }
+
+        pub fn storeCompleted(self: *Self, worker_id: GameId) bool {
+            return self.handle(.{ .store_completed = .{ .worker_id = worker_id } });
+        }
+
+        // ============================================
+        // Internal helpers (delegated)
+        // ============================================
+
+        pub fn evaluateWorkstationStatus(self: *Self, workstation_id: GameId) void {
+            EngineHelpers.evaluateWorkstationStatus(self, workstation_id);
+        }
+
+        pub fn reevaluateWorkstations(self: *Self) void {
+            EngineHelpers.reevaluateWorkstations(self);
+        }
+
+        pub fn tryAssignWorkers(self: *Self) void {
+            EngineHelpers.tryAssignWorkers(self);
+        }
+
+        pub fn selectEis(self: *Self, workstation_id: GameId) ?GameId {
+            return EngineHelpers.selectEis(self, workstation_id);
+        }
+
+        pub fn selectEos(self: *Self, workstation_id: GameId) ?GameId {
+            return EngineHelpers.selectEos(self, workstation_id);
+        }
+
+        // ============================================
+        // Query API
+        // ============================================
+
+        pub fn getWorkerState(self: *const Self, worker_id: GameId) ?WorkerState {
+            const worker = self.workers.get(worker_id) orelse return null;
+            return worker.state;
+        }
+
+        pub fn getWorkstationStatus(self: *const Self, workstation_id: GameId) ?WorkstationStatus {
+            const ws = self.workstations.get(workstation_id) orelse return null;
+            return ws.status;
+        }
+
+        pub fn getStorageHasItem(self: *const Self, storage_id: GameId) ?bool {
+            const storage = self.storages.get(storage_id) orelse return null;
+            return storage.has_item;
+        }
+
+        pub fn getStorageItemType(self: *const Self, storage_id: GameId) ?Item {
+            const storage = self.storages.get(storage_id) orelse return null;
+            return storage.item_type;
+        }
+
+        // ============================================
+        // Distance API
+        // ============================================
+
+        /// Get distance between two entities.
+        /// Returns null only if distance_fn returns null (no path exists).
+        /// If no distance_fn provided, assumes distance is 1.0.
+        pub fn getDistance(self: *const Self, from: GameId, to: GameId) ?f32 {
+            if (self.distance_fn) |df| {
+                return df(from, to);
             }
-
-            // Check if worker was re-assigned to new work
-            self.emitWorkerAssignedIfChanged(worker_id, worker_game_id);
+            return 1.0; // No distance service - assume all distances are equal
         }
 
-        /// Notify that a transport is complete.
-        /// Emits: transport_completed, worker_assigned (if re-assigned) hooks
-        pub fn notifyTransportComplete(self: *Self, worker_game_id: GameId) void {
-            // Get transport info before completion
-            const worker_id = self.base.worker_by_game_id.get(worker_game_id) orelse return;
-            const worker = self.base.workers.get(worker_id) orelse return;
-            const transport_id = worker.assigned_transport orelse return;
-            const transport = self.base.transports.get(transport_id) orelse return;
+        /// Find nearest entity to a target from a list of candidates.
+        /// Works for any entity type: workers, storages, workstations.
+        /// Returns null if candidates is empty or all candidates are unreachable.
+        pub fn findNearest(self: *const Self, target: GameId, candidates: []const GameId) ?GameId {
+            if (candidates.len == 0) return null;
 
-            // Get storage game IDs
-            const from_storage = self.base.storages.get(transport.from_storage) orelse return;
-            const to_storage = self.base.storages.get(transport.to_storage) orelse return;
+            var best: ?GameId = null;
+            var best_dist: f32 = std.math.floatMax(f32);
 
-            self.base.notifyTransportComplete(worker_game_id);
-
-            // Emit transport completed
-            Dispatcher.emit(.{ .transport_completed = .{
-                .worker_id = worker_game_id,
-                .from_storage_id = from_storage.game_id,
-                .to_storage_id = to_storage.game_id,
-                .item = transport.item,
-            } });
-
-            // Check if worker was re-assigned to new work
-            self.emitWorkerAssignedIfChanged(worker_id, worker_game_id);
+            for (candidates) |candidate| {
+                if (self.getDistance(candidate, target)) |dist| {
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best = candidate;
+                    }
+                }
+            }
+            return best;
         }
 
-        /// Notify that a worker has become idle.
-        /// Emits: worker_assigned, workstation_activated (if assigned)
-        pub fn notifyWorkerIdle(self: *Self, game_id: GameId) void {
-            // Get worker state before
-            const worker_id = self.base.worker_by_game_id.get(game_id) orelse return;
-            const worker_before = self.base.workers.get(worker_id) orelse return;
-            const was_assigned = worker_before.assigned_to != null or worker_before.assigned_transport != null;
+        // ============================================
+        // Dangling Items API
+        // ============================================
 
-            self.base.notifyWorkerIdle(game_id);
+        /// Register a dangling item (item not in any storage)
+        pub fn addDanglingItem(self: *Self, item_id: GameId, item_type: Item) !void {
+            try self.dangling_items.put(item_id, item_type);
+            // Evaluate if any idle worker can pick up this item
+            self.evaluateDanglingItems();
+        }
 
-            // Check if worker got assigned to workstation
-            const worker_after = self.base.workers.get(worker_id) orelse return;
-            if (!was_assigned) {
-                if (worker_after.assigned_to) |ws_id| {
-                    const ws = self.base.workstations.get(ws_id) orelse return;
-                    Dispatcher.emit(.{ .worker_assigned = .{
-                        .worker_id = game_id,
-                        .workstation_id = ws.game_id,
+        /// Remove a dangling item (picked up or despawned)
+        pub fn removeDanglingItem(self: *Self, item_id: GameId) void {
+            _ = self.dangling_items.remove(item_id);
+        }
+
+        /// Get the item type of a dangling item
+        pub fn getDanglingItemType(self: *const Self, item_id: GameId) ?Item {
+            return self.dangling_items.get(item_id);
+        }
+
+        /// Find an empty EIS that accepts the given item type.
+        /// Returns null if no suitable EIS found.
+        pub fn findEmptyEisForItem(self: *const Self, item_type: Item) ?GameId {
+            var iter = self.storages.iterator();
+            while (iter.next()) |entry| {
+                const storage = entry.value_ptr.*;
+                // Must be EIS, must be empty, must accept this item type
+                if (storage.role == .eis and !storage.has_item) {
+                    // accepts == null means accepts any item
+                    if (storage.accepts == null or storage.accepts.? == item_type) {
+                        return entry.key_ptr.*;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// Get list of idle workers (allocated, caller must free)
+        pub fn getIdleWorkers(self: *Self) ![]GameId {
+            var list = std.ArrayListUnmanaged(GameId){};
+            errdefer list.deinit(self.allocator);
+
+            var iter = self.workers.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.state == .Idle) {
+                    try list.append(self.allocator, entry.key_ptr.*);
+                }
+            }
+            return list.toOwnedSlice(self.allocator);
+        }
+
+        /// Evaluate dangling items and try to assign workers
+        pub fn evaluateDanglingItems(self: *Self) void {
+            // Get idle workers (we need to free this later)
+            const idle_workers = self.getIdleWorkers() catch return;
+            defer self.allocator.free(idle_workers);
+
+            if (idle_workers.len == 0) return;
+
+            // For each dangling item, try to find a worker and EIS
+            var dangling_iter = self.dangling_items.iterator();
+            while (dangling_iter.next()) |entry| {
+                const item_id = entry.key_ptr.*;
+                const item_type = entry.value_ptr.*;
+
+                // Find an empty EIS that accepts this item type
+                const target_eis = self.findEmptyEisForItem(item_type) orelse continue;
+
+                // Find nearest idle worker to the dangling item
+                const worker_id = self.findNearest(item_id, idle_workers) orelse continue;
+
+                // Assign worker to pick up this dangling item
+                if (self.workers.getPtr(worker_id)) |worker| {
+                    worker.state = .Working;
+                    worker.dangling_task = .{
+                        .item_id = item_id,
+                        .target_eis_id = target_eis,
+                    };
+
+                    // Dispatch hook to notify game
+                    self.dispatcher.dispatch(.{ .pickup_dangling_started = .{
+                        .worker_id = worker_id,
+                        .item_id = item_id,
+                        .item_type = item_type,
+                        .target_eis_id = target_eis,
                     } });
-                    Dispatcher.emit(.{ .workstation_activated = .{
-                        .workstation_id = ws.game_id,
-                        .priority = ws.priority,
-                    } });
-                } else if (worker_after.assigned_transport != null) {
-                    Dispatcher.emit(.{ .worker_assigned = .{
-                        .worker_id = game_id,
-                        .workstation_id = null, // Transport assignment
-                    } });
+
+                    // Only assign one item per evaluation cycle
+                    // (we'd need to refresh idle_workers list for more)
+                    return;
                 }
             }
         }
 
-        /// Notify that a worker has become busy.
-        /// Emits: workstation_blocked
-        pub fn notifyWorkerBusy(self: *Self, game_id: GameId) void {
-            const ws_id = self.getWorkerAssignedWorkstation(game_id);
-            self.base.notifyWorkerBusy(game_id);
-            self.emitWorkstationBlockedIfAssigned(ws_id);
+        // ============================================
+        // ECS Bridge Interface
+        // ============================================
+
+        const ecs_bridge = @import("ecs_bridge.zig");
+        pub const EcsInterface = ecs_bridge.EcsInterface(GameId, Item);
+
+        /// Get the ECS bridge interface for this engine.
+        /// Used by games to connect tasks components to the engine.
+        ///
+        /// Usage:
+        /// ```zig
+        /// var task_engine = tasks.Engine(u64, Item, Hooks).init(allocator, .{});
+        /// tasks.setEngineInterface(u64, Item, task_engine.interface());
+        /// ```
+        pub fn interface(self: *Self) EcsInterface {
+            return .{
+                .ptr = self,
+                .vtable = &vtable,
+            };
         }
 
-        /// Worker abandons their current work.
-        /// Emits: workstation_blocked
-        pub fn abandonWork(self: *Self, game_id: GameId) void {
-            const ws_id = self.getWorkerAssignedWorkstation(game_id);
-            self.base.abandonWork(game_id);
-            self.emitWorkstationBlockedIfAssigned(ws_id);
+        const vtable = EcsInterface.VTable{
+            .addStorage = addStorageVTable,
+            .removeStorage = removeStorageVTable,
+            .attachStorageToWorkstation = attachStorageToWorkstationVTable,
+            .addWorker = addWorkerVTable,
+            .removeWorker = removeWorkerVTable,
+            .workerAvailable = workerAvailableVTable,
+            .addDanglingItem = addDanglingItemVTable,
+            .removeDanglingItem = removeDanglingItemVTable,
+            .addWorkstation = addWorkstationVTable,
+            .removeWorkstation = removeWorkstationVTable,
+        };
+
+        fn addStorageVTable(ptr: *anyopaque, id: GameId, role: StorageRole, initial_item: ?Item, accepts: ?Item) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addStorage(id, .{
+                .role = role,
+                .initial_item = initial_item,
+                .accepts = accepts,
+            });
         }
 
-        /// Update process timers. Call once per game tick.
-        pub fn update(self: *Self) void {
-            self.base.update();
+        fn removeStorageVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            _ = self.storages.remove(id);
         }
 
-        // ====================================================================
-        // Query Methods
-        // ====================================================================
-
-        pub fn getCyclesCompleted(self: *Self, game_id: GameId) u32 {
-            return self.base.getCyclesCompleted(game_id);
+        fn attachStorageToWorkstationVTable(ptr: *anyopaque, storage_id: GameId, workstation_id: GameId, role: StorageRole) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.attachStorageToWorkstation(storage_id, workstation_id, role);
         }
 
-        pub fn getWorkerAssignment(self: *Self, worker_game_id: GameId) ?GameId {
-            return self.base.getWorkerAssignment(worker_game_id);
+        fn addWorkerVTable(ptr: *anyopaque, id: GameId) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addWorker(id);
         }
 
-        pub fn getAssignedWorker(self: *Self, workstation_game_id: GameId) ?GameId {
-            return self.base.getAssignedWorker(workstation_game_id);
+        fn removeWorkerVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            _ = self.handle(.{ .worker_removed = .{ .worker_id = id } });
         }
 
-        // ====================================================================
-        // Internal Helpers
-        // ====================================================================
-
-        fn getWorkerAssignedWorkstation(self: *Self, game_id: GameId) ?Base.WorkstationId {
-            const worker_id = self.base.worker_by_game_id.get(game_id) orelse return null;
-            const worker = self.base.workers.get(worker_id) orelse return null;
-            return worker.assigned_to;
+        fn workerAvailableVTable(ptr: *anyopaque, id: GameId) bool {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            return self.handle(.{ .worker_available = .{ .worker_id = id } });
         }
 
-        fn emitWorkstationBlockedIfAssigned(self: *Self, ws_id: ?Base.WorkstationId) void {
-            const id = ws_id orelse return;
-            const ws = self.base.workstations.get(id) orelse return;
-            Dispatcher.emit(.{ .workstation_blocked = .{
-                .workstation_id = ws.game_id,
-                .priority = ws.priority,
-            } });
+        fn addDanglingItemVTable(ptr: *anyopaque, id: GameId, item_type: Item) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addDanglingItem(id, item_type);
         }
 
-        /// Check if worker was re-assigned after completing a task and emit worker_assigned hook.
-        fn emitWorkerAssignedIfChanged(self: *Self, worker_id: Base.WorkerId, worker_game_id: GameId) void {
-            const worker = self.base.workers.get(worker_id) orelse return;
-
-            // Check if worker was re-assigned to a workstation
-            if (worker.assigned_to) |ws_id| {
-                const ws = self.base.workstations.get(ws_id) orelse return;
-                Dispatcher.emit(.{ .worker_assigned = .{
-                    .worker_id = worker_game_id,
-                    .workstation_id = ws.game_id,
-                } });
-                Dispatcher.emit(.{ .workstation_activated = .{
-                    .workstation_id = ws.game_id,
-                    .priority = ws.priority,
-                } });
-            } else if (worker.assigned_transport != null) {
-                // Re-assigned to a transport task
-                Dispatcher.emit(.{ .worker_assigned = .{
-                    .worker_id = worker_game_id,
-                    .workstation_id = null, // Transport assignment
-                } });
-            }
+        fn removeDanglingItemVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            self.removeDanglingItem(id);
         }
 
-        // ====================================================================
-        // Internal Callbacks (emit hooks)
-        // ====================================================================
-
-        fn emitPickupStarted(worker_game_id: GameId, workstation_game_id: GameId, eis_game_id: GameId, all_eis_game_ids: []const GameId) void {
-            Dispatcher.emit(.{ .pickup_started = .{
-                .worker_id = worker_game_id,
-                .workstation_id = workstation_game_id,
-                .eis_id = eis_game_id,
-                .all_eis_ids = all_eis_game_ids,
-            } });
+        fn addWorkstationVTable(ptr: *anyopaque, id: GameId) anyerror!void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            try self.addWorkstation(id, .{});
         }
 
-        fn emitProcessStarted(worker_game_id: GameId, workstation_game_id: GameId) void {
-            Dispatcher.emit(.{ .process_started = .{
-                .worker_id = worker_game_id,
-                .workstation_id = workstation_game_id,
-            } });
-        }
-
-        fn emitProcessComplete(worker_game_id: GameId, workstation_game_id: GameId) void {
-            Dispatcher.emit(.{ .process_completed = .{
-                .worker_id = worker_game_id,
-                .workstation_id = workstation_game_id,
-            } });
-        }
-
-        fn emitStoreStarted(worker_game_id: GameId, workstation_game_id: GameId, eos_game_id: GameId, all_eos_game_ids: []const GameId) void {
-            Dispatcher.emit(.{ .store_started = .{
-                .worker_id = worker_game_id,
-                .workstation_id = workstation_game_id,
-                .eos_id = eos_game_id,
-                .all_eos_ids = all_eos_game_ids,
-            } });
-        }
-
-        fn emitWorkerReleased(worker_game_id: GameId, workstation_game_id: GameId) void {
-            Dispatcher.emit(.{ .worker_released = .{
-                .worker_id = worker_game_id,
-                .workstation_id = workstation_game_id,
-            } });
-        }
-
-        fn emitTransportStarted(worker_game_id: GameId, from_game_id: GameId, to_game_id: GameId, item: Item) void {
-            Dispatcher.emit(.{ .transport_started = .{
-                .worker_id = worker_game_id,
-                .from_storage_id = from_game_id,
-                .to_storage_id = to_game_id,
-                .item = item,
-            } });
+        fn removeWorkstationVTable(ptr: *anyopaque, id: GameId) void {
+            const self: *Self = @ptrCast(@alignCast(ptr));
+            self.removeWorkstation(id);
         }
     };
+}
+
+// ============================================
+// Convenience wrapper
+// ============================================
+
+/// Create an engine with hooks
+pub fn EngineWithHooks(comptime GameId: type, comptime Item: type, comptime Hooks: type) type {
+    return Engine(GameId, Item, Hooks);
 }

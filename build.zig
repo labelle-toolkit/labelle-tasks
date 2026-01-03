@@ -1,34 +1,5 @@
 const std = @import("std");
 
-/// Helper to add an example executable with a run step.
-fn addExample(
-    b: *std.Build,
-    lib_mod: *std.Build.Module,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    name: []const u8,
-    root_path: []const u8,
-    description: []const u8,
-) *std.Build.Step.Run {
-    const mod = b.createModule(.{
-        .root_source_file = b.path(root_path),
-        .target = target,
-        .optimize = optimize,
-    });
-    mod.addImport("labelle_tasks", lib_mod);
-
-    const exe = b.addExecutable(.{
-        .name = name,
-        .root_module = mod,
-    });
-    b.installArtifact(exe);
-
-    const run_exe = b.addRunArtifact(exe);
-    const step = b.step(name, description);
-    step.dependOn(&run_exe.step);
-    return run_exe;
-}
-
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -39,78 +10,70 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Main library module
-    const lib_mod = b.addModule("labelle_tasks", .{
+    // labelle-engine dependency for standalone use and tests
+    const engine_dep = b.dependency("labelle-engine", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const engine_mod = engine_dep.module("labelle-engine");
+    const ecs_mod = engine_dep.module("ecs");
+
+    // Main module (use underscore for Zig module naming convention)
+    // Note: When used as a dependency, the consuming project should use
+    // addTasksModule() to provide its own labelle-engine module.
+    const tasks_mod = b.addModule("labelle_tasks", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    tasks_mod.addImport("labelle-engine", engine_mod);
+    tasks_mod.addImport("ecs", ecs_mod);
 
-    // Library artifact
-    const lib = b.addLibrary(.{
-        .name = "labelle_tasks",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/root.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+    // Core module without ECS dependencies (for tests and simple usage)
+    const core_mod = b.addModule("labelle_tasks_core", .{
+        .root_source_file = b.path("src/core.zig"),
+        .target = target,
+        .optimize = optimize,
     });
-    b.installArtifact(lib);
 
     // Unit tests with zspec runner (from test/ folder)
+    // Uses core module to avoid graphics dependencies
     const test_mod = b.createModule(.{
         .root_source_file = b.path("test/root.zig"),
         .target = target,
         .optimize = optimize,
     });
     test_mod.addImport("zspec", zspec_dep.module("zspec"));
-    test_mod.addImport("labelle_tasks", lib_mod);
+    test_mod.addImport("labelle_tasks", core_mod);
 
-    const lib_unit_tests = b.addTest(.{
+    const unit_tests = b.addTest(.{
         .root_module = test_mod,
         .test_runner = .{ .path = zspec_dep.path("src/runner.zig"), .mode = .simple },
     });
 
-    const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
-
+    const run_unit_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_lib_unit_tests.step);
+    test_step.dependOn(&run_unit_tests.step);
 
-    // ========================================================================
-    // Usage Examples
-    // ========================================================================
+    // Kitchen simulator example (requires graphics libraries, skip in CI)
+    const build_examples = b.option(bool, "examples", "Build examples (requires graphics libs)") orelse true;
 
-    // Kitchen simulator - interactive game demo (uses new storage-based API)
-    const kitchensim_mod = b.createModule(.{
-        .root_source_file = b.path("usage/kitchen-sim/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    kitchensim_mod.addImport("labelle_tasks", lib_mod);
+    if (build_examples) {
+        const kitchensim_mod = b.createModule(.{
+            .root_source_file = b.path("usage/kitchen-sim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        kitchensim_mod.addImport("labelle_tasks", tasks_mod);
 
-    const kitchensim_example = b.addExecutable(.{
-        .name = "kitchen_sim",
-        .root_module = kitchensim_mod,
-    });
-    b.installArtifact(kitchensim_example);
+        const kitchensim_exe = b.addExecutable(.{
+            .name = "kitchen_sim",
+            .root_module = kitchensim_mod,
+        });
+        b.installArtifact(kitchensim_exe);
 
-    const run_kitchensim = b.addRunArtifact(kitchensim_example);
-    const kitchensim_step = b.step("kitchen-sim", "Run the interactive kitchen simulator");
-    kitchensim_step.dependOn(&run_kitchensim.step);
-
-    // Components example - demonstrates ECS component usage with game-defined enums
-    const run_components = addExample(b, lib_mod, target, optimize, "components", "usage/components/main.zig", "Run the components usage example");
-
-    // Farm game example - demonstrates full engine workflow
-    const run_farm = addExample(b, lib_mod, target, optimize, "farm", "usage/engine/main.zig", "Run the farm game example");
-
-    // Hooks example - demonstrates hook-based event observation
-    const run_hooks = addExample(b, lib_mod, target, optimize, "hooks", "usage/hooks/main.zig", "Run the hooks example");
-
-    // Run all examples step
-    const examples_step = b.step("examples", "Run all usage examples");
-    examples_step.dependOn(&run_kitchensim.step);
-    examples_step.dependOn(&run_components.step);
-    examples_step.dependOn(&run_farm.step);
-    examples_step.dependOn(&run_hooks.step);
+        const run_kitchensim = b.addRunArtifact(kitchensim_exe);
+        const kitchensim_step = b.step("kitchen-sim", "Run the kitchen simulator example");
+        kitchensim_step.dependOn(&run_kitchensim.step);
+    }
 }
