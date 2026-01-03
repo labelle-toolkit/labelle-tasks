@@ -91,6 +91,28 @@ pub const HookDispatcher = hooks_mod.HookDispatcher;
 /// Empty hooks struct for engines that don't need hooks.
 pub const NoHooks = hooks_mod.NoHooks;
 
+// === Logging Hooks ===
+
+const logging_hooks_mod = @import("logging_hooks.zig");
+
+/// Default logging implementation for all task engine hooks.
+/// Use directly or merge with custom hooks using MergeHooks.
+pub const LoggingHooks = logging_hooks_mod.LoggingHooks;
+
+/// Merges two hook structs, with Primary taking precedence over Fallback.
+/// Use to compose custom hooks with LoggingHooks for default logging.
+///
+/// Example:
+/// ```zig
+/// const MyHooks = struct {
+///     pub fn store_started(payload: anytype) void {
+///         // Custom behavior
+///     }
+/// };
+/// const Hooks = tasks.MergeHooks(MyHooks, tasks.LoggingHooks);
+/// ```
+pub const MergeHooks = logging_hooks_mod.MergeHooks;
+
 // === Hooks Namespace (backward compatibility) ===
 
 /// Namespace for hook-related types and utilities.
