@@ -55,21 +55,25 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
-    // Kitchen simulator example
-    const kitchensim_mod = b.createModule(.{
-        .root_source_file = b.path("usage/kitchen-sim/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    kitchensim_mod.addImport("labelle_tasks", tasks_mod);
+    // Kitchen simulator example (requires graphics libraries, skip in CI)
+    const build_examples = b.option(bool, "examples", "Build examples (requires graphics libs)") orelse true;
 
-    const kitchensim_exe = b.addExecutable(.{
-        .name = "kitchen_sim",
-        .root_module = kitchensim_mod,
-    });
-    b.installArtifact(kitchensim_exe);
+    if (build_examples) {
+        const kitchensim_mod = b.createModule(.{
+            .root_source_file = b.path("usage/kitchen-sim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        kitchensim_mod.addImport("labelle_tasks", tasks_mod);
 
-    const run_kitchensim = b.addRunArtifact(kitchensim_exe);
-    const kitchensim_step = b.step("kitchen-sim", "Run the kitchen simulator example");
-    kitchensim_step.dependOn(&run_kitchensim.step);
+        const kitchensim_exe = b.addExecutable(.{
+            .name = "kitchen_sim",
+            .root_module = kitchensim_mod,
+        });
+        b.installArtifact(kitchensim_exe);
+
+        const run_kitchensim = b.addRunArtifact(kitchensim_exe);
+        const kitchensim_step = b.step("kitchen-sim", "Run the kitchen simulator example");
+        kitchensim_step.dependOn(&run_kitchensim.step);
+    }
 }

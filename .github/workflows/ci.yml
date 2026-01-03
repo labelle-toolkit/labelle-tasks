@@ -18,10 +18,7 @@ jobs:
           version: 0.15.2
 
       - name: Run tests
-        run: zig build test
-
-      - name: Run kitchen-sim example
-        run: zig build kitchen-sim
+        run: zig build test -Dexamples=false
 
   build:
     runs-on: ubuntu-latest
@@ -34,4 +31,4 @@ jobs:
           version: 0.15.2
 
       - name: Build library
-        run: zig build
+        run: zig build -Dexamples=false
