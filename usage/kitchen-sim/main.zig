@@ -56,7 +56,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Create the task engine
-    var engine = tasks.Engine(u32, Item, KitchenHooks).init(allocator, .{});
+    var engine = tasks.Engine(u32, Item, KitchenHooks).init(allocator, .{}, null);
     defer engine.deinit();
 
     // Register storages
