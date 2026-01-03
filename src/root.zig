@@ -161,6 +161,33 @@ pub const StorageRole = state_mod.StorageRole;
 
 const ecs_bridge = @import("ecs_bridge.zig");
 const components_mod = @import("components.zig");
+const context_mod = @import("context.zig");
+
+/// Helper to reduce game integration boilerplate.
+/// Manages task engine lifecycle, vtable wrapping, and movement queue.
+///
+/// Example:
+/// ```zig
+/// const tasks = @import("labelle-tasks");
+///
+/// const MyHooks = struct {
+///     pub fn store_started(payload: anytype) void {
+///         const pos = getStoragePosition(payload.storage_id);
+///         Context.queueMovement(payload.worker_id, pos.x, pos.y, .store);
+///     }
+/// };
+///
+/// pub const Context = tasks.TaskEngineContext(u64, Item, MyHooks);
+///
+/// // In game_init hook:
+/// Context.init(allocator, getEntityDistance) catch return;
+///
+/// // In game_deinit hook:
+/// Context.deinit();
+/// ```
+pub fn TaskEngineContext(comptime GameId: type, comptime Item: type, comptime Hooks: type) type {
+    return context_mod.TaskEngineContext(GameId, Item, Hooks);
+}
 
 /// Type-erased interface for ECS operations.
 pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
