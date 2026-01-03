@@ -112,22 +112,20 @@ Each storage holds **one item** (has_item: bool).
 const tasks = @import("labelle-tasks");
 const Item = enum { Flour, Bread };
 
-// Define hooks to receive from task engine
+// Define hooks to receive from task engine (pure functions)
 const MyHooks = struct {
-    game: *Game,
-
-    pub fn process_completed(self: *@This(), payload: anytype) void {
+    pub fn process_completed(payload: anytype) void {
         // Game handles entity transformation
-        self.game.transformWorkstationItems(payload.workstation_id);
+        // payload.workstation_id, payload.item, etc.
     }
 
-    pub fn store_started(self: *@This(), payload: anytype) void {
-        self.game.startWalkAnimation(payload.worker_id, payload.storage_id);
+    pub fn store_started(payload: anytype) void {
+        // payload.worker_id, payload.storage_id
     }
 };
 
 // Create engine
-var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{ .game = &game });
+var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{});
 defer engine.deinit();
 
 // Register entities (just IDs - engine doesn't know about game's data)
@@ -174,9 +172,14 @@ Run with: `zig build test`
 - **Language**: Zig 0.15+
 - **Build System**: Zig build system (`build.zig`)
 
-## RFCs
+## labelle-engine Integration
 
-Design decisions are documented in `rfc/`:
-- RFC 027: Engine-to-Tasks Communication
-- RFC 028: Work Completion Model
-- RFC 029: Task Engine as Pure State Machine
+For integration with labelle-engine, the library provides helpers:
+
+- `createEngineHooks(GameId, Items, GameHooks)` - Creates engine lifecycle hooks
+- `TaskEngineContext` - Pre-built context struct with allocator, task_engine, and game pointers
+- `MergeHooks` - Combines multiple hook handler structs
+- `LoggingHooks` - Default logging implementation for all hooks
+- `bind(Items)` - Returns parameterized component types (Storage, Worker, Workstation)
+
+See README.md for detailed integration examples.

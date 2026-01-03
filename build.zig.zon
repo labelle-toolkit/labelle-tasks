@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x9883692330f70d05,
     .name = .labelle_tasks,
-    .version = "0.1.0",
+    .version = "0.9.0",
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .zspec = .{
