@@ -6,6 +6,7 @@ const WorkerState = types.WorkerState;
 const WorkstationStatus = types.WorkstationStatus;
 const StepType = types.StepType;
 const Priority = types.Priority;
+const TargetType = types.TargetType;
 
 /// Storage role in the workflow
 pub const StorageRole = enum {
@@ -26,11 +27,22 @@ pub fn StorageState(comptime Item: type) type {
     };
 }
 
+/// Movement target for worker
+pub fn MovingTo(comptime GameId: type) type {
+    return struct {
+        target: GameId,
+        target_type: TargetType,
+    };
+}
+
 /// Internal worker state
 pub fn WorkerData(comptime GameId: type) type {
     return struct {
         state: WorkerState = .Idle,
         assigned_workstation: ?GameId = null,
+
+        /// Current movement target (if worker is moving)
+        moving_to: ?MovingTo(GameId) = null,
 
         /// Dangling item delivery task (if worker is delivering a dangling item)
         dangling_task: ?struct {

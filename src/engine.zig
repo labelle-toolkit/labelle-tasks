@@ -16,6 +16,7 @@ pub const WorkerState = types.WorkerState;
 pub const WorkstationStatus = types.WorkstationStatus;
 pub const StepType = types.StepType;
 pub const Priority = types.Priority;
+pub const TargetType = types.TargetType;
 
 /// Pure state machine task orchestration engine
 /// Tracks abstract workflow state, emits hooks to game
@@ -239,6 +240,7 @@ pub fn Engine(
                 .pickup_completed => |p| EventHandlers.handlePickupCompleted(self, p.worker_id),
                 .work_completed => |p| EventHandlers.handleWorkCompleted(self, p.workstation_id),
                 .store_completed => |p| EventHandlers.handleStoreCompleted(self, p.worker_id),
+                .worker_arrived => |p| EngineHelpers.handleWorkerArrival(self, p.worker_id),
             };
         }
 
@@ -268,6 +270,10 @@ pub fn Engine(
 
         pub fn storeCompleted(self: *Self, worker_id: GameId) bool {
             return self.handle(.{ .store_completed = .{ .worker_id = worker_id } });
+        }
+
+        pub fn workerArrived(self: *Self, worker_id: GameId) bool {
+            return self.handle(.{ .worker_arrived = .{ .worker_id = worker_id } });
         }
 
         // ============================================
@@ -432,12 +438,23 @@ pub fn Engine(
                         .target_eis_id = target_eis,
                     };
 
-                    // Dispatch hook to notify game
+                    // Set movement target to dangling item
+                    worker.moving_to = .{
+                        .target = item_id,
+                        .target_type = .dangling_item,
+                    };
+
+                    // Dispatch hooks to notify game
                     self.dispatcher.dispatch(.{ .pickup_dangling_started = .{
                         .worker_id = worker_id,
                         .item_id = item_id,
                         .item_type = item_type,
                         .target_eis_id = target_eis,
+                    } });
+                    self.dispatcher.dispatch(.{ .movement_started = .{
+                        .worker_id = worker_id,
+                        .target = item_id,
+                        .target_type = .dangling_item,
                     } });
 
                     // Only assign one item per evaluation cycle

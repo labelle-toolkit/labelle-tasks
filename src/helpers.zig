@@ -2,6 +2,9 @@
 
 const std = @import("std");
 const state_mod = @import("state.zig");
+const types = @import("types.zig");
+
+const TargetType = types.TargetType;
 
 /// Creates helper functions for the engine
 pub fn Helpers(
@@ -9,7 +12,6 @@ pub fn Helpers(
     comptime Item: type,
     comptime EngineType: type,
 ) type {
-    _ = Item; // Used by engine type
     return struct {
         const Self = @This();
         const WorkstationData = state_mod.WorkstationData(GameId);
@@ -153,34 +155,139 @@ pub fn Helpers(
             ws.assigned_worker = worker_id;
             ws.status = .Active;
 
+            // Set movement target to workstation
+            worker.moving_to = .{
+                .target = workstation_id,
+                .target_type = .workstation,
+            };
+
             engine.dispatcher.dispatch(.{ .worker_assigned = .{
                 .worker_id = worker_id,
                 .workstation_id = workstation_id,
             } });
             engine.dispatcher.dispatch(.{ .workstation_activated = .{ .workstation_id = workstation_id } });
 
-            // Start the workflow
-            if (ws.isProducer()) {
-                // Producer: go straight to Process
-                ws.current_step = .Process;
-                engine.dispatcher.dispatch(.{ .process_started = .{
-                    .workstation_id = workstation_id,
-                    .worker_id = worker_id,
-                } });
-            } else {
-                // Regular: start with Pickup
-                ws.current_step = .Pickup;
-                ws.selected_eis = selectEis(engine, workstation_id);
+            // Emit movement_started - game should move worker to workstation
+            engine.dispatcher.dispatch(.{ .movement_started = .{
+                .worker_id = worker_id,
+                .target = workstation_id,
+                .target_type = .workstation,
+            } });
+        }
 
-                if (ws.selected_eis) |eis_id| {
-                    const item = engine.storages.get(eis_id).?.item_type.?;
-                    engine.dispatcher.dispatch(.{ .pickup_started = .{
-                        .worker_id = worker_id,
-                        .storage_id = eis_id,
-                        .item = item,
-                    } });
-                }
+        /// Called when worker arrives at their movement target
+        pub fn handleWorkerArrival(engine: *EngineType, worker_id: GameId) bool {
+            const worker = engine.workers.getPtr(worker_id) orelse return false;
+            const moving_to = worker.moving_to orelse return false;
+
+            // Clear movement target
+            worker.moving_to = null;
+
+            switch (moving_to.target_type) {
+                .workstation => {
+                    // Worker arrived at workstation - check for leftover items in IOS first
+                    const ws_id = worker.assigned_workstation orelse return false;
+                    const ws = engine.workstations.getPtr(ws_id) orelse return false;
+
+                    // PRIORITY 1: Check for leftover items in IOS (from interrupted cycles)
+                    if (selectIos(engine, ws_id)) |ios_id| {
+                        // IOS has leftover item - need to store it first
+                        const ios_item = engine.storages.get(ios_id).?.item_type;
+
+                        // Check if EOS has space
+                        if (selectEos(engine, ws_id)) |eos_id| {
+                            // EOS has space - move to Store step
+                            ws.current_step = .Store;
+                            ws.selected_eos = eos_id;
+
+                            // Set movement target to EOS
+                            worker.moving_to = .{
+                                .target = eos_id,
+                                .target_type = .storage,
+                            };
+
+                            engine.dispatcher.dispatch(.{ .store_started = .{
+                                .worker_id = worker_id,
+                                .storage_id = eos_id,
+                                .item = ios_item orelse return false,
+                            } });
+                            engine.dispatcher.dispatch(.{ .movement_started = .{
+                                .worker_id = worker_id,
+                                .target = eos_id,
+                                .target_type = .storage,
+                            } });
+                        } else {
+                            // No EOS space - release worker, workstation is blocked
+                            releaseWorker(engine, worker_id, ws_id);
+                        }
+                        return true;
+                    }
+
+                    // PRIORITY 2: Normal workflow
+                    // Check if all IIS have items (ready for processing)
+                    if (ws.isProducer() or allIisFilled(engine, ws_id)) {
+                        // All inputs ready - go to Process step
+                        ws.current_step = .Process;
+                        engine.dispatcher.dispatch(.{ .process_started = .{
+                            .workstation_id = ws_id,
+                            .worker_id = worker_id,
+                        } });
+                    } else {
+                        // IIS not filled - need to pick up items from EIS
+                        ws.current_step = .Pickup;
+                        ws.selected_eis = selectEis(engine, ws_id);
+
+                        if (ws.selected_eis) |eis_id| {
+                            const item = engine.storages.get(eis_id).?.item_type.?;
+
+                            // Set movement target to EIS
+                            worker.moving_to = .{
+                                .target = eis_id,
+                                .target_type = .storage,
+                            };
+
+                            engine.dispatcher.dispatch(.{ .pickup_started = .{
+                                .worker_id = worker_id,
+                                .storage_id = eis_id,
+                                .item = item,
+                            } });
+                            engine.dispatcher.dispatch(.{ .movement_started = .{
+                                .worker_id = worker_id,
+                                .target = eis_id,
+                                .target_type = .storage,
+                            } });
+                        } else {
+                            // No EIS with items available - release worker
+                            releaseWorker(engine, worker_id, ws_id);
+                        }
+                    }
+                },
+                .storage => {
+                    // Worker arrived at storage - depends on current step
+                    const ws_id = worker.assigned_workstation orelse return false;
+                    const ws = engine.workstations.getPtr(ws_id) orelse return false;
+
+                    switch (ws.current_step) {
+                        .Pickup => {
+                            // Delegate to existing pickup completion logic
+                            _ = @import("handlers.zig").Handlers(GameId, Item, EngineType).handlePickupCompleted(engine, worker_id);
+                        },
+                        .Store => {
+                            // Delegate to existing store completion logic
+                            _ = @import("handlers.zig").Handlers(GameId, Item, EngineType).handleStoreCompleted(engine, worker_id);
+                        },
+                        .Process => {
+                            // Shouldn't happen - Process doesn't involve storage movement
+                        },
+                    }
+                },
+                .dangling_item => {
+                    // Worker arrived at dangling item - pick it up
+                    // Delegate to existing dangling item logic
+                    @import("handlers.zig").Handlers(GameId, Item, EngineType).handleDanglingPickupArrival(engine, worker_id);
+                },
             }
+            return true;
         }
 
         // ============================================
@@ -213,6 +320,55 @@ pub fn Helpers(
                 }
             }
             return null;
+        }
+
+        /// Select an IOS that has an item (for clearing leftover items)
+        pub fn selectIos(engine: *EngineType, workstation_id: GameId) ?GameId {
+            const ws = engine.workstations.get(workstation_id) orelse return null;
+
+            // Find first IOS with an item
+            for (ws.ios) |ios_id| {
+                if (engine.storages.get(ios_id)) |storage| {
+                    if (storage.has_item) {
+                        return ios_id;
+                    }
+                }
+            }
+            return null;
+        }
+
+        /// Check if all IIS have items (ready for processing)
+        pub fn allIisFilled(engine: *EngineType, workstation_id: GameId) bool {
+            const ws = engine.workstations.get(workstation_id) orelse return false;
+
+            // If no IIS, consider it "filled" (producer workstation)
+            if (ws.iis.len == 0) return true;
+
+            for (ws.iis) |iis_id| {
+                if (engine.storages.get(iis_id)) |storage| {
+                    if (!storage.has_item) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        /// Release worker from workstation assignment
+        pub fn releaseWorker(engine: *EngineType, worker_id: GameId, ws_id: GameId) void {
+            const worker = engine.workers.getPtr(worker_id) orelse return;
+            const ws = engine.workstations.getPtr(ws_id) orelse return;
+
+            // Release worker
+            ws.assigned_worker = null;
+            worker.state = .Idle;
+            worker.assigned_workstation = null;
+            worker.moving_to = null;
+
+            engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
+
+            // Re-evaluate workstation status
+            evaluateWorkstationStatus(engine, ws_id);
         }
     };
 }

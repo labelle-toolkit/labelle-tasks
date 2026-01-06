@@ -1,4 +1,7 @@
 const std = @import("std");
+const types = @import("types.zig");
+
+const TargetType = types.TargetType;
 
 /// TaskHookPayload - Events emitted by task engine to game
 /// Game subscribes to these hooks to react to workflow events
@@ -78,6 +81,13 @@ pub fn TaskHookPayload(comptime GameId: type, comptime Item: type) type {
             item_type: Item,
             storage_id: GameId,
         },
+
+        // Movement lifecycle
+        movement_started: struct {
+            worker_id: GameId,
+            target: GameId,
+            target_type: TargetType,
+        },
     };
 }
 
@@ -129,6 +139,11 @@ pub fn GameHookPayload(comptime GameId: type, comptime Item: type) type {
         store_completed: struct {
             worker_id: GameId,
         },
+
+        // Movement completion (game notifies when worker arrives at target)
+        worker_arrived: struct {
+            worker_id: GameId,
+        },
     };
 }
 
@@ -160,6 +175,7 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
                 .transport_completed => |p| self.call("transport_completed", p),
                 .pickup_dangling_started => |p| self.call("pickup_dangling_started", p),
                 .item_delivered => |p| self.call("item_delivered", p),
+                .movement_started => |p| self.call("movement_started", p),
             }
         }
 

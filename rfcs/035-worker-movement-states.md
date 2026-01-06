@@ -1,7 +1,8 @@
 # RFC 035: Worker Movement States
 
 **Issue**: #35
-**Status**: Draft
+**Status**: Accepted
+**Decision**: Option A (simplified) - Single `MovingTo` substate with target entity ID
 **Author**: @alexandrecalvao
 **Created**: 2026-01-06
 
@@ -218,6 +219,75 @@ arrival_completed: struct {
     worker_id: GameId,
 },
 ```
+
+## Chosen Approach
+
+After discussion, we chose a simplified version of Option A:
+
+### Worker Substate
+
+```zig
+pub const MovingTo = struct {
+    target: GameId,      // Entity ID worker is moving towards
+    target_type: TargetType,
+};
+
+pub const TargetType = enum {
+    workstation,
+    storage,
+    dangling_item,
+};
+```
+
+### Workflow
+
+```
+1. Worker Idle, Workstation Queued
+2. worker_available → tryAssignWorkers()
+3. assignWorkerToWorkstation():
+   - Worker.state = Working
+   - Worker.moving_to = { target: workstation_id, target_type: .workstation }
+   - Emit: worker_assigned, movement_started { worker_id, target, target_type }
+4. Game: Animate movement to workstation
+5. Game: engine.handle(.{ .worker_arrived = { .worker_id } })
+6. Worker.moving_to = null
+7. Emit: worker_arrived
+8. startPickupStep():
+   - Worker.moving_to = { target: eis_id, target_type: .storage }
+   - Emit: pickup_started { worker_id, storage_id, item }
+9. Game: Animate movement to EIS
+10. Game: engine.handle(.{ .worker_arrived = { .worker_id } })
+11. Emit: worker_arrived
+12. completePickupStep():
+    - Move item EIS → IIS
+    - Emit: process_started
+... etc
+```
+
+### Key Points
+
+1. **Single substate**: `moving_to: ?MovingTo` tracks current movement target
+2. **Generic arrival handler**: `worker_arrived` works for all movement types
+3. **Engine tracks target**: Knows where worker is heading
+4. **Backward compatible**: Games can ignore movement if they want instant behavior
+
+### New Hooks
+
+```zig
+// Engine → Game
+movement_started: struct {
+    worker_id: GameId,
+    target: GameId,
+    target_type: TargetType,
+},
+
+// Game → Engine
+worker_arrived: struct {
+    worker_id: GameId,
+},
+```
+
+---
 
 ## Questions for Discussion
 

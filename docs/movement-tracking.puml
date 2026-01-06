@@ -1,0 +1,110 @@
+@startuml movement-tracking
+title Movement Tracking System
+
+skinparam state {
+  BackgroundColor<<moving>> LightBlue
+  BackgroundColor<<working>> LightGreen
+  BackgroundColor<<decision>> LightYellow
+}
+
+state "Worker Movement Flow" as flow {
+
+  state "Idle" as idle
+  state "Moving to Workstation" <<moving>> as move_ws {
+    state "moving_to" as mt1
+    mt1 : target = workstation_id
+    mt1 : target_type = .workstation
+  }
+
+  state "At Workstation" as at_ws {
+    state "Check IOS" <<decision>> as check_ios
+    check_ios : Priority 1: Leftover items?
+  }
+
+  state "Check IIS" <<decision>> as check_iis {
+    check_iis : Priority 2: All IIS filled?
+  }
+
+  state "Clearing IOS" <<working>> as clearing {
+    state "Moving to EOS" <<moving>> as move_eos_clear {
+      state "moving_to" as mt2
+      mt2 : target = eos_id
+      mt2 : target_type = .storage
+    }
+    state "Store Complete" as store_clear
+  }
+
+  state "Pickup Phase" <<working>> as pickup {
+    state "Moving to EIS" <<moving>> as move_eis {
+      state "moving_to" as mt3
+      mt3 : target = eis_id
+      mt3 : target_type = .storage
+    }
+    state "Pickup Complete" as pickup_done
+  }
+
+  state "Process Phase" <<working>> as process {
+    state "Working" as working
+    working : Game handles timer
+    working : Emits process_started
+    working : Waits for work_completed
+  }
+
+  state "Store Phase" <<working>> as store {
+    state "Moving to EOS" <<moving>> as move_eos {
+      state "moving_to" as mt4
+      mt4 : target = eos_id
+      mt4 : target_type = .storage
+    }
+    state "Store Complete" as store_done
+  }
+
+  idle --> move_ws : worker_assigned\nmovement_started
+  move_ws --> at_ws : worker_arrived
+
+  at_ws --> check_ios
+
+  check_ios --> clearing : IOS has item\n& EOS has space
+  check_ios --> idle : IOS has item\n& EOS full\n(release worker)
+  check_ios --> check_iis : IOS empty
+
+  check_iis --> process : All IIS filled\nOR isProducer
+  check_iis --> pickup : IIS needs items
+  check_iis --> idle : No EIS items\n(release worker)
+
+  clearing : current_step = Store
+  move_eos_clear --> store_clear : worker_arrived
+  store_clear --> check_ios : more IOS items
+  store_clear --> check_iis : IOS cleared
+
+  pickup : current_step = Pickup
+  move_eis --> pickup_done : worker_arrived
+  pickup_done --> move_eis : more pickups needed\nmovement_started
+  pickup_done --> process : All IIS filled
+
+  process : current_step = Process
+  working --> store : work_completed\nprocess_completed
+
+  store : current_step = Store
+  move_eos --> store_done : worker_arrived
+  store_done --> move_eos : more items to store\nmovement_started
+  store_done --> idle : IOS empty\ncycle_completed\nworker_released
+
+}
+
+note right of flow
+  **Hook Events (Engine -> Game):**
+  - movement_started: Game should move worker
+  - pickup_started: Worker picking up item
+  - process_started: Work timer should start
+  - process_completed: Work done, items transformed
+  - store_started: Worker storing item
+  - cycle_completed: Full cycle done
+  - worker_released: Worker is free
+
+  **Game Events (Game -> Engine):**
+  - worker_arrived: Worker reached target
+  - work_completed: Processing finished
+end note
+
+@enduml

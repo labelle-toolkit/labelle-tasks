@@ -1,0 +1,99 @@
+@startuml workstation-arrival
+title Worker Arrival at Workstation - Decision Flow
+
+participant "Game" as Game
+participant "Task Engine" as Engine
+participant "Worker" as Worker
+participant "Workstation" as WS
+
+== Worker Assigned ==
+Game -> Engine : worker_available
+Engine -> Engine : tryAssignWorkers()
+Engine -> Worker : state = Working\nassigned_workstation = ws_id\nmoving_to = workstation
+Engine --> Game : worker_assigned
+Engine --> Game : workstation_activated
+Engine --> Game : movement_started\n(target: workstation)
+
+note over Game : Game moves worker\nto workstation location
+
+== Worker Arrives at Workstation ==
+Game -> Engine : worker_arrived
+
+alt PRIORITY 1: IOS has leftover item (from interrupted cycle)
+  Engine -> Engine : selectIos() returns ios_id
+
+  alt EOS has space
+    Engine -> WS : current_step = Store\nselected_eos = eos_id
+    Engine -> Worker : moving_to = EOS
+    Engine --> Game : store_started\n(storage: eos_id, item: ios_item)
+    Engine --> Game : movement_started\n(target: EOS)
+
+    note over Game : Game moves worker to EOS\nworker carries item from IOS
+
+    Game -> Engine : worker_arrived
+    Engine -> Engine : handleStoreCompleted()
+    Engine -> Engine : IOS.has_item = false\nEOS.has_item = true
+
+    alt More items in IOS
+      Engine -> WS : selected_eos = next_eos
+      Engine --> Game : store_started
+      Engine --> Game : movement_started
+      note over Game : Repeat store cycle
+    else IOS empty
+      note over Engine : Continue with\nnormal workflow\n(check IIS)
+    end
+
+  else EOS full (no space)
+    Engine -> Worker : state = Idle\nassigned_workstation = null
+    Engine -> WS : assigned_worker = null
+    Engine --> Game : worker_released
+    Engine -> Engine : evaluateWorkstationStatus()
+    note over WS : Workstation becomes\nBlocked (waiting for\nEOS space)
+  end
+
+else PRIORITY 2: IOS empty - Normal workflow
+
+  alt Producer OR all IIS filled
+    Engine -> WS : current_step = Process
+    Engine --> Game : process_started
+    note over Game : Game starts work timer\nWhen done, sends work_completed
+
+    Game -> Engine : work_completed
+    Engine -> Engine : handleWorkCompleted()
+    note over Engine : IIS cleared\nIOS filled\nMove to Store step
+
+  else IIS needs items (one or more empty)
+    Engine -> Engine : selectEis() for item
+
+    alt EIS has item
+      Engine -> WS : current_step = Pickup\nselected_eis = eis_id
+      Engine -> Worker : moving_to = EIS
+      Engine --> Game : pickup_started\n(storage: eis_id, item: eis_item)
+      Engine --> Game : movement_started\n(target: EIS)
+
+      note over Game : Game moves worker to EIS\nWorker picks up item
+
+      Game -> Engine : worker_arrived
+      Engine -> Engine : handlePickupCompleted()
+      Engine -> Engine : EIS.has_item = false\nIIS.has_item = true
+
+      alt More IIS to fill
+        Engine --> Game : pickup_started (next EIS)
+        Engine --> Game : movement_started
+        note over Game : Repeat pickup cycle
+      else All IIS filled
+        Engine -> WS : current_step = Process
+        Engine --> Game : process_started
+        note over Game : Game starts work timer
+      end
+
+    else No EIS with items
+      Engine -> Worker : state = Idle
+      Engine -> WS : assigned_worker = null
+      Engine --> Game : worker_released
+      note over WS : Workstation blocked\n(waiting for EIS items)
+    end
+  end
+end
+
+@enduml

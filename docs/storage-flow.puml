@@ -1,0 +1,71 @@
+@startuml storage-flow
+title Storage Flow - Item Movement Through Workstation
+
+skinparam rectangle {
+  BackgroundColor<<eis>> LightBlue
+  BackgroundColor<<iis>> LightGreen
+  BackgroundColor<<ios>> LightYellow
+  BackgroundColor<<eos>> LightPink
+  BackgroundColor<<workstation>> White
+}
+
+rectangle "External Input Storage (EIS)" <<eis>> as EIS {
+  card "Raw Materials" as raw
+  note right of raw : Source of items\nFilled by game/player
+}
+
+rectangle "Workstation" <<workstation>> as WS {
+  rectangle "Internal Input Storage (IIS)" <<iis>> as IIS {
+    card "Recipe Inputs" as inputs
+    note right of inputs : Items ready for\nprocessing
+  }
+
+  rectangle "Processing" as PROCESS {
+    card "Transformation" as transform
+    note right of transform : Game handles timing\nand entity changes
+  }
+
+  rectangle "Internal Output Storage (IOS)" <<ios>> as IOS {
+    card "Recipe Outputs" as outputs
+    note right of outputs : Processed items\nwaiting for delivery
+  }
+}
+
+rectangle "External Output Storage (EOS)" <<eos>> as EOS {
+  card "Final Products" as final
+  note right of final : Destination\nMay be another\nworkstation's EIS
+}
+
+EIS -down-> IIS : **Pickup Step**\nWorker moves to EIS\npickup_started\nEIS.has_item = false\nIIS.has_item = true
+IIS -down-> PROCESS : **Process Step**\nprocess_started\nGame runs timer
+PROCESS -down-> IOS : **Process Complete**\nprocess_completed\nIIS.has_item = false\nIOS.has_item = true
+IOS -down-> EOS : **Store Step**\nWorker moves to EOS\nstore_started\nIOS.has_item = false\nEOS.has_item = true
+
+note bottom of EOS
+  **Cycle Complete**
+  cycle_completed
+  worker_released
+  Worker returns to Idle
+end note
+
+legend right
+  **Priority on Workstation Arrival:**
+
+  **1. Check IOS (leftover items)**
+     - If IOS has item AND EOS has space:
+       Start Store step immediately
+     - If IOS has item AND EOS full:
+       Release worker (blocked)
+
+  **2. Check IIS (ready to process?)**
+     - If Producer OR all IIS filled:
+       Start Process step
+       Game runs work timer
+       Game sends work_completed when done
+     - If IIS needs items:
+       Start Pickup step (move to EIS)
+     - If no EIS items available:
+       Release worker (blocked)
+end legend
+
+@enduml
