@@ -417,6 +417,71 @@ Result: CANNOT ASSIGN (no Butter available)
 
 3. **Conditions are evaluated as OR**: If ANY condition is true, the workstation is operable.
 
+### Producer Workstations
+
+A **producer** is a workstation with no external inputs - it generates items from nothing.
+
+**Definition**:
+```zig
+pub fn isProducer(self: *const Self) bool {
+    return self.eis.len == 0 and self.iis.len == 0;
+}
+```
+
+**Examples**: Well (produces Water), Mine (produces Ore), Tree (produces Wood)
+
+**Configuration**:
+```
+EIS: 0 (none)
+IIS: 0 (none)
+IOS: 1+ (produced items)
+EOS: 1+ (storage for produced items)
+```
+
+**How Conditions Apply to Producers**:
+
+| Condition | Evaluation for Producer |
+|-----------|------------------------|
+| 1. FLUSH | Normal - IOS has item AND EOS has space |
+| 2. PRODUCE | "All IIS filled" is **vacuously true** (no IIS to check) |
+| 3. CAN GET ITEMS | **N/A** - no IIS means nothing to fill |
+
+**Assignment Check Example (Well)**:
+```
+IOS: [empty]
+EOS: [empty, empty, empty, empty]
+
+Condition 1 (FLUSH): IOS has item? No → Continue
+Condition 2 (PRODUCE):
+  - All IIS filled? Yes (vacuously true - no IIS)
+  - All IOS empty? Yes
+  → QUEUED ✓
+```
+
+**After Production**:
+```
+IOS: [Water]
+EOS: [empty, empty, empty, empty]
+
+Condition 1 (FLUSH):
+  - IOS has item? Yes (Water)
+  - EOS has space? Yes
+  → QUEUED ✓ (Store water to EOS)
+```
+
+**Producer Workflow**:
+```
+1. Worker assigned → moves to workstation
+2. Check IOS → empty → Start Process (produce item)
+3. work_completed → IOS now has item
+4. Check IOS → has item → Store to EOS
+5. Cycle complete → worker released
+```
+
+**Key Insight**: Producers skip Condition 3 entirely. They only need:
+- Empty IOS to produce (Condition 2)
+- EOS space to store produced items (Condition 1)
+
 ### Decision Flow Diagram
 
 ```
