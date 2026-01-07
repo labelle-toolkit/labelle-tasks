@@ -1,0 +1,87 @@
+@startuml example-kitchen
+title Kitchen Workstation Example
+
+skinparam rectangle {
+  BackgroundColor<<eis>> LightBlue
+  BackgroundColor<<iis>> LightGreen
+  BackgroundColor<<ios>> LightYellow
+  BackgroundColor<<eos>> LightPink
+  BackgroundColor<<workstation>> White
+}
+
+' EIS - External Input Storage (Pantry/Fridge)
+rectangle "Pantry / Fridge" {
+  together {
+    rectangle "EIS 1\n**Vegetable**\npriority: 1" <<eis>> as eis1
+    rectangle "EIS 2\n**Vegetable**\npriority: 2" <<eis>> as eis2
+    rectangle "EIS 3\n**Vegetable**\npriority: 3" <<eis>> as eis3
+    rectangle "EIS 4\n**Vegetable**\npriority: 4" <<eis>> as eis4
+  }
+  together {
+    rectangle "EIS 5\n**Meat**\npriority: 1" <<eis>> as eis5
+    rectangle "EIS 6\n**Meat**\npriority: 2" <<eis>> as eis6
+    rectangle "EIS 7\n**Meat**\npriority: 3" <<eis>> as eis7
+    rectangle "EIS 8\n**Meat**\npriority: 4" <<eis>> as eis8
+  }
+}
+
+' Workstation - Kitchen
+rectangle "Kitchen Workstation" <<workstation>> as kitchen {
+  rectangle "IIS 1\naccepts: **Vegetable**" <<iis>> as iis1
+  rectangle "IIS 2\naccepts: **Meat**" <<iis>> as iis2
+
+  rectangle "PROCESS\n(Cooking)" as process
+
+  rectangle "IOS 1\noutput: **Meal**" <<ios>> as ios1
+}
+
+' EOS - External Output Storage (Serving Counter)
+rectangle "Serving Counter" {
+  rectangle "EOS 1\n(empty)" <<eos>> as eos1
+  rectangle "EOS 2\n(empty)" <<eos>> as eos2
+  rectangle "EOS 3\n(empty)" <<eos>> as eos3
+  rectangle "EOS 4\n(empty)" <<eos>> as eos4
+}
+
+' Flow arrows
+eis1 -[#blue]-> iis1 : Pickup
+eis5 -[#red]-> iis2 : Pickup
+
+iis1 --> process
+iis2 --> process
+process --> ios1 : Cook
+
+ios1 -[#green]-> eos1 : Store
+
+note bottom of kitchen
+  **Assignment Check (Condition 3):**
+  Empty IIS: {Vegetable: 1, Meat: 1}
+  Available EIS: {Vegetable: 4, Meat: 4}
+
+  4 >= 1 (Vegetable) ✓
+  4 >= 1 (Meat) ✓
+
+  **Result: CAN ASSIGN**
+
+  Worker trips:
+  1. EIS 1 (Vegetable, priority 1) → IIS 1
+  2. EIS 5 (Meat, priority 1) → IIS 2
+end note
+
+legend right
+  **Storage Configuration:**
+  |= Type |= Count |= Item |
+  | EIS | 4 | Vegetable |
+  | EIS | 4 | Meat |
+  | IIS | 1 | accepts: Vegetable |
+  | IIS | 1 | accepts: Meat |
+  | IOS | 1 | Meal |
+  | EOS | 4 | (any) |
+
+  **Flow:**
+  EIS → IIS (Pickup)
+  IIS → IOS (Process/Cook)
+  IOS → EOS (Store/Serve)
+end legend
+
+@enduml
