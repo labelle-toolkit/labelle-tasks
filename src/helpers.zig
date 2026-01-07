@@ -263,7 +263,37 @@ pub fn Helpers(
                     }
                 },
                 .storage => {
-                    // Worker arrived at storage - depends on current step
+                    // Worker arrived at storage
+                    // Check if this is a transport task (EOS → EIS delivery)
+                    if (worker.transport_task) |task| {
+                        if (moving_to.target == task.from_eos_id) {
+                            // Arrived at EOS - now go to EIS
+                            worker.moving_to = .{
+                                .target = task.to_eis_id,
+                                .target_type = .storage,
+                            };
+                            engine.dispatcher.dispatch(.{ .movement_started = .{
+                                .worker_id = worker_id,
+                                .target = task.to_eis_id,
+                                .target_type = .storage,
+                            } });
+                            return true;
+                        } else if (moving_to.target == task.to_eis_id) {
+                            // Arrived at EIS - complete transport
+                            handleTransportComplete(engine, worker_id, worker, task);
+                            return true;
+                        }
+                    }
+
+                    // Check if this is a dangling item delivery (no assigned workstation)
+                    if (worker.dangling_task != null) {
+                        // Dangling item delivery - worker arrived at target EIS
+                        // Delegate to existing dangling delivery completion logic
+                        _ = @import("handlers.zig").Handlers(GameId, Item, EngineType).handleStoreCompleted(engine, worker_id);
+                        return true;
+                    }
+
+                    // Workstation workflow - depends on current step
                     const ws_id = worker.assigned_workstation orelse return false;
                     const ws = engine.workstations.getPtr(ws_id) orelse return false;
 
@@ -369,6 +399,55 @@ pub fn Helpers(
 
             // Re-evaluate workstation status
             evaluateWorkstationStatus(engine, ws_id);
+        }
+
+        // ============================================
+        // Transport completion
+        // ============================================
+
+        const WorkerData = state_mod.WorkerData(GameId, Item);
+
+        /// Complete EOS → EIS transport
+        fn handleTransportComplete(engine: *EngineType, worker_id: GameId, worker: *WorkerData, task: anytype) void {
+            const log = std.log.scoped(.transport);
+
+            // Fill EIS with transported item
+            if (engine.storages.getPtr(task.to_eis_id)) |eis| {
+                eis.has_item = true;
+                eis.item_type = task.item_type;
+            }
+
+            // Dispatch hooks
+            engine.dispatcher.dispatch(.{ .transport_completed = .{
+                .worker_id = worker_id,
+                .to_storage_id = task.to_eis_id,
+                .item = task.item_type,
+            } });
+            engine.dispatcher.dispatch(.{ .item_delivered = .{
+                .worker_id = worker_id,
+                .item_id = 0, // No entity ID for transported items
+                .item_type = task.item_type,
+                .storage_id = task.to_eis_id,
+            } });
+
+            log.info("transport complete: worker {d} delivered {s} to EIS {d}", .{
+                worker_id,
+                @tagName(task.item_type),
+                task.to_eis_id,
+            });
+
+            // Release worker
+            worker.state = .Idle;
+            worker.transport_task = null;
+            worker.moving_to = null;
+
+            engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
+
+            // Re-evaluate for more work
+            reevaluateWorkstations(engine);
+            engine.evaluateTransports();
+            engine.evaluateDanglingItems();
+            tryAssignWorkers(engine);
         }
     };
 }

@@ -17,7 +17,7 @@ pub fn Handlers(
     return struct {
         const Self = @This();
         const StorageState = state_mod.StorageState(Item);
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
         const WorkstationData = state_mod.WorkstationData(GameId);
 
         // ============================================
@@ -30,8 +30,10 @@ pub fn Handlers(
                 return false;
             };
 
-            if (storage.has_item) {
-                log.err("item_added: storage {} already has item", .{storage_id});
+            // Allow setting item_type when has_item is true but item_type is null
+            // (for producer workstations where engine sets has_item=true during process completion)
+            if (storage.has_item and storage.item_type != null) {
+                log.err("item_added: storage {} already has item of type {s}", .{ storage_id, @tagName(storage.item_type.?) });
                 return false;
             }
 
@@ -74,7 +76,9 @@ pub fn Handlers(
             worker.state = .Idle;
             worker.assigned_workstation = null;
 
-            // Try to assign worker to a queued workstation
+            // Priority order: dangling items → transports → workstations
+            engine.evaluateDanglingItems();
+            engine.evaluateTransports();
             engine.tryAssignWorkers();
             return true;
         }
@@ -399,6 +403,9 @@ pub fn Handlers(
                 worker.dangling_task = null;
                 worker.state = .Idle;
 
+                // Re-evaluate workstation status since EIS now has item
+                engine.reevaluateWorkstations();
+
                 // Try to find new work - dangling items first, then workstations
                 engine.evaluateDanglingItems();
                 engine.tryAssignWorkers();
@@ -477,7 +484,9 @@ pub fn Handlers(
                 // Re-evaluate workstation status
                 engine.evaluateWorkstationStatus(ws_id);
 
-                // Try to assign workers
+                // Priority order: dangling items → transports → workstations
+                engine.evaluateDanglingItems();
+                engine.evaluateTransports();
                 engine.tryAssignWorkers();
             } else {
                 // More items to store

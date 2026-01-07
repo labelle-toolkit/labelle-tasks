@@ -8,7 +8,14 @@
 
 ## Summary
 
-Add explicit movement states to the worker workflow so the task engine can track when workers are moving to workstations or storages.
+This RFC defines the complete worker-workstation interaction model:
+
+1. **Worker Movement States**: Add `MovingTo` substate to track worker movement targets (workstation, storage, dangling_item)
+2. **Workstation Assignment Rules**: Define three conditions (FLUSH, PRODUCE, CAN GET ITEMS) that determine when a workstation can receive a worker
+3. **Workstation States**: Document the Blocked/Queued/Active state machine and transitions
+4. **Worker States**: Document the Idle/Working/Unavailable states and recovery from mid-cycle interruptions
+5. **Producer Workstations**: Special handling for workstations with no inputs (wells, mines, trees)
+6. **Storage Constraints**: Define requirements for IIS.accepts, EIS.item_type, IOS.item_type, and EOS.accepts
 
 ## Motivation
 
@@ -207,18 +214,17 @@ tracker.update(dt);
 // Engine → Game
 movement_started: struct {
     worker_id: GameId,
-    target_type: enum { workstation, storage },
-    target_id: GameId,
-},
-movement_completed: struct {
-    worker_id: GameId,
+    target: GameId,
+    target_type: TargetType,  // workstation, storage, dangling_item
 },
 
 // Game → Engine
-arrival_completed: struct {
+worker_arrived: struct {
     worker_id: GameId,
 },
 ```
+
+**Note**: The original proposal included `movement_completed` emitted by engine, but the chosen approach uses `worker_arrived` sent by game instead. This keeps the engine as a pure state machine - it doesn't track time or positions.
 
 ## Chosen Approach
 
@@ -250,18 +256,37 @@ pub const TargetType = enum {
    - Emit: worker_assigned, movement_started { worker_id, target, target_type }
 4. Game: Animate movement to workstation
 5. Game: engine.handle(.{ .worker_arrived = { .worker_id } })
-6. Worker.moving_to = null
-7. Emit: worker_arrived
-8. startPickupStep():
-   - Worker.moving_to = { target: eis_id, target_type: .storage }
-   - Emit: pickup_started { worker_id, storage_id, item }
-9. Game: Animate movement to EIS
-10. Game: engine.handle(.{ .worker_arrived = { .worker_id } })
-11. Emit: worker_arrived
-12. completePickupStep():
-    - Move item EIS → IIS
-    - Emit: process_started
-... etc
+6. Engine handles arrival (priority order):
+   - Worker.moving_to = null
+   - Priority 1 (FLUSH): If IOS has item AND EOS has space:
+     - Worker.moving_to = { target: eos_id, target_type: .storage }
+     - Emit: store_started, movement_started { worker_id, target: eos_id }
+   - Priority 2 (PRODUCE): Else if all IIS filled (or isProducer):
+     - Emit: process_started { workstation_id }
+     - (Game starts work timer)
+   - Priority 3 (PICKUP): Else if IIS needs items AND EIS available:
+     - Worker.moving_to = { target: eis_id, target_type: .storage }
+     - Emit: pickup_started, movement_started { worker_id, target: eis_id }
+
+7. Pickup Flow (if Priority 3):
+   a. Game: Animate movement to EIS
+   b. Game: engine.handle(.{ .worker_arrived = { .worker_id } })
+   c. Engine: Move item EIS → IIS, Worker.moving_to = null
+   d. If more pickups needed: repeat from step 6 (re-evaluate)
+   e. Else: All IIS filled → Emit process_started
+
+8. Process Flow:
+   a. Game: Run work timer
+   b. Game: engine.handle(.{ .work_completed = { .workstation_id } })
+   c. Engine: IIS → IOS (transform items), Emit: process_completed
+   d. Continue to Store (re-evaluate at step 6)
+
+9. Store Flow (if Priority 1):
+   a. Game: Animate movement to EOS
+   b. Game: engine.handle(.{ .worker_arrived = { .worker_id } })
+   c. Engine: Move item IOS → EOS, Emit: store_completed
+   d. If more stores needed: repeat from step 6 (re-evaluate)
+   e. Else: Emit cycle_completed, release worker
 ```
 
 ### Key Points
@@ -289,25 +314,133 @@ worker_arrived: struct {
 
 ---
 
-## Questions for Discussion
+## Worker States
 
-1. **Which option do you prefer?** A (substates), B (expanded states), C (steps), or D (helper)?
+A worker has three possible states:
 
-2. **Should movement be optional?** Some games may want instant assignment (strategy games) while others need movement (colony sims).
+```zig
+pub const WorkerState = enum {
+    Idle,        // Available for assignment
+    Working,     // Assigned to a workstation
+    Unavailable, // Cannot work (paused, busy with other task)
+};
+```
 
-3. **What about movement to multiple storages?** A workstation might have multiple EIS - should worker move to each?
+### State Definitions
 
-4. **Should we track movement target?** Currently engine doesn't track positions. Should it track "worker is moving to storage X"?
+| State | Description | Workstation |
+|-------|-------------|-------------|
+| **Idle** | Worker available for assignment. Can be assigned to any Queued workstation. | None |
+| **Working** | Worker assigned to a workstation. Executing workflow (moving, picking up, processing, storing). | Assigned |
+| **Unavailable** | Worker cannot work. May be paused by game, doing non-task work, or temporarily disabled. | None (released) |
 
-5. **Distance/pathfinding integration?** The engine has an optional distance function. Should movement integrate with this?
+### Worker Substate: MovingTo
 
-## Migration Path
+When a worker is in the `Working` state, they may also have a movement target:
 
-If we choose a breaking change (Option B or C):
+```zig
+pub const MovingTo = struct {
+    target: GameId,
+    target_type: TargetType,
+};
 
-1. Add new states/steps
-2. Provide migration guide
-3. Consider compatibility mode for existing games
+pub const TargetType = enum {
+    workstation,   // Moving to assigned workstation
+    storage,       // Moving to EIS (pickup) or EOS (store)
+    dangling_item, // Moving to pick up dropped item
+};
+```
+
+### Worker State Transitions
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                          IDLE                                │
+│                                                              │
+│  Worker available for assignment                             │
+│  moving_to = null                                           │
+│  assigned_workstation = null                                │
+└─────────────────────────────────────────────────────────────┘
+          │                                    ↑
+          │ tryAssignWorkers()                 │ worker_released
+          │ (Queued workstation found)         │ (cycle complete or
+          ▼                                    │  mid-cycle release)
+┌─────────────────────────────────────────────────────────────┐
+│                        WORKING                               │
+│                                                              │
+│  Worker assigned to workstation                              │
+│  moving_to = current movement target (or null if at dest)   │
+│  assigned_workstation = workstation_id                      │
+│                                                              │
+│  Substates (via moving_to):                                 │
+│  - Moving to workstation                                    │
+│  - Moving to EIS (pickup)                                   │
+│  - Moving to EOS (store)                                    │
+│  - At destination (moving_to = null)                        │
+└─────────────────────────────────────────────────────────────┘
+          │                                    ↑
+          │ worker_unavailable                 │ worker_available
+          │ (game pauses worker)               │ (game resumes worker)
+          ▼                                    │
+┌─────────────────────────────────────────────────────────────┐
+│                      UNAVAILABLE                             │
+│                                                              │
+│  Worker cannot work                                          │
+│  moving_to = null                                           │
+│  assigned_workstation = null (released)                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Worker Events
+
+| Event | From State | To State | Effect |
+|-------|------------|----------|--------|
+| `worker_available` | Idle/Unavailable | Idle | Worker ready, try assign |
+| `worker_assigned` | Idle | Working | Assigned to workstation |
+| `worker_arrived` | Working | Working | Reached movement target |
+| `worker_released` | Working | Idle | Cycle complete |
+| `worker_unavailable` | Any | Unavailable | Paused, release from workstation |
+| `worker_removed` | Any | (removed) | Worker deleted |
+
+### Worker Unavailable Mid-Cycle
+
+When a worker becomes unavailable mid-cycle (game sends `worker_unavailable`), the engine:
+
+1. **Releases the worker** from the workstation
+2. **Re-evaluates workstation state** based on current storage conditions
+3. **Does NOT roll back** any completed steps
+
+**Scenarios and Recovery**:
+
+| Interrupted During | Workstation State After | Recovery |
+|--------------------|------------------------|----------|
+| Moving to workstation | Items unchanged → re-check conditions | New worker re-evaluates |
+| Pickup (moving to EIS) | IIS partially filled | FLUSH clears any IOS, then continue pickup |
+| Process (waiting for work_completed) | IIS has items, IOS empty | PRODUCE condition met |
+| Store (moving to EOS) | IOS has items | FLUSH condition met |
+
+**Example: Interrupted During Store**
+
+```
+State when interrupted:
+  IIS: [empty, empty]
+  IOS: [Meal]           ← produced but not yet stored
+  EOS: [empty, empty]
+
+Worker becomes unavailable:
+  - Worker released
+  - Workstation re-evaluates:
+    - Condition 1 (FLUSH): IOS has Meal AND EOS has space ✓
+    - Status: QUEUED
+
+New worker assigned:
+  - Arrives at workstation
+  - Checks IOS → has Meal
+  - Stores Meal to EOS (FLUSH)
+  - Cycle continues normally
+```
+
+**Key Design Principle**: The FLUSH condition (Priority 1) ensures that leftover items from interrupted cycles are always cleared first, preventing deadlocks and ensuring smooth recovery.
 
 ---
 
@@ -553,9 +686,19 @@ Result: CANNOT ASSIGN (no Butter available)
 
 1. **IIS.accepts must never be null**: Each IIS must specify what item type it accepts. If `IIS.accepts == null`, the engine should throw an error. Think of IIS as recipe slots - they must define what ingredient they need.
 
-2. **EIS.item_type can be null**: An empty EIS has no item_type.
+2. **EIS.item_type can be null**: An empty EIS has no item_type (storage is empty).
 
-3. **Conditions are evaluated as OR**: If ANY condition is true, the workstation is operable.
+3. **IOS.item_type can be null**: An empty IOS has no item_type. After processing, it holds the produced item type.
+
+4. **EOS.accepts can be null OR specific type**:
+   - `EOS.accepts = null` → accepts any item type (flexible storage)
+   - `EOS.accepts = SomeType` → only accepts items matching that type
+
+   When storing IOS → EOS, the engine selects an EOS where:
+   - `EOS.accepts == null` (any item), OR
+   - `EOS.accepts == IOS.item_type` (matching type)
+
+5. **Conditions are evaluated as OR**: If ANY condition is true, the workstation is operable.
 
 ### Producer Workstations
 

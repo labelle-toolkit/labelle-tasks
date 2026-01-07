@@ -36,7 +36,7 @@ pub fn MovingTo(comptime GameId: type) type {
 }
 
 /// Internal worker state
-pub fn WorkerData(comptime GameId: type) type {
+pub fn WorkerData(comptime GameId: type, comptime Item: type) type {
     return struct {
         state: WorkerState = .Idle,
         assigned_workstation: ?GameId = null,
@@ -48,6 +48,13 @@ pub fn WorkerData(comptime GameId: type) type {
         dangling_task: ?struct {
             item_id: GameId,
             target_eis_id: GameId,
+        } = null,
+
+        /// Transport task (if worker is transporting EOS → EIS)
+        transport_task: ?struct {
+            from_eos_id: GameId,
+            to_eis_id: GameId,
+            item_type: Item,
         } = null,
     };
 }
