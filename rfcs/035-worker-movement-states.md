@@ -311,6 +311,146 @@ If we choose a breaking change (Option B or C):
 
 ---
 
+## Workstation States
+
+A workstation has three possible states:
+
+```zig
+pub const WorkstationStatus = enum {
+    Blocked,  // Cannot operate - conditions not met
+    Queued,   // Ready for worker assignment
+    Active,   // Worker assigned and working
+};
+```
+
+### State Definitions
+
+| State | Description | Worker |
+|-------|-------------|--------|
+| **Blocked** | Workstation cannot operate. Missing inputs, outputs full, or no matching ingredients available. | None |
+| **Queued** | Workstation ready to operate. At least one assignment condition is met. Waiting for worker. | None |
+| **Active** | Worker assigned and executing workflow (Pickup → Process → Store). | Assigned |
+
+### State Transition Diagram
+
+```
+                    ┌────────────────────────────────────────────┐
+                    │                                            │
+                    ▼                                            │
+┌─────────────────────────────────────────────────────────────┐  │
+│                        BLOCKED                               │  │
+│                                                              │  │
+│  Storage conditions NOT met:                                 │  │
+│  - No IOS items AND no IIS filled AND no matching EIS       │  │
+│  - OR: IOS has items but EOS is full                        │  │
+│  - OR: IIS needs items but no matching EIS available        │  │
+└─────────────────────────────────────────────────────────────┘  │
+                    │                                            │
+                    │ Any condition becomes true                 │
+                    │ (storage state changes)                    │
+                    ▼                                            │
+┌─────────────────────────────────────────────────────────────┐  │
+│                        QUEUED                                │  │
+│                                                              │  │
+│  At least ONE condition met:                                 │  │
+│  1. FLUSH: IOS has item AND EOS has space                   │  │
+│  2. PRODUCE: All IIS filled AND all IOS empty               │  │
+│  3. CAN GET ITEMS: Matching EIS for each empty IIS          │  │
+└─────────────────────────────────────────────────────────────┘  │
+                    │                                            │
+                    │ Worker assigned                            │
+                    │ (tryAssignWorkers)                         │
+                    ▼                                            │
+┌─────────────────────────────────────────────────────────────┐  │
+│                        ACTIVE                                │  │
+│                                                              │  │
+│  Worker executing workflow:                                  │  │
+│  - Pickup: EIS → IIS                                        │  │
+│  - Process: IIS → IOS                                       │  │
+│  - Store: IOS → EOS                                         │  │
+└─────────────────────────────────────────────────────────────┘  │
+                    │                                            │
+                    │ Cycle complete OR                          │
+                    │ Worker released (blocked mid-cycle)        │
+                    │                                            │
+                    └────────────────────────────────────────────┘
+                         (re-evaluate conditions)
+```
+
+### Storage Events That Trigger Re-evaluation
+
+The workstation status is re-evaluated when storage state changes:
+
+| Event | Effect | May Transition |
+|-------|--------|----------------|
+| `item_added` to EIS | New ingredient available | Blocked → Queued |
+| `item_removed` from EIS | Ingredient consumed | Queued → Blocked |
+| `item_added` to EOS | Output slot filled | Queued → Blocked (if all EOS full) |
+| `item_removed` from EOS | Output slot freed | Blocked → Queued |
+| `store_completed` | IOS → EOS transfer | Active → Queued/Blocked |
+| `pickup_completed` | EIS → IIS transfer | (stays Active) |
+| `work_completed` | IIS → IOS transform | (stays Active) |
+| `cycle_completed` | Full cycle done | Active → Queued/Blocked |
+
+### Example: Kitchen State Transitions
+
+```
+Initial State:
+  EIS: [Vegetable, Meat]
+  IIS: [empty, empty]
+  IOS: [empty]
+  EOS: [empty, empty]
+
+  Check: Condition 3 (CAN GET ITEMS) ✓
+  Status: QUEUED
+
+Worker Assigned:
+  Status: ACTIVE
+  Worker moves to workstation...
+
+After Pickup (EIS → IIS):
+  EIS: [empty, empty]      ← items consumed
+  IIS: [Vegetable, Meat]   ← items received
+  IOS: [empty]
+  EOS: [empty, empty]
+
+  Status: ACTIVE (still working)
+
+After Process (IIS → IOS):
+  EIS: [empty, empty]
+  IIS: [empty, empty]      ← items transformed
+  IOS: [Meal]              ← output produced
+  EOS: [empty, empty]
+
+  Status: ACTIVE (still working)
+
+After Store (IOS → EOS):
+  EIS: [empty, empty]
+  IIS: [empty, empty]
+  IOS: [empty]             ← item moved
+  EOS: [Meal, empty]       ← item stored
+
+  Cycle Complete!
+  Worker Released.
+
+  Re-evaluate:
+  - Condition 1: IOS empty → NO
+  - Condition 2: IIS empty → NO
+  - Condition 3: No EIS items → NO
+
+  Status: BLOCKED (waiting for new ingredients)
+
+New Ingredients Added:
+  EIS: [Vegetable, Meat]   ← player/game adds items
+
+  Re-evaluate:
+  - Condition 3: Matching EIS ✓
+
+  Status: QUEUED (ready for next cycle)
+```
+
+---
+
 ## Workstation Assignment Rules
 
 A workstation can receive a worker (transition from `Blocked` → `Queued`) when **any** of the following conditions is true:
