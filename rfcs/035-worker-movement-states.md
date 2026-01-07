@@ -349,24 +349,64 @@ Result: CAN ASSIGN (worker will start process_started)
 
 ```
 For each empty IIS, there exists an EIS with matching item type
+(counting duplicates - need one EIS per empty IIS slot)
 ```
 
 **Purpose**: The required ingredients are available in external storage to fill the workstation inputs.
 
-**Matching Rule**: `IIS.accepts` must match `EIS.item_type`
+**Matching Algorithm**:
+1. Count empty IIS slots grouped by `accepts` type
+2. Count EIS slots grouped by `item_type`
+3. For each required item type: `EIS_count >= empty_IIS_count`
 
-**Example**:
+**Example 1 - Simple match**:
 ```
 IIS: [accepts: Potato (empty), accepts: Water (empty)]
 EIS: [item: Potato, item: Water, item: Flour]
-Result: CAN ASSIGN (worker will pickup Potato and Water from EIS)
+
+Required: {Potato: 1, Water: 1}
+Available: {Potato: 1, Water: 1, Flour: 1}
+Result: CAN ASSIGN
 ```
 
-**Counter-example**:
+**Example 2 - Multiple same type**:
+```
+IIS: [accepts: Potato (empty), accepts: Potato (empty)]
+EIS: [item: Potato, item: Potato]
+
+Required: {Potato: 2}
+Available: {Potato: 2}
+Result: CAN ASSIGN (worker makes 2 trips)
+```
+
+**Example 3 - Insufficient count**:
+```
+IIS: [accepts: Potato (empty), accepts: Potato (empty)]
+EIS: [item: Potato]
+
+Required: {Potato: 2}
+Available: {Potato: 1}
+Result: CANNOT ASSIGN (need 2 Potatoes, only have 1)
+```
+
+**Example 4 - Partially filled IIS**:
+```
+IIS: [accepts: Potato (has Potato), accepts: Water (empty)]
+EIS: [item: Water]
+
+Required: {Water: 1}  ← only check empty slots
+Available: {Water: 1}
+Result: CAN ASSIGN
+```
+
+**Counter-example - Missing ingredient**:
 ```
 IIS: [accepts: Potato (empty), accepts: Butter (empty)]
 EIS: [item: Potato, item: Water]
-Result: CANNOT ASSIGN (no EIS has Butter)
+
+Required: {Potato: 1, Butter: 1}
+Available: {Potato: 1, Water: 1}
+Result: CANNOT ASSIGN (no Butter available)
 ```
 
 ### Important Constraints
@@ -422,15 +462,42 @@ When a worker arrives at a workstation, the engine handles conditions in priorit
 | 2 | All IIS filled | Start processing (PRODUCE) |
 | 3 | IIS needs items | Pickup from EIS (CAN GET ITEMS) |
 
-### Open Questions
+### Resolved Questions
 
-1. **Multiple IIS needing same item type**: If two IIS slots accept `Potato`, do we need two EIS with potatoes, or can one EIS supply both (worker makes two trips)?
+1. **Multiple IIS needing same item type**: Need **multiple EIS** with the same item type. Worker makes multiple trips, one EIS per IIS slot.
 
-2. **Partial matching**: What if only some IIS can be filled? Should worker start partial work or wait for all ingredients?
+   **Example**:
+   ```
+   IIS: [accepts: Potato (empty), accepts: Potato (empty)]
+   EIS: [item: Potato, item: Potato, item: Flour]
+   Result: CAN ASSIGN (worker trips: EIS[0]→IIS[0], EIS[1]→IIS[1])
 
-3. **EIS selection strategy**: When multiple EIS have the same item type, which one to pick from? Closest? Priority? First available?
+   EIS: [item: Potato, item: Flour]
+   Result: CANNOT ASSIGN (only one Potato, need two)
+   ```
 
-4. **IIS already partially filled**: If some IIS are filled and some empty, should Condition 3 only check the empty ones?
+2. **Partial matching**: **Full match required** for initial assignment. All empty IIS slots must have a matching EIS available. Exception: if IIS is already partially filled (some slots have items), only check the empty slots.
+
+   **Example**:
+   ```
+   IIS: [accepts: Potato (has Potato), accepts: Water (empty)]
+   EIS: [item: Water]
+   Result: CAN ASSIGN (only need Water, Potato already present)
+
+   IIS: [accepts: Potato (empty), accepts: Water (empty)]
+   EIS: [item: Water]
+   Result: CANNOT ASSIGN (need both Potato and Water)
+   ```
+
+3. **EIS selection strategy**: **Priority-based**. Select EIS with the **lowest priority value first** (lower = higher priority). When priorities are equal, use first available.
+
+   **Example**:
+   ```
+   EIS: [item: Potato, priority: 2], [item: Potato, priority: 1]
+   Worker picks from: EIS[1] (priority 1 < priority 2)
+   ```
+
+4. **Partially filled IIS**: **Only check empty IIS slots** for Condition 3. If some IIS already have items, those are satisfied and don't need EIS matching.
 
 ## References
 

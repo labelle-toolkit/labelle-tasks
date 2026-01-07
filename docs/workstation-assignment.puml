@@ -5,55 +5,64 @@ start
 
 :Evaluate Workstation;
 
-if (IOS has item?) then (yes)
-  if (EOS has space?) then (yes)
-    #LightGreen:QUEUED
-    **FLUSH**
-    Clear leftover items;
-    stop
-  else (no)
-    :Continue to next check;
-  endif
-else (no)
-  :Continue to next check;
-endif
-
-if (All IIS filled?) then (yes)
-  if (All IOS empty?) then (yes)
-    #LightGreen:QUEUED
-    **PRODUCE**
-    Ready to process;
-    stop
-  else (no)
-    :Continue to next check;
-  endif
-else (no)
-  :Continue to next check;
-endif
-
-:Check each empty IIS;
-
-partition "CAN GET ITEMS" {
-  :For each empty IIS slot;
-
-  while (More empty IIS?) is (yes)
-    :Get IIS.accepts (required item type);
-    note right: IIS.accepts must NOT be null\nThrow error if null
-
-    if (Exists EIS with matching item_type?) then (yes)
-      :Mark IIS as fillable;
-    else (no)
-      #LightCoral:BLOCKED
-      **Missing ingredient**
-      No EIS has required item;
+partition "Condition 1: FLUSH" #LightBlue {
+  if (Any IOS has item?) then (yes)
+    if (Any EOS has space?) then (yes)
+      #LightGreen:QUEUED
+      **FLUSH**
+      Clear leftover items first;
       stop
+    else (no)
+      :Continue to Condition 2;
     endif
-  endwhile (no)
+  else (no)
+    :Continue to Condition 2;
+  endif
+}
 
-  #LightGreen:QUEUED
-  **CAN GET ITEMS**
-  All ingredients available;
-  stop
+partition "Condition 2: PRODUCE" #LightYellow {
+  if (All IIS have items?) then (yes)
+    if (All IOS are empty?) then (yes)
+      #LightGreen:QUEUED
+      **PRODUCE**
+      Ready to process;
+      stop
+    else (no)
+      :Continue to Condition 3;
+    endif
+  else (no)
+    :Continue to Condition 3;
+  endif
+}
+
+partition "Condition 3: CAN GET ITEMS" #LightCoral {
+  :Count empty IIS slots by accepts type;
+  note right
+    Only count **empty** IIS slots
+    Filled IIS are already satisfied
+  end note
+
+  :Count EIS slots by item_type;
+  note right
+    Select EIS by **priority**
+    (lowest priority value first)
+  end note
+
+  :For each required item type:
+  check EIS_count >= empty_IIS_count;
+
+  if (All requirements satisfied?) then (yes)
+    #LightGreen:QUEUED
+    **CAN GET ITEMS**
+    All ingredients available
+    Worker will make multiple trips;
+    stop
+  else (no)
+    #Pink:BLOCKED
+    **Missing ingredients**
+    Not enough EIS items;
+    stop
+  endif
 }
 
 @enduml
