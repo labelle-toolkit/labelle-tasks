@@ -309,6 +309,129 @@ If we choose a breaking change (Option B or C):
 2. Provide migration guide
 3. Consider compatibility mode for existing games
 
+---
+
+## Workstation Assignment Rules
+
+A workstation can receive a worker (transition from `Blocked` → `Queued`) when **any** of the following conditions is true:
+
+### Condition 1: FLUSH (Clear Leftover Items)
+
+```
+At least one IOS has item AND at least one EOS is empty
+```
+
+**Purpose**: Clear leftover items from an interrupted cycle before starting a new one.
+
+**Example**:
+```
+IOS: [Bread, null]  → has item
+EOS: [null, null]   → has space
+Result: CAN ASSIGN (worker will store Bread to EOS)
+```
+
+### Condition 2: PRODUCE (Ready to Process)
+
+```
+All IIS have items AND all IOS are empty
+```
+
+**Purpose**: All inputs are ready, no leftover outputs blocking - can start processing immediately.
+
+**Example**:
+```
+IIS: [Flour, Water]  → all filled
+IOS: [null]          → all empty
+Result: CAN ASSIGN (worker will start process_started)
+```
+
+### Condition 3: CAN GET ITEMS (Fill from Pantry/Storage)
+
+```
+For each empty IIS, there exists an EIS with matching item type
+```
+
+**Purpose**: The required ingredients are available in external storage to fill the workstation inputs.
+
+**Matching Rule**: `IIS.accepts` must match `EIS.item_type`
+
+**Example**:
+```
+IIS: [accepts: Potato (empty), accepts: Water (empty)]
+EIS: [item: Potato, item: Water, item: Flour]
+Result: CAN ASSIGN (worker will pickup Potato and Water from EIS)
+```
+
+**Counter-example**:
+```
+IIS: [accepts: Potato (empty), accepts: Butter (empty)]
+EIS: [item: Potato, item: Water]
+Result: CANNOT ASSIGN (no EIS has Butter)
+```
+
+### Important Constraints
+
+1. **IIS.accepts must never be null**: Each IIS must specify what item type it accepts. If `IIS.accepts == null`, the engine should throw an error. Think of IIS as recipe slots - they must define what ingredient they need.
+
+2. **EIS.item_type can be null**: An empty EIS has no item_type.
+
+3. **Conditions are evaluated as OR**: If ANY condition is true, the workstation is operable.
+
+### Decision Flow Diagram
+
+```
+┌─────────────────────────────────────┐
+│   Can Workstation Receive Worker?   │
+└─────────────────────────────────────┘
+                  │
+                  ▼
+    ┌─────────────────────────────┐
+    │  Condition 1: FLUSH         │
+    │  IOS has item AND           │
+    │  EOS has space?             │
+    └─────────────────────────────┘
+           │ YES              │ NO
+           ▼                  ▼
+     ┌─────────┐    ┌─────────────────────────────┐
+     │ QUEUED  │    │  Condition 2: PRODUCE       │
+     └─────────┘    │  All IIS filled AND         │
+                    │  All IOS empty?             │
+                    └─────────────────────────────┘
+                           │ YES              │ NO
+                           ▼                  ▼
+                     ┌─────────┐    ┌─────────────────────────────┐
+                     │ QUEUED  │    │  Condition 3: CAN GET ITEMS │
+                     └─────────┘    │  For each empty IIS,        │
+                                    │  exists EIS with matching   │
+                                    │  item_type?                 │
+                                    └─────────────────────────────┘
+                                           │ YES              │ NO
+                                           ▼                  ▼
+                                     ┌─────────┐        ┌─────────┐
+                                     │ QUEUED  │        │ BLOCKED │
+                                     └─────────┘        └─────────┘
+```
+
+### Priority Order (On Worker Arrival)
+
+When a worker arrives at a workstation, the engine handles conditions in priority order:
+
+| Priority | Condition | Action |
+|----------|-----------|--------|
+| 1 | IOS has items | Store to EOS (FLUSH) |
+| 2 | All IIS filled | Start processing (PRODUCE) |
+| 3 | IIS needs items | Pickup from EIS (CAN GET ITEMS) |
+
+### Open Questions
+
+1. **Multiple IIS needing same item type**: If two IIS slots accept `Potato`, do we need two EIS with potatoes, or can one EIS supply both (worker makes two trips)?
+
+2. **Partial matching**: What if only some IIS can be filled? Should worker start partial work or wait for all ingredients?
+
+3. **EIS selection strategy**: When multiple EIS have the same item type, which one to pick from? Closest? Priority? First available?
+
+4. **IIS already partially filled**: If some IIS are filled and some empty, should Condition 3 only check the empty ones?
+
 ## References
 
 - Current workflow: `src/handlers.zig`, `src/helpers.zig`

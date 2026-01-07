@@ -1,0 +1,59 @@
+@startuml workstation-assignment
+title Workstation Assignment Rules - Can Worker Be Assigned?
+
+start
+
+:Evaluate Workstation;
+
+if (IOS has item?) then (yes)
+  if (EOS has space?) then (yes)
+    #LightGreen:QUEUED
+    **FLUSH**
+    Clear leftover items;
+    stop
+  else (no)
+    :Continue to next check;
+  endif
+else (no)
+  :Continue to next check;
+endif
+
+if (All IIS filled?) then (yes)
+  if (All IOS empty?) then (yes)
+    #LightGreen:QUEUED
+    **PRODUCE**
+    Ready to process;
+    stop
+  else (no)
+    :Continue to next check;
+  endif
+else (no)
+  :Continue to next check;
+endif
+
+:Check each empty IIS;
+
+partition "CAN GET ITEMS" {
+  :For each empty IIS slot;
+
+  while (More empty IIS?) is (yes)
+    :Get IIS.accepts (required item type);
+    note right: IIS.accepts must NOT be null\nThrow error if null
+
+    if (Exists EIS with matching item_type?) then (yes)
+      :Mark IIS as fillable;
+    else (no)
+      #LightCoral:BLOCKED
+      **Missing ingredient**
+      No EIS has required item;
+      stop
+    endif
+  endwhile (no)
+
+  #LightGreen:QUEUED
+  **CAN GET ITEMS**
+  All ingredients available;
+  stop
+}
+
+@enduml

@@ -49,23 +49,34 @@ note bottom of EOS
 end note
 
 legend right
-  **Priority on Workstation Arrival:**
+  **Workstation Assignment Rules (Blocked -> Queued):**
+  Can assign worker if ANY condition is true:
 
-  **1. Check IOS (leftover items)**
-     - If IOS has item AND EOS has space:
-       Start Store step immediately
-     - If IOS has item AND EOS full:
-       Release worker (blocked)
+  **1. FLUSH** - IOS has item AND EOS has space
+     Clear leftover items from interrupted cycle
 
-  **2. Check IIS (ready to process?)**
-     - If Producer OR all IIS filled:
-       Start Process step
-       Game runs work timer
-       Game sends work_completed when done
-     - If IIS needs items:
-       Start Pickup step (move to EIS)
-     - If no EIS items available:
-       Release worker (blocked)
+  **2. PRODUCE** - All IIS filled AND all IOS empty
+     Ready to process immediately
+
+  **3. CAN GET ITEMS** - For each empty IIS,
+     exists EIS with matching item_type
+     (IIS.accepts must match EIS.item_type)
+
+  ----
+
+  **Priority on Worker Arrival:**
+
+  **1. FLUSH** - IOS has item?
+     - EOS has space: Store to EOS
+     - EOS full: Release worker
+
+  **2. PRODUCE** - All IIS filled?
+     - Start Process step
+     - Game sends work_completed when done
+
+  **3. CAN GET ITEMS** - IIS needs items?
+     - Start Pickup step (move to EIS)
+     - No matching EIS: Release worker
 end legend
 
 @enduml
