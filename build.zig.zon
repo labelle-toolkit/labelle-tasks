@@ -10,8 +10,8 @@
         },
         // labelle-engine for ECS integration (RFC #28)
         .@"labelle-engine" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-engine#v0.34.0",
-            .hash = "labelle_engine-0.34.0-rhO5vuvfDgASSDeY7jm7c3_RfL_t3l8Xf7Zd-HH6h-lx",
+            .url = "git+https://github.com/labelle-toolkit/labelle-engine#v0.35.1",
+            .hash = "labelle_engine-0.35.1-rhO5vt6AFgAgV09EYM23SEKVqrODvlOiSky8hI0j6NsT",
         },
     },
     .paths = .{
