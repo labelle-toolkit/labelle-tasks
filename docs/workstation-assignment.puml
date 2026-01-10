@@ -1,0 +1,68 @@
+@startuml workstation-assignment
+title Workstation Assignment Rules - Can Worker Be Assigned?
+
+start
+
+:Evaluate Workstation;
+
+partition "Condition 1: FLUSH" #LightBlue {
+  if (Any IOS has item?) then (yes)
+    if (Any EOS has space?) then (yes)
+      #LightGreen:QUEUED
+      **FLUSH**
+      Clear leftover items first;
+      stop
+    else (no)
+      :Continue to Condition 2;
+    endif
+  else (no)
+    :Continue to Condition 2;
+  endif
+}
+
+partition "Condition 2: PRODUCE" #LightYellow {
+  if (All IIS have items?) then (yes)
+    if (All IOS are empty?) then (yes)
+      #LightGreen:QUEUED
+      **PRODUCE**
+      Ready to process;
+      stop
+    else (no)
+      :Continue to Condition 3;
+    endif
+  else (no)
+    :Continue to Condition 3;
+  endif
+}
+
+partition "Condition 3: CAN GET ITEMS" #LightCoral {
+  :Count empty IIS slots by accepts type;
+  note right
+    Only count **empty** IIS slots
+    Filled IIS are already satisfied
+  end note
+
+  :Count EIS slots by item_type;
+  note right
+    Select EIS by **priority**
+    (lowest priority value first)
+  end note
+
+  :For each required item type:
+  check EIS_count >= empty_IIS_count;
+
+  if (All requirements satisfied?) then (yes)
+    #LightGreen:QUEUED
+    **CAN GET ITEMS**
+    All ingredients available
+    Worker will make multiple trips;
+    stop
+  else (no)
+    #Pink:BLOCKED
+    **Missing ingredients**
+    Not enough EIS items;
+    stop
+  endif
+}
+
+@enduml

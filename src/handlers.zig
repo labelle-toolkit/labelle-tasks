@@ -6,6 +6,8 @@ const log = std.log.scoped(.tasks);
 const types = @import("types.zig");
 const state_mod = @import("state.zig");
 
+const TargetType = types.TargetType;
+
 /// Creates handler functions for the engine
 pub fn Handlers(
     comptime GameId: type,
@@ -15,7 +17,7 @@ pub fn Handlers(
     return struct {
         const Self = @This();
         const StorageState = state_mod.StorageState(Item);
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
         const WorkstationData = state_mod.WorkstationData(GameId);
 
         // ============================================
@@ -28,8 +30,10 @@ pub fn Handlers(
                 return false;
             };
 
-            if (storage.has_item) {
-                log.err("item_added: storage {} already has item", .{storage_id});
+            // Allow setting item_type when has_item is true but item_type is null
+            // (for producer workstations where engine sets has_item=true during process completion)
+            if (storage.has_item and storage.item_type != null) {
+                log.err("item_added: storage {} already has item of type {s}", .{ storage_id, @tagName(storage.item_type.?) });
                 return false;
             }
 
@@ -72,7 +76,9 @@ pub fn Handlers(
             worker.state = .Idle;
             worker.assigned_workstation = null;
 
-            // Try to assign worker to a queued workstation
+            // Priority order: dangling items → transports → workstations
+            engine.evaluateDanglingItems();
+            engine.evaluateTransports();
             engine.tryAssignWorkers();
             return true;
         }
@@ -179,11 +185,22 @@ pub fn Handlers(
                     return false;
                 };
 
+                // Set movement target to EIS
+                worker.moving_to = .{
+                    .target = task.target_eis_id,
+                    .target_type = .storage,
+                };
+
                 // Dispatch store_started to move worker to EIS
                 engine.dispatcher.dispatch(.{ .store_started = .{
                     .worker_id = worker_id,
                     .storage_id = task.target_eis_id,
                     .item = item_type,
+                } });
+                engine.dispatcher.dispatch(.{ .movement_started = .{
+                    .worker_id = worker_id,
+                    .target = task.target_eis_id,
+                    .target_type = .storage,
                 } });
                 return true;
             }
@@ -244,14 +261,26 @@ pub fn Handlers(
                     .worker_id = worker_id,
                 } });
             } else {
-                // Need more pickups - select next EIS
+                // Need more pickups - select next EIS and move worker there
                 ws.selected_eis = engine.selectEis(ws_id);
                 if (ws.selected_eis) |eis_id| {
                     const item = engine.storages.get(eis_id).?.item_type.?;
+
+                    // Set movement target to EIS
+                    worker.moving_to = .{
+                        .target = eis_id,
+                        .target_type = .storage,
+                    };
+
                     engine.dispatcher.dispatch(.{ .pickup_started = .{
                         .worker_id = worker_id,
                         .storage_id = eis_id,
                         .item = item,
+                    } });
+                    engine.dispatcher.dispatch(.{ .movement_started = .{
+                        .worker_id = worker_id,
+                        .target = eis_id,
+                        .target_type = .storage,
                     } });
                 }
             }
@@ -315,10 +344,25 @@ pub fn Handlers(
                     }
                 }
 
+                const store_item = item orelse return true; // No item to store
+
+                // Set movement target to EOS
+                if (engine.workers.getPtr(worker_id)) |worker| {
+                    worker.moving_to = .{
+                        .target = eos_id,
+                        .target_type = .storage,
+                    };
+                }
+
                 engine.dispatcher.dispatch(.{ .store_started = .{
                     .worker_id = worker_id,
                     .storage_id = eos_id,
-                    .item = item orelse return true, // No item to store
+                    .item = store_item,
+                } });
+                engine.dispatcher.dispatch(.{ .movement_started = .{
+                    .worker_id = worker_id,
+                    .target = eos_id,
+                    .target_type = .storage,
                 } });
             }
 
@@ -358,6 +402,9 @@ pub fn Handlers(
                 // Clear worker task and set to idle
                 worker.dangling_task = null;
                 worker.state = .Idle;
+
+                // Re-evaluate workstation status since EIS now has item
+                engine.reevaluateWorkstations();
 
                 // Try to find new work - dangling items first, then workstations
                 engine.evaluateDanglingItems();
@@ -437,7 +484,9 @@ pub fn Handlers(
                 // Re-evaluate workstation status
                 engine.evaluateWorkstationStatus(ws_id);
 
-                // Try to assign workers
+                // Priority order: dangling items → transports → workstations
+                engine.evaluateDanglingItems();
+                engine.evaluateTransports();
                 engine.tryAssignWorkers();
             } else {
                 // More items to store
@@ -454,16 +503,58 @@ pub fn Handlers(
                     }
 
                     if (item) |it| {
+                        // Set movement target to EOS
+                        worker.moving_to = .{
+                            .target = eos_id,
+                            .target_type = .storage,
+                        };
+
                         engine.dispatcher.dispatch(.{ .store_started = .{
                             .worker_id = worker_id,
                             .storage_id = eos_id,
                             .item = it,
+                        } });
+                        engine.dispatcher.dispatch(.{ .movement_started = .{
+                            .worker_id = worker_id,
+                            .target = eos_id,
+                            .target_type = .storage,
                         } });
                     }
                 }
             }
 
             return true;
+        }
+
+        // ============================================
+        // Movement arrival handlers
+        // ============================================
+
+        /// Handle worker arrival at a dangling item
+        /// Worker picks up the item and moves to target EIS
+        pub fn handleDanglingPickupArrival(engine: *EngineType, worker_id: GameId) void {
+            const worker = engine.workers.getPtr(worker_id) orelse return;
+
+            const task = worker.dangling_task orelse return;
+            const item_type = engine.dangling_items.get(task.item_id) orelse return;
+
+            // Set movement target to EIS
+            worker.moving_to = .{
+                .target = task.target_eis_id,
+                .target_type = .storage,
+            };
+
+            // Dispatch store_started to move worker to EIS
+            engine.dispatcher.dispatch(.{ .store_started = .{
+                .worker_id = worker_id,
+                .storage_id = task.target_eis_id,
+                .item = item_type,
+            } });
+            engine.dispatcher.dispatch(.{ .movement_started = .{
+                .worker_id = worker_id,
+                .target = task.target_eis_id,
+                .target_type = .storage,
+            } });
         }
     };
 }

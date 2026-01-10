@@ -15,6 +15,16 @@ pub const EcsBackend = enum {
     zflecs,
 };
 
+/// GUI backend selection (must match labelle-engine)
+pub const GuiBackend = enum {
+    none,
+    raygui,
+    microui,
+    nuklear,
+    imgui,
+    clay,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -22,6 +32,7 @@ pub fn build(b: *std.Build) void {
     // Backend options - forwarded from parent project to ensure module compatibility
     const backend = b.option(Backend, "backend", "Graphics backend to use (default: raylib)") orelse .raylib;
     const ecs_backend = b.option(EcsBackend, "ecs_backend", "ECS backend to use (default: zig_ecs)") orelse .zig_ecs;
+    const gui_backend = b.option(GuiBackend, "gui_backend", "GUI backend to use (default: none)") orelse .none;
     const physics_enabled = b.option(bool, "physics", "Enable physics module (default: false)") orelse false;
 
     // Get dependencies
@@ -37,6 +48,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .backend = backend,
         .ecs_backend = ecs_backend,
+        .gui_backend = gui_backend,
         .physics = physics_enabled,
     });
     const engine_mod = engine_dep.module("labelle-engine");

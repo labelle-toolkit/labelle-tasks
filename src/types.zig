@@ -28,3 +28,10 @@ pub const Priority = enum(u8) {
     High = 2,
     Critical = 3,
 };
+
+/// Target type for worker movement
+pub const TargetType = enum {
+    workstation,
+    storage,
+    dangling_item,
+};

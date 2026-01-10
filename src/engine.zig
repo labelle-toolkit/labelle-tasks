@@ -16,6 +16,7 @@ pub const WorkerState = types.WorkerState;
 pub const WorkstationStatus = types.WorkstationStatus;
 pub const StepType = types.StepType;
 pub const Priority = types.Priority;
+pub const TargetType = types.TargetType;
 
 /// Pure state machine task orchestration engine
 /// Tracks abstract workflow state, emits hooks to game
@@ -37,7 +38,7 @@ pub fn Engine(
 
         // Import state types
         const StorageState = state_mod.StorageState(Item);
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
         const WorkstationData = state_mod.WorkstationData(GameId);
 
         // Import handlers and helpers
@@ -239,6 +240,7 @@ pub fn Engine(
                 .pickup_completed => |p| EventHandlers.handlePickupCompleted(self, p.worker_id),
                 .work_completed => |p| EventHandlers.handleWorkCompleted(self, p.workstation_id),
                 .store_completed => |p| EventHandlers.handleStoreCompleted(self, p.worker_id),
+                .worker_arrived => |p| EngineHelpers.handleWorkerArrival(self, p.worker_id),
             };
         }
 
@@ -268,6 +270,10 @@ pub fn Engine(
 
         pub fn storeCompleted(self: *Self, worker_id: GameId) bool {
             return self.handle(.{ .store_completed = .{ .worker_id = worker_id } });
+        }
+
+        pub fn workerArrived(self: *Self, worker_id: GameId) bool {
+            return self.handle(.{ .worker_arrived = .{ .worker_id = worker_id } });
         }
 
         // ============================================
@@ -390,6 +396,27 @@ pub fn Engine(
             return null;
         }
 
+        /// Find an EOS with an item that matches an empty EIS.
+        /// Used for inter-workstation transport (EOS → EIS delivery).
+        pub fn findEosToEisMatch(self: *const Self) ?struct { eos_id: GameId, eis_id: GameId, item: Item } {
+            var eos_iter = self.storages.iterator();
+            while (eos_iter.next()) |eos_entry| {
+                const eos = eos_entry.value_ptr.*;
+                if (eos.role != .eos or !eos.has_item) continue;
+                const item_type = eos.item_type orelse continue;
+
+                // Find empty EIS that accepts this item
+                if (self.findEmptyEisForItem(item_type)) |eis_id| {
+                    return .{
+                        .eos_id = eos_entry.key_ptr.*,
+                        .eis_id = eis_id,
+                        .item = item_type,
+                    };
+                }
+            }
+            return null;
+        }
+
         /// Get list of idle workers (allocated, caller must free)
         pub fn getIdleWorkers(self: *Self) ![]GameId {
             var list = std.ArrayListUnmanaged(GameId){};
@@ -432,12 +459,23 @@ pub fn Engine(
                         .target_eis_id = target_eis,
                     };
 
-                    // Dispatch hook to notify game
+                    // Set movement target to dangling item
+                    worker.moving_to = .{
+                        .target = item_id,
+                        .target_type = .dangling_item,
+                    };
+
+                    // Dispatch hooks to notify game
                     self.dispatcher.dispatch(.{ .pickup_dangling_started = .{
                         .worker_id = worker_id,
                         .item_id = item_id,
                         .item_type = item_type,
                         .target_eis_id = target_eis,
+                    } });
+                    self.dispatcher.dispatch(.{ .movement_started = .{
+                        .worker_id = worker_id,
+                        .target = item_id,
+                        .target_type = .dangling_item,
                     } });
 
                     // Only assign one item per evaluation cycle
@@ -445,6 +483,61 @@ pub fn Engine(
                     return;
                 }
             }
+        }
+
+        /// Evaluate EOS → EIS transport opportunities.
+        /// Assigns idle workers to transport items from EOS to matching empty EIS.
+        pub fn evaluateTransports(self: *Self) void {
+            const idle_workers = self.getIdleWorkers() catch return;
+            defer self.allocator.free(idle_workers);
+
+            if (idle_workers.len == 0) return;
+
+            // Find EOS → EIS match
+            const match = self.findEosToEisMatch() orelse return;
+
+            // Find nearest idle worker to EOS
+            const worker_id = self.findNearest(match.eos_id, idle_workers) orelse return;
+
+            const worker = self.workers.getPtr(worker_id) orelse return;
+
+            // Mark EOS as no longer having item (reserved for transport)
+            if (self.storages.getPtr(match.eos_id)) |eos| {
+                eos.has_item = false;
+                eos.item_type = null;
+            }
+
+            // Assign worker to transport task
+            worker.state = .Working;
+            worker.transport_task = .{
+                .from_eos_id = match.eos_id,
+                .to_eis_id = match.eis_id,
+                .item_type = match.item,
+            };
+            worker.moving_to = .{
+                .target = match.eos_id,
+                .target_type = .storage,
+            };
+
+            // Dispatch hooks
+            self.dispatcher.dispatch(.{ .transport_started = .{
+                .worker_id = worker_id,
+                .from_storage_id = match.eos_id,
+                .to_storage_id = match.eis_id,
+                .item = match.item,
+            } });
+            self.dispatcher.dispatch(.{ .movement_started = .{
+                .worker_id = worker_id,
+                .target = match.eos_id,
+                .target_type = .storage,
+            } });
+
+            std.log.scoped(.transport).info("evaluateTransports: assigned worker {d} to transport {s} from EOS {d} to EIS {d}", .{
+                worker_id,
+                @tagName(match.item),
+                match.eos_id,
+                match.eis_id,
+            });
         }
 
         // ============================================

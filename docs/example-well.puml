@@ -1,0 +1,76 @@
+@startuml example-well
+title Well Workstation Example (Producer)
+
+skinparam rectangle {
+  BackgroundColor<<ios>> LightYellow
+  BackgroundColor<<eos>> LightPink
+  BackgroundColor<<workstation>> White
+}
+
+' No EIS - Well doesn't need external inputs
+note as n1
+  **No EIS** - Well produces water
+  from nothing (it's a source)
+end note
+
+' Workstation - Well
+rectangle "Well (Producer Workstation)" <<workstation>> as well {
+  note as n2
+    **No IIS** - No inputs needed
+    isProducer() = true
+  end note
+
+  rectangle "PROCESS\n(Draw Water)" as process
+
+  rectangle "IOS 1\noutput: **Water**" <<ios>> as ios1
+}
+
+' EOS - Water Buckets / Storage
+rectangle "Water Storage" {
+  rectangle "EOS 1\nBucket\n(empty)" <<eos>> as eos1
+  rectangle "EOS 2\nBucket\n(empty)" <<eos>> as eos2
+  rectangle "EOS 3\nBucket\n(empty)" <<eos>> as eos3
+  rectangle "EOS 4\nBucket\n(empty)" <<eos>> as eos4
+}
+
+' Flow arrows
+process --> ios1 : Produce
+ios1 -[#blue]-> eos1 : Store
+
+note bottom of well
+  **Producer Assignment Check:**
+
+  **Condition 1 (FLUSH):**
+  IOS has item? No (empty)
+  → Continue to Condition 2
+
+  **Condition 2 (PRODUCE):**
+  All IIS filled? Yes (no IIS = vacuously true)
+  All IOS empty? Yes
+  → **QUEUED** ✓
+
+  **Worker Flow:**
+  1. Arrive at workstation
+  2. IOS empty → Start Process (draw water)
+  3. work_completed → IOS has Water
+  4. Store Water to EOS bucket
+  5. Cycle complete
+end note
+
+legend right
+  **Storage Configuration:**
+  |= Type |= Count |= Item |
+  | EIS | 0 | (none) |
+  | IIS | 0 | (none) |
+  | IOS | 1 | Water |
+  | EOS | 4 | Bucket |
+
+  **isProducer() = true**
+  (EIS.len == 0 AND IIS.len == 0)
+
+  **Producer Flow:**
+  (nothing) → IOS (Process)
+  IOS → EOS (Store)
+end legend
+
+@enduml

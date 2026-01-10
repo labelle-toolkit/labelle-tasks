@@ -1,0 +1,91 @@
+@startuml worker-workflow
+title Worker Workflow State Machine
+
+' Define states
+[*] --> Idle : Worker registered
+
+state Idle {
+  [*] --> WaitingForWork
+  WaitingForWork : Worker available
+  WaitingForWork : No assigned workstation
+}
+
+state Working {
+  [*] --> MovingToWorkstation
+
+  MovingToWorkstation : moving_to = workstation
+  MovingToWorkstation --> CheckIOS : worker_arrived
+
+  state CheckIOS <<choice>>
+  note right of CheckIOS : Priority 1:\nClear leftover items
+  CheckIOS --> ClearingIOS : IOS has item
+  CheckIOS --> CheckIIS : IOS empty
+
+  state ClearingIOS {
+    [*] --> CheckEOS
+    state CheckEOS <<choice>>
+    CheckEOS --> MovingToEOS_Clear : EOS has space
+    CheckEOS --> ReleaseWorker : EOS full
+
+    MovingToEOS_Clear : moving_to = EOS
+    MovingToEOS_Clear --> StoreItem_Clear : worker_arrived
+    StoreItem_Clear : IOS -> EOS transfer
+    StoreItem_Clear --> CheckIOS : store_completed\n(more IOS items?)
+  }
+
+  state CheckIIS <<choice>>
+  note left of CheckIIS : Priority 2:\nCheck if ready to process
+  CheckIIS --> Processing : isProducer OR\nall IIS filled
+  CheckIIS --> Pickup : IIS needs items
+  CheckIIS --> ReleaseWorker : No EIS items
+
+  state Pickup {
+    [*] --> MovingToEIS
+    MovingToEIS : moving_to = EIS
+    MovingToEIS --> PickupItem : worker_arrived
+    PickupItem : EIS -> IIS transfer
+    PickupItem --> CheckIISAfterPickup : pickup_completed
+
+    state CheckIISAfterPickup <<choice>>
+    CheckIISAfterPickup --> MovingToEIS : IIS not full
+    CheckIISAfterPickup --> Processing : all IIS filled
+  }
+
+  state Processing {
+    [*] --> WaitingForWork_Process
+    WaitingForWork_Process : Game runs work timer
+    WaitingForWork_Process : Engine emits process_started
+    WaitingForWork_Process --> TransformItems : work_completed
+    TransformItems : IIS -> IOS (transformation)
+  }
+
+  state Store {
+    [*] --> MovingToEOS
+    MovingToEOS : moving_to = EOS
+    MovingToEOS --> StoreItem : worker_arrived
+    StoreItem : IOS -> EOS transfer
+    StoreItem --> CheckMoreIOS : store_completed
+
+    state CheckMoreIOS <<choice>>
+    CheckMoreIOS --> MovingToEOS : more IOS items
+    CheckMoreIOS --> CycleComplete : IOS empty
+  }
+
+  TransformItems --> Store : process_completed
+
+  CycleComplete : cycles_completed++
+  CycleComplete --> ReleaseWorker
+}
+
+ReleaseWorker --> Idle : worker_released
+
+state Unavailable {
+  [*] --> Paused
+  Paused : Worker cannot work
+}
+
+Idle --> Working : worker_assigned
+Working --> Unavailable : worker_unavailable
+Unavailable --> Idle : worker_available
+
+@enduml

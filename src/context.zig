@@ -235,5 +235,26 @@ pub fn TaskEngineContext(
                 eng.evaluateDanglingItems();
             }
         }
+
+        /// Notify that a worker has arrived at their movement target.
+        /// The engine determines what to do next based on MovingTo state.
+        pub fn workerArrived(worker_id: GameId) bool {
+            const eng = task_engine orelse return false;
+            return eng.workerArrived(worker_id);
+        }
+
+        /// Notify that work was completed at a workstation.
+        /// Called by the game when work timer/progress finishes.
+        pub fn workCompleted(workstation_id: GameId) bool {
+            const eng = task_engine orelse return false;
+            return eng.workCompleted(workstation_id);
+        }
+
+        /// Notify that an item was added to a storage.
+        /// Used by game to set output item types for producer workstations.
+        pub fn itemAdded(storage_id: GameId, item: Item) bool {
+            const eng = task_engine orelse return false;
+            return eng.itemAdded(storage_id, item);
+        }
     };
 }

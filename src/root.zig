@@ -65,6 +65,7 @@
 
 const engine_mod = @import("engine.zig");
 const hooks_mod = @import("hooks.zig");
+const types_mod = @import("types.zig");
 
 // === Core Engine ===
 
@@ -128,6 +129,9 @@ pub const Priority = engine_mod.Priority;
 
 /// Storage role in the workflow (EIS, IIS, IOS, EOS).
 pub const StorageRole = state_mod.StorageRole;
+
+/// Target type for movement (workstation, storage, dangling_item).
+pub const TargetType = types_mod.TargetType;
 
 // === ECS Integration (RFC #28) ===
 
@@ -291,6 +295,8 @@ pub fn createEngineHooks(
                 from_storage_id: if (@hasField(Original, "from_storage_id")) @FieldType(Original, "from_storage_id") else void = if (@hasField(Original, "from_storage_id")) undefined else {},
                 to_storage_id: if (@hasField(Original, "to_storage_id")) @FieldType(Original, "to_storage_id") else void = if (@hasField(Original, "to_storage_id")) undefined else {},
                 cycles_completed: if (@hasField(Original, "cycles_completed")) @FieldType(Original, "cycles_completed") else void = if (@hasField(Original, "cycles_completed")) undefined else {},
+                target: if (@hasField(Original, "target")) @FieldType(Original, "target") else void = if (@hasField(Original, "target")) undefined else {},
+                target_type: if (@hasField(Original, "target_type")) @FieldType(Original, "target_type") else void = if (@hasField(Original, "target_type")) undefined else {},
 
                 // Added context fields
                 registry: ?*Registry,
@@ -332,6 +338,7 @@ pub fn createEngineHooks(
         pub fn cycle_completed(payload: anytype) void { dispatch("cycle_completed", payload); }
         pub fn transport_started(payload: anytype) void { dispatch("transport_started", payload); }
         pub fn transport_completed(payload: anytype) void { dispatch("transport_completed", payload); }
+        pub fn movement_started(payload: anytype) void { dispatch("movement_started", payload); }
     };
 
     const MergedHooks = logging_hooks_mod.MergeHooks(WrappedHooks, logging_hooks_mod.LoggingHooks);

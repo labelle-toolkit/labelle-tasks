@@ -1,0 +1,80 @@
+@startuml movement-tracking
+title Movement Tracking System
+
+state "Idle" as idle #white
+state "Moving to Workstation" as move_ws #LightBlue
+state "Check IOS" as check_ios #LightYellow
+state "Check IIS" as check_iis #LightYellow
+state "Clearing IOS (Store)" as clearing #LightGreen
+state "Pickup Phase" as pickup #LightGreen
+state "Process Phase" as process #LightGreen
+state "Store Phase" as store #LightGreen
+
+move_ws : moving_to.target = workstation_id
+move_ws : moving_to.target_type = .workstation
+
+check_ios : Priority 1: Leftover items in IOS?
+
+check_iis : Priority 2: All IIS filled?
+
+clearing : current_step = Store
+clearing : Worker moves to EOS
+clearing : Stores leftover item
+
+pickup : current_step = Pickup
+pickup : Worker moves to EIS
+pickup : Picks up item to IIS
+
+process : current_step = Process
+process : Game handles timer
+process : Emits process_started
+process : Waits for work_completed
+
+store : current_step = Store
+store : Worker moves to EOS
+store : Stores processed item
+
+[*] --> idle
+idle --> move_ws : worker_assigned\nmovement_started
+move_ws --> check_ios : worker_arrived
+
+check_ios --> clearing : IOS has item\n& EOS has space
+check_ios --> idle : IOS has item\n& EOS full\n(release worker)
+check_ios --> check_iis : IOS empty
+
+check_iis --> process : All IIS filled\nOR isProducer
+check_iis --> pickup : IIS needs items
+check_iis --> idle : No EIS items\n(release worker)
+
+clearing --> check_ios : more IOS items
+clearing --> check_iis : IOS cleared
+
+pickup --> pickup : more pickups needed\nmovement_started
+pickup --> process : All IIS filled
+
+process --> store : work_completed\nprocess_completed
+
+store --> store : more items to store\nmovement_started
+store --> idle : IOS empty\ncycle_completed\nworker_released
+
+legend right
+  |= Color |= Meaning |
+  | <#LightBlue> | Moving |
+  | <#LightYellow> | Decision |
+  | <#LightGreen> | Working |
+
+  **Hook Events (Engine -> Game):**
+  - movement_started
+  - pickup_started
+  - process_started
+  - process_completed
+  - store_started
+  - cycle_completed
+  - worker_released
+
+  **Game Events (Game -> Engine):**
+  - worker_arrived
+  - work_completed
+end legend
+
+@enduml
