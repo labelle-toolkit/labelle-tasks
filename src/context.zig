@@ -222,6 +222,37 @@ pub fn TaskEngineContext(
             return eng.storeCompleted(worker_id);
         }
 
+        /// Notify that work was completed at a workstation.
+        pub fn workCompleted(workstation_id: GameId) bool {
+            const eng = task_engine orelse return false;
+            return eng.workCompleted(workstation_id);
+        }
+
+        /// Notify that an item was added to a storage.
+        pub fn itemAdded(storage_id: GameId, item: Item) bool {
+            const eng = task_engine orelse return false;
+            return eng.itemAdded(storage_id, item);
+        }
+
+        /// Notify that a worker became available.
+        pub fn workerAvailable(worker_id: GameId) bool {
+            const eng = task_engine orelse return false;
+            return eng.workerAvailable(worker_id);
+        }
+
+        /// Generic handler for when a worker arrives at its destination.
+        /// Automatically determines the correct completion based on current step.
+        /// Returns true if an event was handled.
+        pub fn workerArrived(worker_id: GameId) bool {
+            const eng = task_engine orelse return false;
+            const step = eng.getWorkerCurrentStep(worker_id) orelse return false;
+            return switch (step) {
+                .Pickup => eng.pickupCompleted(worker_id),
+                .Store => eng.storeCompleted(worker_id),
+                .Process => false, // Process uses workCompleted when timer finishes
+            };
+        }
+
         /// Notify that a dangling pickup was completed.
         /// Uses the same handler as regular pickup - the engine differentiates
         /// based on worker.dangling_task state.

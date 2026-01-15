@@ -303,6 +303,11 @@ pub fn Engine(
             return worker.state;
         }
 
+        pub fn getWorkerCurrentStep(self: *const Self, worker_id: GameId) ?StepType {
+            const worker = self.workers.get(worker_id) orelse return null;
+            return worker.current_step;
+        }
+
         pub fn getWorkstationStatus(self: *const Self, workstation_id: GameId) ?WorkstationStatus {
             const ws = self.workstations.get(workstation_id) orelse return null;
             return ws.status;
