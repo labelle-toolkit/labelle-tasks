@@ -1,0 +1,18 @@
+# Labelle Plugin Metadata
+# This file declares compatibility requirements for this plugin
+
+name = "labelle-tasks"
+version = "0.8.0"
+description = "Task and worker management system for Labelle Engine"
+
+# Engine version compatibility
+min_version = "0.52.0"
+max_version = "0.53.0"
+reason = "Requires Entity and Registry APIs introduced in 0.52.0"
+
+# API stability
+stability = "experimental"
+
+# Future: Migration path to engine-agnostic API
+migration_target = "1.0.0"
+migration_notes = "Will become engine-agnostic using comptime generics"
