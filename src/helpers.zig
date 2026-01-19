@@ -62,17 +62,17 @@ pub fn Helpers(
                 return true;
             }
 
-            // Regular workstation: needs items in EIS and space in EOS
-            var has_input = false;
+            // Regular workstation: needs ALL EIS to have items and space in EOS
+            // (All ingredients must be present before processing can begin)
             for (ws.eis) |eis_id| {
                 if (engine.storages.get(eis_id)) |storage| {
-                    if (storage.has_item) {
-                        has_input = true;
-                        break;
+                    if (!storage.has_item) {
+                        return false; // Missing ingredient
                     }
+                } else {
+                    return false; // Storage not found
                 }
             }
-            if (!has_input) return false;
 
             var has_output_space = false;
             for (ws.eos) |eos_id| {

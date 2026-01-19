@@ -28,8 +28,11 @@ pub fn Handlers(
                 return false;
             };
 
-            if (storage.has_item) {
-                log.err("item_added: storage {} already has item", .{storage_id});
+            // Allow setting item_type even if has_item is already true
+            // This is needed for IOS where task engine sets has_item=true in workCompleted
+            // but game sets item_type via process_completed hook
+            if (storage.has_item and storage.item_type != null) {
+                log.warn("item_added: storage {} already has item {s}, ignoring", .{ storage_id, @tagName(storage.item_type.?) });
                 return false;
             }
 
@@ -359,9 +362,11 @@ pub fn Handlers(
                 worker.dangling_task = null;
                 worker.state = .Idle;
 
-                // Try to find new work - dangling items first, then workstations
+                // Re-evaluate workstations (EIS now has item, may become Queued)
+                // This also calls tryAssignWorkers() at the end
+                engine.reevaluateWorkstations();
+                // Also check for remaining dangling items
                 engine.evaluateDanglingItems();
-                engine.tryAssignWorkers();
 
                 return true;
             }
