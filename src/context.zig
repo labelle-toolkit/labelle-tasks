@@ -34,7 +34,6 @@
 const std = @import("std");
 const ecs_bridge = @import("ecs_bridge.zig");
 const engine_mod = @import("engine.zig");
-const labelle_engine = @import("labelle-engine");
 
 // ============================================
 // Shared Global State (accessible from hooks without Context type)
@@ -57,12 +56,15 @@ pub fn getSharedGame(comptime GameType: type) ?*GameType {
     return @ptrCast(@alignCast(ptr));
 }
 
-/// Context for managing task engine lifecycle and game integration.
+/// Context for managing task engine lifecycle and game integration (with injected engine types).
+/// This version accepts EngineTypes to avoid importing labelle-engine directly,
+/// which prevents module collision in WASM builds.
 /// Eliminates boilerplate for vtable wrapping, global state, and movement queuing.
-pub fn TaskEngineContext(
+pub fn TaskEngineContextWith(
     comptime GameId: type,
     comptime Item: type,
     comptime Hooks: type,
+    comptime EngineTypes: type,
 ) type {
     return struct {
         const Self = @This();
@@ -70,6 +72,11 @@ pub fn TaskEngineContext(
         pub const Engine = engine_mod.Engine(GameId, Item, Hooks);
         pub const EcsInterface = ecs_bridge.EcsInterface(GameId, Item);
         pub const InterfaceStorage = ecs_bridge.InterfaceStorage(GameId, Item);
+
+        // Injected types from labelle-engine
+        const Registry = EngineTypes.Registry;
+        const Position = EngineTypes.Position;
+        const entityFromU64 = EngineTypes.entityFromU64;
 
         // ============================================
         // Global State
@@ -127,11 +134,10 @@ pub fn TaskEngineContext(
         /// Default distance function using Position components.
         /// Calculates euclidean distance between two entities.
         fn defaultDistanceFn(from_id: GameId, to_id: GameId) ?f32 {
-            const registry = getRegistry(labelle_engine.Registry) orelse return null;
-            const Position = labelle_engine.render.Position;
+            const registry = getRegistry(Registry) orelse return null;
 
-            const from_entity = labelle_engine.entityFromU64(from_id);
-            const to_entity = labelle_engine.entityFromU64(to_id);
+            const from_entity = entityFromU64(from_id);
+            const to_entity = entityFromU64(to_id);
 
             const from_pos = registry.tryGet(Position, from_entity) orelse return null;
             const to_pos = registry.tryGet(Position, to_entity) orelse return null;
@@ -268,3 +274,7 @@ pub fn TaskEngineContext(
         }
     };
 }
+
+// Note: TaskEngineContext has been removed. Use TaskEngineContextWith instead,
+// which requires passing EngineTypes to avoid WASM module collision.
+// For the typical use case with labelle-engine, pass engine.EngineTypes.
