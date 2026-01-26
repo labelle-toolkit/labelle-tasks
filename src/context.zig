@@ -240,6 +240,12 @@ pub fn TaskEngineContextWith(
             return eng.itemAdded(storage_id, item);
         }
 
+        /// Notify that an item was removed from a storage.
+        pub fn itemRemoved(storage_id: GameId) bool {
+            const eng = task_engine orelse return false;
+            return eng.itemRemoved(storage_id);
+        }
+
         /// Notify that a worker became available.
         pub fn workerAvailable(worker_id: GameId) bool {
             const eng = task_engine orelse return false;
