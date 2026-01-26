@@ -66,9 +66,16 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
                     if (@hasDecl(Entity, "invalid")) {
                         return Entity.invalid;
                     } else {
-                        // Use 0 as invalid entity - bitcast from the correct backing type
-                        const BackingInt = @typeInfo(Entity).@"struct".backing_integer orelse u32;
-                        return @bitCast(@as(BackingInt, 0));
+                        // Use 0 as invalid entity - works for integer and struct-based entities
+                        const T = @typeInfo(Entity);
+                        switch (T) {
+                            .int => return 0,
+                            .@"struct" => {
+                                const BackingInt = T.@"struct".backing_integer orelse u32;
+                                return @bitCast(@as(BackingInt, 0));
+                            },
+                            else => @compileError("Entity must be an integer or packed struct type"),
+                        }
                     }
                 }
 

@@ -275,7 +275,6 @@ pub fn TaskEngineContextWith(
     };
 }
 
-/// Legacy alias for backward compatibility.
-/// Note: This requires labelle-engine to be a dependency. For WASM builds,
-/// use createEngineHooks() which uses TaskEngineContextWith internally.
-pub const TaskEngineContext = TaskEngineContextWith;
+// Note: TaskEngineContext has been removed. Use TaskEngineContextWith instead,
+// which requires passing EngineTypes to avoid WASM module collision.
+// For the typical use case with labelle-engine, pass engine.EngineTypes.
