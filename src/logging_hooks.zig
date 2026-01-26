@@ -121,6 +121,14 @@ pub const LoggingHooks = struct {
             payload.item,
         });
     }
+
+    pub fn input_consumed(payload: anytype) void {
+        std.log.info("[TaskEngine] input_consumed: workstation={d}, storage={d}, item={}", .{
+            payload.workstation_id,
+            payload.storage_id,
+            payload.item,
+        });
+    }
 };
 
 /// Merges two hook structs, with Primary taking precedence over Fallback.
@@ -151,5 +159,6 @@ pub fn MergeHooks(comptime Primary: type, comptime Fallback: type) type {
         pub fn transport_completed(payload: anytype) void { dispatch("transport_completed", payload); }
         pub fn pickup_dangling_started(payload: anytype) void { dispatch("pickup_dangling_started", payload); }
         pub fn item_delivered(payload: anytype) void { dispatch("item_delivered", payload); }
+        pub fn input_consumed(payload: anytype) void { dispatch("input_consumed", payload); }
     };
 }

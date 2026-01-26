@@ -279,9 +279,18 @@ pub fn Handlers(
             };
 
             // Update abstract state: IIS → IOS transformation
-            // Clear all IIS
+            // Emit input_consumed for each IIS item, then clear
             for (ws.iis) |iis_id| {
                 if (engine.storages.getPtr(iis_id)) |storage| {
+                    if (storage.has_item) {
+                        if (storage.item_type) |item| {
+                            engine.dispatcher.dispatch(.{ .input_consumed = .{
+                                .workstation_id = workstation_id,
+                                .storage_id = iis_id,
+                                .item = item,
+                            } });
+                        }
+                    }
                     storage.has_item = false;
                     storage.item_type = null;
                 }

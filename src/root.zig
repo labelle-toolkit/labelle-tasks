@@ -332,6 +332,7 @@ pub fn createEngineHooks(
         pub fn cycle_completed(payload: anytype) void { dispatch("cycle_completed", payload); }
         pub fn transport_started(payload: anytype) void { dispatch("transport_started", payload); }
         pub fn transport_completed(payload: anytype) void { dispatch("transport_completed", payload); }
+        pub fn input_consumed(payload: anytype) void { dispatch("input_consumed", payload); }
     };
 
     const MergedHooks = logging_hooks_mod.MergeHooks(WrappedHooks, logging_hooks_mod.LoggingHooks);

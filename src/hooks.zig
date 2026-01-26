@@ -78,6 +78,13 @@ pub fn TaskHookPayload(comptime GameId: type, comptime Item: type) type {
             item_type: Item,
             storage_id: GameId,
         },
+
+        // Input consumed (when IIS items are consumed during processing)
+        input_consumed: struct {
+            workstation_id: GameId,
+            storage_id: GameId,
+            item: Item,
+        },
     };
 }
 
@@ -160,6 +167,7 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
                 .transport_completed => |p| self.call("transport_completed", p),
                 .pickup_dangling_started => |p| self.call("pickup_dangling_started", p),
                 .item_delivered => |p| self.call("item_delivered", p),
+                .input_consumed => |p| self.call("input_consumed", p),
             }
         }
 
