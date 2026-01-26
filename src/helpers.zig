@@ -45,21 +45,25 @@ pub fn Helpers(
         }
 
         pub fn canWorkstationOperate(engine: *EngineType, ws: *const WorkstationData) bool {
-            // Producer: just needs empty IOS and empty EOS
+            // Producer: just needs empty IOS and at least one empty EOS
             if (ws.isProducer()) {
-                // Check IOS has space
+                // Check IOS has space (all IOS must be empty for producer to start new cycle)
                 for (ws.ios) |ios_id| {
                     if (engine.storages.get(ios_id)) |storage| {
                         if (storage.has_item) return false; // IOS full
                     }
                 }
-                // Check EOS has space
+                // Check at least one EOS has space
+                var has_eos_space = false;
                 for (ws.eos) |eos_id| {
                     if (engine.storages.get(eos_id)) |storage| {
-                        if (storage.has_item) return false; // EOS full
+                        if (!storage.has_item) {
+                            has_eos_space = true;
+                            break;
+                        }
                     }
                 }
-                return true;
+                return has_eos_space;
             }
 
             // Regular workstation: needs ALL EIS to have items and space in EOS

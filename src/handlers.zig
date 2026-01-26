@@ -75,8 +75,13 @@ pub fn Handlers(
             worker.state = .Idle;
             worker.assigned_workstation = null;
 
-            // Try to assign worker to a queued workstation
-            engine.tryAssignWorkers();
+            // First, try to assign worker to pick up dangling items (higher priority)
+            engine.evaluateDanglingItems();
+
+            // If worker is still idle, try to assign to a queued workstation
+            if (worker.state == .Idle) {
+                engine.tryAssignWorkers();
+            }
             return true;
         }
 
@@ -371,11 +376,20 @@ pub fn Handlers(
                 worker.dangling_task = null;
                 worker.state = .Idle;
 
-                // Re-evaluate workstations (EIS now has item, may become Queued)
-                // This also calls tryAssignWorkers() at the end
-                engine.reevaluateWorkstations();
-                // Also check for remaining dangling items
+                // First, check for remaining dangling items (higher priority)
                 engine.evaluateDanglingItems();
+
+                // Re-evaluate workstations (EIS now has item, may become Queued)
+                // Only assign to workstations if worker is still idle
+                if (worker.state == .Idle) {
+                    engine.reevaluateWorkstations();
+                } else {
+                    // Worker was assigned to dangling item, just re-evaluate statuses
+                    var ws_iter = engine.workstations.keyIterator();
+                    while (ws_iter.next()) |ws_id| {
+                        engine.evaluateWorkstationStatus(ws_id.*);
+                    }
+                }
 
                 return true;
             }
