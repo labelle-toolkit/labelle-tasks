@@ -209,7 +209,7 @@ pub fn Workstation(comptime Item: type) type {
 }
 
 /// Bind function for plugin component integration.
-/// Returns a struct with all component types parameterized by Item.
+/// Returns a struct with all component types parameterized by Item and EngineTypes.
 /// The generator iterates public decls to find component types.
 ///
 /// Example:
@@ -220,17 +220,18 @@ pub fn Workstation(comptime Item: type) type {
 ///         .name = "labelle-tasks",
 ///         .path = "../../labelle-tasks",
 ///         .bind = .{
-///             .{ .func = "bind", .args = .{"enums.items.ItemType"} },
+///             .{ .func = "bind", .args = .{"Items", "engine.EngineTypes"} },
 ///         },
 ///     },
 /// },
 /// ```
-pub fn bind(comptime Item: type) type {
+pub fn bind(comptime Item: type, comptime EngineTypes: type) type {
+    const Components = components_mod.ComponentsWith(EngineTypes);
     return struct {
-        pub const Storage = components_mod.Storage(Item);
-        pub const Worker = components_mod.Worker(Item);
-        pub const DanglingItem = components_mod.DanglingItem(Item);
-        pub const Workstation = components_mod.Workstation(Item);
+        pub const Storage = Components.Storage(Item);
+        pub const Worker = Components.Worker(Item);
+        pub const DanglingItem = Components.DanglingItem(Item);
+        pub const Workstation = Components.Workstation(Item);
     };
 }
 
@@ -241,6 +242,7 @@ pub fn bind(comptime Item: type) type {
 /// - GameId: Entity identifier type (usually u64)
 /// - ItemType: Item enum for the task system
 /// - GameHooks: Game-specific task hook handlers (store_started, pickup_dangling_started, etc.)
+/// - EngineTypes: Type bundle from labelle-engine containing HookPayload, Registry, Game, etc.
 ///
 /// Returns a struct containing:
 /// - Context: The TaskEngineContext for accessing engine/registry
@@ -252,6 +254,7 @@ pub fn bind(comptime Item: type) type {
 ///
 /// Example:
 /// ```zig
+/// const engine = @import("labelle-engine");
 /// const tasks = @import("labelle-tasks");
 ///
 /// const GameHooks = struct {
@@ -262,17 +265,17 @@ pub fn bind(comptime Item: type) type {
 ///     }
 /// };
 ///
-/// pub const TaskHooks = tasks.createEngineHooks(u64, ItemType, GameHooks);
+/// pub const TaskHooks = tasks.createEngineHooks(u64, ItemType, GameHooks, engine.EngineTypes);
 /// pub const Context = TaskHooks.Context;
 /// ```
 pub fn createEngineHooks(
     comptime GameId: type,
     comptime ItemType: type,
     comptime GameHooks: type,
+    comptime EngineTypes: type,
 ) type {
-    const labelle_engine = @import("labelle-engine");
-    const Registry = labelle_engine.Registry;
-    const Game = labelle_engine.Game;
+    const Registry = EngineTypes.Registry;
+    const Game = EngineTypes.Game;
 
     // Create a wrapper that enriches payloads with registry and game.
     // Uses shared global storage from context module (set by ensureContext).
@@ -336,7 +339,7 @@ pub fn createEngineHooks(
     };
 
     const MergedHooks = logging_hooks_mod.MergeHooks(WrappedHooks, logging_hooks_mod.LoggingHooks);
-    const Ctx = context_mod.TaskEngineContext(GameId, ItemType, MergedHooks);
+    const Ctx = context_mod.TaskEngineContextWith(GameId, ItemType, MergedHooks, EngineTypes);
 
     return struct {
         pub const Context = Ctx;
@@ -345,7 +348,7 @@ pub fn createEngineHooks(
 
         /// Initialize task engine during game initialization.
         /// Uses default euclidean distance function based on Position components.
-        pub fn game_init(payload: labelle_engine.HookPayload) void {
+        pub fn game_init(payload: EngineTypes.HookPayload) void {
             const info = payload.game_init;
 
             Context.init(info.allocator) catch |err| {
@@ -357,7 +360,7 @@ pub fn createEngineHooks(
         }
 
         /// Re-evaluate dangling items after scene is loaded (all entities now registered)
-        pub fn scene_load(payload: labelle_engine.HookPayload) void {
+        pub fn scene_load(payload: EngineTypes.HookPayload) void {
             const info = payload.scene_load;
             std.log.debug("[labelle-tasks] scene_load: {s} - re-evaluating dangling items", .{info.name});
 
@@ -367,7 +370,7 @@ pub fn createEngineHooks(
         }
 
         /// Clean up task engine on game deinit
-        pub fn game_deinit(payload: labelle_engine.HookPayload) void {
+        pub fn game_deinit(payload: EngineTypes.HookPayload) void {
             _ = payload;
             Context.deinit();
             std.log.info("[labelle-tasks] Task engine cleaned up", .{});
