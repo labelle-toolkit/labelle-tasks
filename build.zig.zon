@@ -1,7 +1,7 @@
 .{
     .fingerprint = 0x9883692330f70d05,
     .name = .labelle_tasks,
-    .version = "0.11.0",
+    .version = "0.12.0",
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .zspec = .{
@@ -10,8 +10,8 @@
         },
         // labelle-engine for ECS integration (RFC #28)
         .@"labelle-engine" = .{
-            .url = "git+https://github.com/labelle-toolkit/labelle-engine#v0.52.5",
-            .hash = "labelle_engine-0.52.5-rhO5vsd3GwDAwJrxOKXqBTo_98LGhJpgHjyRbr1pKD5m",
+            .url = "git+https://github.com/labelle-toolkit/labelle-engine#v0.52.19",
+            .hash = "labelle_engine-0.52.19-rhO5vshUVQGETkUglFczq06RK7A2eQfDGl0iAkwll7Wl",
         },
     },
     .paths = .{
