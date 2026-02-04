@@ -413,17 +413,46 @@ pub fn Engine(
 
         /// Evaluate dangling items and try to assign workers
         pub fn evaluateDanglingItems(self: *Self) void {
+            const log = std.log.scoped(.tasks);
+
             // Get idle workers (we need to free this later)
             const idle_workers = self.getIdleWorkers() catch return;
             defer self.allocator.free(idle_workers);
 
             if (idle_workers.len == 0) return;
 
+            log.debug("evaluateDanglingItems: {d} idle workers, {d} dangling items", .{
+                idle_workers.len,
+                self.dangling_items.count(),
+            });
+
             // For each dangling item, try to find a worker and EIS
             var dangling_iter = self.dangling_items.iterator();
             while (dangling_iter.next()) |entry| {
                 const item_id = entry.key_ptr.*;
                 const item_type = entry.value_ptr.*;
+
+                // BUG FIX: Check if another worker is already assigned to this item
+                var item_already_assigned = false;
+                var assigned_worker_id: ?GameId = null;
+                var worker_check_iter = self.workers.iterator();
+                while (worker_check_iter.next()) |worker_entry| {
+                    if (worker_entry.value_ptr.dangling_task) |task| {
+                        if (task.item_id == item_id) {
+                            item_already_assigned = true;
+                            assigned_worker_id = worker_entry.key_ptr.*;
+                            break;
+                        }
+                    }
+                }
+
+                if (item_already_assigned) {
+                    log.debug("evaluateDanglingItems: item {d} already assigned to worker {d}, skipping", .{
+                        item_id,
+                        assigned_worker_id.?,
+                    });
+                    continue;
+                }
 
                 // Find an empty EIS that accepts this item type
                 const target_eis = self.findEmptyEisForItem(item_type) orelse continue;
@@ -433,6 +462,11 @@ pub fn Engine(
 
                 // Assign worker to pick up this dangling item
                 if (self.workers.getPtr(worker_id)) |worker| {
+                    log.debug("evaluateDanglingItems: assigning worker {d} to item {d}", .{
+                        worker_id,
+                        item_id,
+                    });
+
                     worker.state = .Working;
                     worker.dangling_task = .{
                         .item_id = item_id,

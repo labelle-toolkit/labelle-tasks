@@ -184,6 +184,14 @@ pub fn Handlers(
             if (worker.dangling_task) |task| {
                 const item_type = engine.dangling_items.get(task.item_id) orelse {
                     log.err("pickup_completed: dangling item {} no longer exists", .{task.item_id});
+                    // BUG FIX: Clean up worker state so it doesn't get stuck
+                    worker.dangling_task = null;
+                    worker.state = .Idle;
+                    // Try to assign new task
+                    engine.evaluateDanglingItems();
+                    if (worker.state == .Idle) {
+                        engine.tryAssignWorkers();
+                    }
                     return false;
                 };
 
@@ -235,16 +243,27 @@ pub fn Handlers(
 
             // Check if all IIS are filled
             var all_iis_filled = true;
+            var iis_filled_count: usize = 0;
+            var iis_total_count: usize = 0;
             for (ws.iis) |iis_id| {
+                iis_total_count += 1;
                 if (engine.storages.get(iis_id)) |iis_storage| {
                     if (!iis_storage.has_item) {
                         all_iis_filled = false;
-                        break;
+                    } else {
+                        iis_filled_count += 1;
                     }
                 }
             }
 
-            if (all_iis_filled or ws.isProducer()) {
+            // BUG FIX: Only process if ALL IIS are filled (not just some)
+            // For non-producers, require at least 1 IIS and all must be filled
+            const can_process = if (ws.isProducer())
+                true
+            else
+                (iis_total_count > 0 and iis_filled_count == iis_total_count and all_iis_filled);
+
+            if (can_process) {
                 // Move to Process step
                 ws.current_step = .Process;
                 engine.dispatcher.dispatch(.{ .process_started = .{
@@ -352,6 +371,14 @@ pub fn Handlers(
             if (worker.dangling_task) |task| {
                 const item_type = engine.dangling_items.get(task.item_id) orelse {
                     log.err("store_completed: dangling item {} no longer exists", .{task.item_id});
+                    // BUG FIX: Clean up worker state so it doesn't get stuck
+                    worker.dangling_task = null;
+                    worker.state = .Idle;
+                    // Try to assign new task
+                    engine.evaluateDanglingItems();
+                    if (worker.state == .Idle) {
+                        engine.tryAssignWorkers();
+                    }
                     return false;
                 };
 
