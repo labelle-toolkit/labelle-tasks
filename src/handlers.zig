@@ -174,6 +174,17 @@ pub fn Handlers(
         // Step completion handlers
         // ============================================
 
+        /// Helper function to recover worker state when a dangling item no longer exists
+        fn recoverWorkerFromMissingDanglingItem(engine: *EngineType, worker: *WorkerData) void {
+            worker.dangling_task = null;
+            worker.state = .Idle;
+            // Try to assign new task
+            engine.evaluateDanglingItems();
+            if (worker.state == .Idle) {
+                engine.tryAssignWorkers();
+            }
+        }
+
         pub fn handlePickupCompleted(engine: *EngineType, worker_id: GameId) bool {
             const worker = engine.workers.getPtr(worker_id) orelse {
                 log.err("pickup_completed: unknown worker {}", .{worker_id});
@@ -185,13 +196,7 @@ pub fn Handlers(
                 const item_type = engine.dangling_items.get(task.item_id) orelse {
                     log.err("pickup_completed: dangling item {} no longer exists", .{task.item_id});
                     // BUG FIX: Clean up worker state so it doesn't get stuck
-                    worker.dangling_task = null;
-                    worker.state = .Idle;
-                    // Try to assign new task
-                    engine.evaluateDanglingItems();
-                    if (worker.state == .Idle) {
-                        engine.tryAssignWorkers();
-                    }
+                    recoverWorkerFromMissingDanglingItem(engine, worker);
                     return false;
                 };
 
@@ -242,26 +247,23 @@ pub fn Handlers(
             }
 
             // Check if all IIS are filled
-            var all_iis_filled = true;
             var iis_filled_count: usize = 0;
             var iis_total_count: usize = 0;
             for (ws.iis) |iis_id| {
                 iis_total_count += 1;
                 if (engine.storages.get(iis_id)) |iis_storage| {
-                    if (!iis_storage.has_item) {
-                        all_iis_filled = false;
-                    } else {
+                    if (iis_storage.has_item) {
                         iis_filled_count += 1;
                     }
                 }
             }
 
-            // BUG FIX: Only process if ALL IIS are filled (not just some)
+            // Only process if ALL IIS are filled
             // For non-producers, require at least 1 IIS and all must be filled
             const can_process = if (ws.isProducer())
                 true
             else
-                (iis_total_count > 0 and iis_filled_count == iis_total_count and all_iis_filled);
+                (iis_total_count > 0 and iis_filled_count == iis_total_count);
 
             if (can_process) {
                 // Move to Process step
@@ -372,13 +374,7 @@ pub fn Handlers(
                 const item_type = engine.dangling_items.get(task.item_id) orelse {
                     log.err("store_completed: dangling item {} no longer exists", .{task.item_id});
                     // BUG FIX: Clean up worker state so it doesn't get stuck
-                    worker.dangling_task = null;
-                    worker.state = .Idle;
-                    // Try to assign new task
-                    engine.evaluateDanglingItems();
-                    if (worker.state == .Idle) {
-                        engine.tryAssignWorkers();
-                    }
+                    recoverWorkerFromMissingDanglingItem(engine, worker);
                     return false;
                 };
 

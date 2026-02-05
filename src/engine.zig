@@ -426,6 +426,20 @@ pub fn Engine(
                 self.dangling_items.count(),
             });
 
+
+            var assigned_items = std.AutoHashMap(GameId, GameId).init(self.allocator);
+            defer assigned_items.deinit();
+            var worker_iter = self.workers.iterator();
+            while (worker_iter.next()) |worker_entry| {
+                if (worker_entry.value_ptr.dangling_task) |task| {
+                    assigned_items.put(task.item_id, worker_entry.key_ptr.*) catch continue;
+                }
+            }
+
+            // BUG FIX: Track workers assigned during this evaluation to prevent double-assignment
+            var assigned_workers = std.AutoHashMap(GameId, void).init(self.allocator);
+            defer assigned_workers.deinit();
+
             // For each dangling item, try to find a worker and EIS
             var dangling_iter = self.dangling_items.iterator();
             while (dangling_iter.next()) |entry| {
@@ -433,23 +447,10 @@ pub fn Engine(
                 const item_type = entry.value_ptr.*;
 
                 // BUG FIX: Check if another worker is already assigned to this item
-                var item_already_assigned = false;
-                var assigned_worker_id: ?GameId = null;
-                var worker_check_iter = self.workers.iterator();
-                while (worker_check_iter.next()) |worker_entry| {
-                    if (worker_entry.value_ptr.dangling_task) |task| {
-                        if (task.item_id == item_id) {
-                            item_already_assigned = true;
-                            assigned_worker_id = worker_entry.key_ptr.*;
-                            break;
-                        }
-                    }
-                }
-
-                if (item_already_assigned) {
+                if (assigned_items.get(item_id)) |assigned_worker_id| {
                     log.debug("evaluateDanglingItems: item {d} already assigned to worker {d}, skipping", .{
                         item_id,
-                        assigned_worker_id.?,
+                        assigned_worker_id,
                     });
                     continue;
                 }
@@ -459,6 +460,15 @@ pub fn Engine(
 
                 // Find nearest idle worker to the dangling item
                 const worker_id = self.findNearest(item_id, idle_workers) orelse continue;
+
+                // BUG FIX: Check if this worker was already assigned in this evaluation
+                if (assigned_workers.contains(worker_id)) {
+                    log.debug("evaluateDanglingItems: worker {d} already assigned in this evaluation, skipping item {d}", .{
+                        worker_id,
+                        item_id,
+                    });
+                    continue;
+                }
 
                 // Assign worker to pick up this dangling item
                 if (self.workers.getPtr(worker_id)) |worker| {
@@ -472,6 +482,10 @@ pub fn Engine(
                         .item_id = item_id,
                         .target_eis_id = target_eis,
                     };
+
+                    // Track this assignment to prevent double-assignment in this evaluation
+                    assigned_workers.put(worker_id, {}) catch continue;
+                    assigned_items.put(item_id, worker_id) catch continue;
 
                     // Dispatch hook to notify game
                     self.dispatcher.dispatch(.{ .pickup_dangling_started = .{
