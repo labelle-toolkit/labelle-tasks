@@ -397,6 +397,24 @@ pub fn Engine(
             return null;
         }
 
+        /// Find an empty EIS that accepts the given item type, excluding reserved ones.
+        /// Returns null if no suitable EIS found.
+        pub fn findEmptyEisForItemExcluding(self: *const Self, item_type: Item, excluded: *const std.AutoHashMap(GameId, void)) ?GameId {
+            var iter = self.storages.iterator();
+            while (iter.next()) |entry| {
+                const storage_id = entry.key_ptr.*;
+                const storage = entry.value_ptr.*;
+                // Must be EIS, must be empty, must accept this item type, must not be excluded
+                if (storage.role == .eis and !storage.has_item and !excluded.contains(storage_id)) {
+                    // accepts == null means accepts any item
+                    if (storage.accepts == null or storage.accepts.? == item_type) {
+                        return storage_id;
+                    }
+                }
+            }
+            return null;
+        }
+
         /// Get list of idle workers (allocated, caller must free)
         pub fn getIdleWorkers(self: *Self) ![]GameId {
             var list = std.ArrayListUnmanaged(GameId){};
@@ -429,10 +447,15 @@ pub fn Engine(
 
             var assigned_items = std.AutoHashMap(GameId, GameId).init(self.allocator);
             defer assigned_items.deinit();
+            // BUG FIX: Track EIS with pending deliveries to prevent assigning multiple items to same EIS
+            var reserved_eis = std.AutoHashMap(GameId, void).init(self.allocator);
+            defer reserved_eis.deinit();
             var worker_iter = self.workers.iterator();
             while (worker_iter.next()) |worker_entry| {
                 if (worker_entry.value_ptr.dangling_task) |task| {
                     assigned_items.put(task.item_id, worker_entry.key_ptr.*) catch continue;
+                    // Track the target EIS as reserved (pending delivery)
+                    reserved_eis.put(task.target_eis_id, {}) catch continue;
                 }
             }
 
@@ -455,8 +478,8 @@ pub fn Engine(
                     continue;
                 }
 
-                // Find an empty EIS that accepts this item type
-                const target_eis = self.findEmptyEisForItem(item_type) orelse continue;
+                // Find an empty EIS that accepts this item type (excluding reserved ones)
+                const target_eis = self.findEmptyEisForItemExcluding(item_type, &reserved_eis) orelse continue;
 
                 // Find nearest idle worker to the dangling item
                 const worker_id = self.findNearest(item_id, idle_workers) orelse continue;
@@ -486,6 +509,8 @@ pub fn Engine(
                     // Track this assignment to prevent double-assignment in this evaluation
                     assigned_workers.put(worker_id, {}) catch continue;
                     assigned_items.put(item_id, worker_id) catch continue;
+                    // BUG FIX: Track this EIS as reserved for subsequent iterations
+                    reserved_eis.put(target_eis, {}) catch continue;
 
                     // Dispatch hook to notify game
                     self.dispatcher.dispatch(.{ .pickup_dangling_started = .{
