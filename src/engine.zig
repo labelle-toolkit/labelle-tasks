@@ -185,6 +185,10 @@ pub fn Engine(
                     const new_eis = try self.allocator.alloc(GameId, ws.eis.len + 1);
                     @memcpy(new_eis[0..ws.eis.len], ws.eis);
                     new_eis[ws.eis.len] = storage_id;
+                    // Initialize bit based on current storage state
+                    if (self.storages.get(storage_id)) |storage| {
+                        if (storage.has_item) ws.eis_filled.set(ws.eis.len);
+                    }
                     self.allocator.free(ws.eis);
                     ws.eis = new_eis;
                 },
@@ -192,6 +196,9 @@ pub fn Engine(
                     const new_iis = try self.allocator.alloc(GameId, ws.iis.len + 1);
                     @memcpy(new_iis[0..ws.iis.len], ws.iis);
                     new_iis[ws.iis.len] = storage_id;
+                    if (self.storages.get(storage_id)) |storage| {
+                        if (storage.has_item) ws.iis_filled.set(ws.iis.len);
+                    }
                     self.allocator.free(ws.iis);
                     ws.iis = new_iis;
                 },
@@ -199,6 +206,9 @@ pub fn Engine(
                     const new_ios = try self.allocator.alloc(GameId, ws.ios.len + 1);
                     @memcpy(new_ios[0..ws.ios.len], ws.ios);
                     new_ios[ws.ios.len] = storage_id;
+                    if (self.storages.get(storage_id)) |storage| {
+                        if (storage.has_item) ws.ios_filled.set(ws.ios.len);
+                    }
                     self.allocator.free(ws.ios);
                     ws.ios = new_ios;
                 },
@@ -206,6 +216,9 @@ pub fn Engine(
                     const new_eos = try self.allocator.alloc(GameId, ws.eos.len + 1);
                     @memcpy(new_eos[0..ws.eos.len], ws.eos);
                     new_eos[ws.eos.len] = storage_id;
+                    if (self.storages.get(storage_id)) |storage| {
+                        if (storage.has_item) ws.eos_filled.set(ws.eos.len);
+                    }
                     self.allocator.free(ws.eos);
                     ws.eos = new_eos;
                 },

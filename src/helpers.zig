@@ -23,8 +23,11 @@ pub fn Helpers(
 
             const old_status = ws.status;
 
+            // Refresh bitsets from storage state (handles external changes like item_added/removed)
+            refreshFilledBits(engine, ws);
+
             // Check if workstation can operate
-            const can_operate = canWorkstationOperate(engine, ws);
+            const can_operate = canWorkstationOperate(ws);
 
             if (ws.assigned_worker != null) {
                 ws.status = .Active;
@@ -44,50 +47,50 @@ pub fn Helpers(
             }
         }
 
-        pub fn canWorkstationOperate(engine: *EngineType, ws: *const WorkstationData) bool {
+        /// Refresh workstation bitsets from current storage state.
+        /// Called before canWorkstationOperate to sync with external changes.
+        pub fn refreshFilledBits(engine: *EngineType, ws: *WorkstationData) void {
+            const BitSet = WorkstationData.FilledBitSet;
+            ws.eis_filled = BitSet.initEmpty();
+            for (ws.eis, 0..) |eis_id, i| {
+                if (engine.storages.get(eis_id)) |storage| {
+                    if (storage.has_item) ws.eis_filled.set(i);
+                }
+            }
+            ws.iis_filled = BitSet.initEmpty();
+            for (ws.iis, 0..) |iis_id, i| {
+                if (engine.storages.get(iis_id)) |storage| {
+                    if (storage.has_item) ws.iis_filled.set(i);
+                }
+            }
+            ws.ios_filled = BitSet.initEmpty();
+            for (ws.ios, 0..) |ios_id, i| {
+                if (engine.storages.get(ios_id)) |storage| {
+                    if (storage.has_item) ws.ios_filled.set(i);
+                }
+            }
+            ws.eos_filled = BitSet.initEmpty();
+            for (ws.eos, 0..) |eos_id, i| {
+                if (engine.storages.get(eos_id)) |storage| {
+                    if (storage.has_item) ws.eos_filled.set(i);
+                }
+            }
+        }
+
+        /// Check if a workstation can operate based on its bitsets.
+        /// Bitsets must be refreshed before calling this (via refreshFilledBits or eager updates).
+        pub fn canWorkstationOperate(ws: *const WorkstationData) bool {
             // Producer: just needs empty IOS and at least one empty EOS
             if (ws.isProducer()) {
-                // Check IOS has space (all IOS must be empty for producer to start new cycle)
-                for (ws.ios) |ios_id| {
-                    if (engine.storages.get(ios_id)) |storage| {
-                        if (storage.has_item) return false; // IOS full
-                    }
-                }
-                // Check at least one EOS has space
-                var has_eos_space = false;
-                for (ws.eos) |eos_id| {
-                    if (engine.storages.get(eos_id)) |storage| {
-                        if (!storage.has_item) {
-                            has_eos_space = true;
-                            break;
-                        }
-                    }
-                }
-                return has_eos_space;
+                // All IOS must be empty for producer to start new cycle
+                if (!ws.allIosEmpty()) return false;
+                // At least one EOS must have space
+                return ws.hasEosSpace();
             }
 
             // Regular workstation: needs ALL EIS to have items and space in EOS
-            // (All ingredients must be present before processing can begin)
-            for (ws.eis) |eis_id| {
-                if (engine.storages.get(eis_id)) |storage| {
-                    if (!storage.has_item) {
-                        return false; // Missing ingredient
-                    }
-                } else {
-                    return false; // Storage not found
-                }
-            }
-
-            var has_output_space = false;
-            for (ws.eos) |eos_id| {
-                if (engine.storages.get(eos_id)) |storage| {
-                    if (!storage.has_item) {
-                        has_output_space = true;
-                        break;
-                    }
-                }
-            }
-            if (!has_output_space) return false;
+            if (!ws.allEisFilled()) return false;
+            if (!ws.hasEosSpace()) return false;
 
             return true;
         }

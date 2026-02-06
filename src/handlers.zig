@@ -219,13 +219,15 @@ pub fn Handlers(
                     // Clear EIS
                     eis_storage.has_item = false;
                     eis_storage.item_type = null;
+                    if (WorkstationData.storageIndex(ws.eis, eis_id)) |idx| ws.eis_filled.unset(idx);
 
-                    // Fill first empty IIS
-                    for (ws.iis) |iis_id| {
-                        if (engine.storages.getPtr(iis_id)) |iis_storage| {
-                            if (!iis_storage.has_item) {
+                    // Fill first empty IIS (use bitset to skip filled slots)
+                    for (ws.iis, 0..) |iis_id, idx| {
+                        if (!ws.iis_filled.isSet(idx)) {
+                            if (engine.storages.getPtr(iis_id)) |iis_storage| {
                                 iis_storage.has_item = true;
                                 iis_storage.item_type = item;
+                                ws.iis_filled.set(idx);
                                 break;
                             }
                         }
@@ -233,16 +235,8 @@ pub fn Handlers(
                 }
             }
 
-            // Check if all IIS are filled
-            var all_iis_filled = true;
-            for (ws.iis) |iis_id| {
-                if (engine.storages.get(iis_id)) |iis_storage| {
-                    if (!iis_storage.has_item) {
-                        all_iis_filled = false;
-                        break;
-                    }
-                }
-            }
+            // Check if all IIS are filled (O(1) bitset check)
+            const all_iis_filled = ws.allIisFilled();
 
             if (all_iis_filled or ws.isProducer()) {
                 // Move to Process step
@@ -300,12 +294,14 @@ pub fn Handlers(
                     storage.item_type = null;
                 }
             }
+            ws.iis_filled = WorkstationData.FilledBitSet.initEmpty();
 
             // Fill all IOS (game determines actual output items via process_completed hook)
             // For now, we just mark them as having items - game will set the actual entity
-            for (ws.ios) |ios_id| {
+            for (ws.ios, 0..) |ios_id, idx| {
                 if (engine.storages.getPtr(ios_id)) |storage| {
                     storage.has_item = true;
+                    ws.ios_filled.set(idx);
                     // item_type will be set by game via item_added or left for game to track
                 }
             }
@@ -411,14 +407,15 @@ pub fn Handlers(
 
             // Update abstract state: IOS → EOS
             // Find first IOS with item and move to selected EOS
-            for (ws.ios) |ios_id| {
-                if (engine.storages.getPtr(ios_id)) |ios_storage| {
-                    if (ios_storage.has_item) {
+            for (ws.ios, 0..) |ios_id, idx| {
+                if (ws.ios_filled.isSet(idx)) {
+                    if (engine.storages.getPtr(ios_id)) |ios_storage| {
                         const item = ios_storage.item_type;
 
                         // Clear IOS
                         ios_storage.has_item = false;
                         ios_storage.item_type = null;
+                        ws.ios_filled.unset(idx);
 
                         // Fill EOS
                         if (ws.selected_eos) |eos_id| {
@@ -426,22 +423,15 @@ pub fn Handlers(
                                 eos_storage.has_item = true;
                                 eos_storage.item_type = item;
                             }
+                            if (WorkstationData.storageIndex(ws.eos, eos_id)) |eos_idx| ws.eos_filled.set(eos_idx);
                         }
                         break;
                     }
                 }
             }
 
-            // Check if all IOS are empty
-            var all_ios_empty = true;
-            for (ws.ios) |ios_id| {
-                if (engine.storages.get(ios_id)) |storage| {
-                    if (storage.has_item) {
-                        all_ios_empty = false;
-                        break;
-                    }
-                }
-            }
+            // Check if all IOS are empty (O(1) bitset check)
+            const all_ios_empty = ws.allIosEmpty();
 
             if (all_ios_empty) {
                 // Cycle complete
