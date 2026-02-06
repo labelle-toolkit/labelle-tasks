@@ -76,7 +76,9 @@ pub fn Handlers(
             worker.assigned_workstation = null;
 
             // First, try to assign worker to pick up dangling items (higher priority)
-            engine.evaluateDanglingItems();
+            engine.evaluateDanglingItems() catch |err| {
+                log.err("worker_available: evaluateDanglingItems failed: {}", .{err});
+            };
 
             // If worker is still idle, try to assign to a queued workstation
             if (worker.state == .Idle) {
@@ -377,7 +379,9 @@ pub fn Handlers(
                 worker.state = .Idle;
 
                 // First, check for remaining dangling items (higher priority)
-                engine.evaluateDanglingItems();
+                engine.evaluateDanglingItems() catch |err| {
+                    log.err("store_completed: evaluateDanglingItems failed: {}", .{err});
+                };
 
                 // Re-evaluate workstations (EIS now has item, may become Queued)
                 // Only assign to workstations if worker is still idle

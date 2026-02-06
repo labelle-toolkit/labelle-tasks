@@ -365,7 +365,9 @@ pub fn createEngineHooks(
             std.log.debug("[labelle-tasks] scene_load: {s} - re-evaluating dangling items", .{info.name});
 
             if (Context.getEngine()) |task_eng| {
-                task_eng.evaluateDanglingItems();
+                task_eng.evaluateDanglingItems() catch |err| {
+                    std.log.err("[labelle-tasks] evaluateDanglingItems failed: {}", .{err});
+                };
             }
         }
 

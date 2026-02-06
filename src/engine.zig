@@ -117,7 +117,7 @@ pub fn Engine(
 
             // If an empty EIS was added, check if any dangling items can be delivered
             if (config.role == .eis and config.initial_item == null) {
-                self.evaluateDanglingItems();
+                try self.evaluateDanglingItems();
             }
         }
 
@@ -367,7 +367,7 @@ pub fn Engine(
         pub fn addDanglingItem(self: *Self, item_id: GameId, item_type: Item) !void {
             try self.dangling_items.put(item_id, item_type);
             // Evaluate if any idle worker can pick up this item
-            self.evaluateDanglingItems();
+            try self.evaluateDanglingItems();
         }
 
         /// Remove a dangling item (picked up or despawned)
@@ -412,9 +412,9 @@ pub fn Engine(
         }
 
         /// Evaluate dangling items and try to assign workers
-        pub fn evaluateDanglingItems(self: *Self) void {
+        pub fn evaluateDanglingItems(self: *Self) !void {
             // Get idle workers (we need to free this later)
-            const idle_workers = self.getIdleWorkers() catch return;
+            const idle_workers = try self.getIdleWorkers();
             defer self.allocator.free(idle_workers);
 
             if (idle_workers.len == 0) return;

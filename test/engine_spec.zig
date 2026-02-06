@@ -148,4 +148,47 @@ pub const Engine = zspec.describe("Engine", struct {
             try std.testing.expect(engine.getWorkstationStatus(100).? == .Active);
         }
     });
+
+    pub const dangling_items = zspec.describe("dangling_items", struct {
+        pub fn @"evaluateDanglingItems propagates allocation errors"() !void {
+            const TestHooks = struct {};
+
+            // Use a failing allocator that fails after a set number of allocations
+            var failing_alloc = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 100 });
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(failing_alloc.allocator(), .{}, null);
+            defer engine.deinit();
+
+            // Set up: register a worker and a dangling item with an empty EIS
+            try engine.addStorage(1, .{ .role = .eis }); // empty EIS
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Now make the allocator fail on the next allocation
+            // (getIdleWorkers will try to allocate an ArrayList)
+            failing_alloc.fail_index = 0;
+
+            // evaluateDanglingItems should propagate the error, not silently swallow it
+            try std.testing.expectError(error.OutOfMemory, engine.evaluateDanglingItems());
+        }
+
+        pub fn @"addDanglingItem propagates evaluateDanglingItems errors"() !void {
+            const TestHooks = struct {};
+            var failing_alloc = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 100 });
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(failing_alloc.allocator(), .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis }); // empty EIS
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Make allocator fail on getIdleWorkers inside evaluateDanglingItems
+            failing_alloc.fail_index = 0;
+
+            // addDanglingItem should propagate the error from evaluateDanglingItems
+            try std.testing.expectError(error.OutOfMemory, engine.addDanglingItem(99, .Flour));
+        }
+    });
+
 });

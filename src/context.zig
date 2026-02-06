@@ -275,7 +275,9 @@ pub fn TaskEngineContextWith(
         /// Re-evaluate dangling items (call after scene load).
         pub fn evaluateDanglingItems() void {
             if (task_engine) |eng| {
-                eng.evaluateDanglingItems();
+                eng.evaluateDanglingItems() catch |err| {
+                    std.log.err("[TaskEngineContext] evaluateDanglingItems failed: {}", .{err});
+                };
             }
         }
     };
