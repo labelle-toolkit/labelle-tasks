@@ -179,12 +179,13 @@ pub fn Engine(
             };
 
             // Append storage to appropriate list based on role
-            switch (role) {
-                .eis => try ws.eis.append(self.allocator, storage_id),
-                .iis => try ws.iis.append(self.allocator, storage_id),
-                .ios => try ws.ios.append(self.allocator, storage_id),
-                .eos => try ws.eos.append(self.allocator, storage_id),
-            }
+            const list = switch (role) {
+                .eis => &ws.eis,
+                .iis => &ws.iis,
+                .ios => &ws.ios,
+                .eos => &ws.eos,
+            };
+            try list.append(self.allocator, storage_id);
 
             // Re-evaluate workstation status after adding storage
             self.evaluateWorkstationStatus(workstation_id);
