@@ -52,6 +52,9 @@ pub fn Engine(
         workstations: std.AutoHashMap(GameId, WorkstationData),
         dangling_items: std.AutoHashMap(GameId, Item),
 
+        // Reverse index: storage_id → workstation_ids that reference it
+        storage_to_workstations: std.AutoHashMap(GameId, std.ArrayListUnmanaged(GameId)),
+
         // Hook dispatcher
         dispatcher: Dispatcher,
 
@@ -68,6 +71,7 @@ pub fn Engine(
                 .workers = std.AutoHashMap(GameId, WorkerData).init(allocator),
                 .workstations = std.AutoHashMap(GameId, WorkstationData).init(allocator),
                 .dangling_items = std.AutoHashMap(GameId, Item).init(allocator),
+                .storage_to_workstations = std.AutoHashMap(GameId, std.ArrayListUnmanaged(GameId)).init(allocator),
                 .dispatcher = Dispatcher.init(task_hooks),
                 .distance_fn = distance_fn,
             };
@@ -83,6 +87,12 @@ pub fn Engine(
             self.workers.deinit();
             self.storages.deinit();
             self.dangling_items.deinit();
+            // Free reverse index lists
+            var ri_iter = self.storage_to_workstations.valueIterator();
+            while (ri_iter.next()) |list| {
+                list.deinit(self.allocator);
+            }
+            self.storage_to_workstations.deinit();
         }
 
         /// Set or update the distance function for spatial queries.
@@ -159,6 +169,14 @@ pub fn Engine(
                 .priority = config.priority,
             });
 
+            // Update reverse index for all storage IDs
+            const all_storages = [_][]const GameId{ config.eis, config.iis, config.ios, config.eos };
+            for (all_storages) |storage_ids| {
+                for (storage_ids) |sid| {
+                    self.addReverseIndexEntry(sid, workstation_id);
+                }
+            }
+
             // Evaluate initial status
             self.evaluateWorkstationStatus(workstation_id);
         }
@@ -166,6 +184,13 @@ pub fn Engine(
         /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
             if (self.workstations.fetchRemove(workstation_id)) |*kv| {
+                // Clean up reverse index entries
+                const all_storages = [_][]const GameId{ kv.value.eis.items, kv.value.iis.items, kv.value.ios.items, kv.value.eos.items };
+                for (all_storages) |storage_ids| {
+                    for (storage_ids) |sid| {
+                        self.removeReverseIndexEntry(sid, workstation_id);
+                    }
+                }
                 kv.value.deinit(self.allocator);
             }
         }
@@ -187,6 +212,9 @@ pub fn Engine(
                 .eos => &ws.eos,
             };
             try list.append(self.allocator, storage_id);
+
+            // Update reverse index
+            self.addReverseIndexEntry(storage_id, workstation_id);
 
             // Re-evaluate workstation status after adding storage
             self.evaluateWorkstationStatus(workstation_id);
@@ -263,6 +291,44 @@ pub fn Engine(
 
         pub fn reevaluateWorkstations(self: *Self) void {
             EngineHelpers.reevaluateWorkstations(self);
+        }
+
+        /// Re-evaluate only workstations affected by a specific storage change.
+        /// Uses the reverse index instead of scanning all workstations.
+        pub fn reevaluateAffectedWorkstations(self: *Self, storage_id: GameId) void {
+            if (self.storage_to_workstations.get(storage_id)) |ws_ids| {
+                for (ws_ids.items) |ws_id| {
+                    self.evaluateWorkstationStatus(ws_id);
+                }
+            }
+            self.tryAssignWorkers();
+        }
+
+        // ============================================
+        // Reverse Index helpers
+        // ============================================
+
+        fn addReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
+            const gop = self.storage_to_workstations.getOrPut(storage_id) catch return;
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{};
+            }
+            gop.value_ptr.append(self.allocator, workstation_id) catch return;
+        }
+
+        fn removeReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
+            const list = self.storage_to_workstations.getPtr(storage_id) orelse return;
+            for (list.items, 0..) |id, i| {
+                if (id == workstation_id) {
+                    _ = list.swapRemove(i);
+                    break;
+                }
+            }
+            // Clean up empty entries
+            if (list.items.len == 0) {
+                list.deinit(self.allocator);
+                _ = self.storage_to_workstations.remove(storage_id);
+            }
         }
 
         pub fn tryAssignWorkers(self: *Self) void {

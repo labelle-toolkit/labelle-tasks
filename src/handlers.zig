@@ -39,8 +39,8 @@ pub fn Handlers(
             storage.has_item = true;
             storage.item_type = item;
 
-            // Re-evaluate workstations that use this storage
-            engine.reevaluateWorkstations();
+            // Re-evaluate only workstations that reference this storage
+            engine.reevaluateAffectedWorkstations(storage_id);
         }
 
         pub fn handleItemRemoved(engine: *EngineType, storage_id: GameId) anyerror!void {
@@ -52,7 +52,7 @@ pub fn Handlers(
             storage.has_item = false;
             storage.item_type = null;
 
-            engine.reevaluateWorkstations();
+            engine.reevaluateAffectedWorkstations(storage_id);
         }
 
         pub fn handleStorageCleared(engine: *EngineType, storage_id: GameId) anyerror!void {
