@@ -260,7 +260,7 @@ pub fn bind(comptime Item: type, comptime EngineTypes: type) type {
 /// const GameHooks = struct {
 ///     pub fn store_started(payload: anytype) void {
 ///         const registry = payload.registry orelse return;
-///         const worker = engine.entityFromU64(payload.worker_id);
+///         const worker = engine.entityFromU64(payload.original.worker_id);
 ///         registry.set(worker, MovementTarget{ ... });
 ///     }
 /// };
@@ -280,34 +280,22 @@ pub fn createEngineHooks(
     // Create a wrapper that enriches payloads with registry and game.
     // Uses shared global storage from context module (set by ensureContext).
     const WrappedHooks = struct {
-        /// Create an enriched payload struct type that includes registry and game.
+        /// Simple enriched payload wrapper: stores original payload + context.
         fn EnrichedPayload(comptime Original: type) type {
             return struct {
-                // Copy original payload fields
-                worker_id: if (@hasField(Original, "worker_id")) @FieldType(Original, "worker_id") else void = if (@hasField(Original, "worker_id")) undefined else {},
-                storage_id: if (@hasField(Original, "storage_id")) @FieldType(Original, "storage_id") else void = if (@hasField(Original, "storage_id")) undefined else {},
-                workstation_id: if (@hasField(Original, "workstation_id")) @FieldType(Original, "workstation_id") else void = if (@hasField(Original, "workstation_id")) undefined else {},
-                item: if (@hasField(Original, "item")) @FieldType(Original, "item") else void = if (@hasField(Original, "item")) undefined else {},
-                item_id: if (@hasField(Original, "item_id")) @FieldType(Original, "item_id") else void = if (@hasField(Original, "item_id")) undefined else {},
-                item_type: if (@hasField(Original, "item_type")) @FieldType(Original, "item_type") else void = if (@hasField(Original, "item_type")) undefined else {},
-                target_eis_id: if (@hasField(Original, "target_eis_id")) @FieldType(Original, "target_eis_id") else void = if (@hasField(Original, "target_eis_id")) undefined else {},
-                from_storage_id: if (@hasField(Original, "from_storage_id")) @FieldType(Original, "from_storage_id") else void = if (@hasField(Original, "from_storage_id")) undefined else {},
-                to_storage_id: if (@hasField(Original, "to_storage_id")) @FieldType(Original, "to_storage_id") else void = if (@hasField(Original, "to_storage_id")) undefined else {},
-                cycles_completed: if (@hasField(Original, "cycles_completed")) @FieldType(Original, "cycles_completed") else void = if (@hasField(Original, "cycles_completed")) undefined else {},
-
-                // Added context fields
+                /// The original hook payload with all its fields
+                original: Original,
+                /// Game registry pointer (if available)
                 registry: ?*Registry,
+                /// Game pointer (if available)
                 game: ?*Game,
 
-                fn create(original: Original) @This() {
-                    var result: @This() = .{
+                fn create(orig: Original) @This() {
+                    return .{
+                        .original = orig,
                         .registry = context_mod.getSharedRegistry(Registry),
                         .game = context_mod.getSharedGame(Game),
                     };
-                    inline for (@typeInfo(Original).@"struct".fields) |field| {
-                        @field(result, field.name) = @field(original, field.name);
-                    }
-                    return result;
                 }
             };
         }
