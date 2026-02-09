@@ -27,6 +27,10 @@ pub const StorageRole = ecs_bridge.StorageRole;
 /// Components parameterized by EngineTypes to avoid direct labelle-engine imports.
 /// This prevents WASM module collision when both labelle-engine and labelle-tasks
 /// try to import the same engine module.
+///
+/// Note: Components use `EcsInterface(u64, Item)` because ECS entity IDs are always u64.
+/// The task engine must also be initialized with `GameId = u64` so the bridge's
+/// comptime-scoped active pointer matches (enforced by TaskEngineContextWith).
 pub fn ComponentsWith(comptime EngineTypes: type) type {
     const Entity = EngineTypes.Entity;
     const ComponentPayload = EngineTypes.ComponentPayload;

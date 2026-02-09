@@ -66,6 +66,12 @@ pub fn TaskEngineContextWith(
     comptime Hooks: type,
     comptime EngineTypes: type,
 ) type {
+    // Components always use EcsInterface(u64, Item) since ECS entity IDs are u64.
+    // GameId must match to ensure the same comptime static is used.
+    comptime {
+        if (GameId != u64) @compileError("TaskEngineContextWith requires GameId = u64 to match component bridge type");
+    }
+
     return struct {
         const Self = @This();
 
