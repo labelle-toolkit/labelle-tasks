@@ -26,6 +26,9 @@ pub const HookDispatcher = hooks_mod.HookDispatcher;
 /// Empty hooks struct for engines that don't need hooks.
 pub const NoHooks = hooks_mod.NoHooks;
 
+/// Recording hooks for testing. Records all dispatched events for assertion.
+pub const RecordingHooks = hooks_mod.RecordingHooks;
+
 // === Enums ===
 
 /// Worker state in the task engine.

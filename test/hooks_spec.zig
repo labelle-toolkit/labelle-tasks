@@ -74,4 +74,56 @@ pub const Hooks = zspec.describe("Hooks", struct {
             try std.testing.expect(true);
         }
     });
+
+    pub const RecordingHooksSpec = zspec.describe("RecordingHooks", struct {
+        pub fn @"records dispatched events"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            defer hooks.deinit();
+
+            var engine = tasks.Engine(u32, Item, Recorder).init(
+                std.testing.allocator,
+                hooks,
+                null,
+            );
+            defer engine.deinit();
+
+            // Set up a simple workflow
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+            try engine.addWorker(10);
+
+            // Clear events from setup
+            engine.dispatcher.hooks.clear();
+
+            // Trigger worker_available which should assign worker
+            _ = engine.workerAvailable(10);
+
+            // Should have recorded worker_assigned, workstation_activated, pickup_started
+            const assigned = try engine.dispatcher.hooks.expectNext(.worker_assigned);
+            try std.testing.expectEqual(@as(u32, 10), assigned.worker_id);
+            try std.testing.expectEqual(@as(u32, 100), assigned.workstation_id);
+
+            _ = try engine.dispatcher.hooks.expectNext(.workstation_activated);
+            _ = try engine.dispatcher.hooks.expectNext(.pickup_started);
+        }
+
+        pub fn @"expectEmpty succeeds when no events"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            defer hooks.deinit();
+
+            try hooks.expectEmpty();
+        }
+    });
 });

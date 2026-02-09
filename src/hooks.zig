@@ -195,3 +195,198 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
 
 /// Empty hooks struct for engines that don't need hooks
 pub const NoHooks = struct {};
+
+/// Recording hooks struct for testing.
+/// Records all dispatched hook events for later assertion.
+/// Use with Engine as the TaskHooks parameter.
+///
+/// Usage:
+/// ```zig
+/// var recorder = RecordingHooks(u32, Item){};
+/// var engine = Engine(u32, Item, RecordingHooks(u32, Item)).init(allocator, recorder, null);
+/// defer engine.deinit();
+///
+/// // ... trigger events ...
+///
+/// try recorder.expectNext(&engine.dispatcher, .pickup_started);
+/// try recorder.expectNextWith(&engine.dispatcher, .worker_assigned, .{ .worker_id = 10 });
+/// ```
+pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
+    const Payload = TaskHookPayload(GameId, Item);
+
+    return struct {
+        const Self = @This();
+
+        events: std.ArrayListUnmanaged(Payload) = .{},
+        allocator: ?std.mem.Allocator = null,
+
+        /// Initialize with an allocator. Must be called before use.
+        pub fn init(self: *Self, allocator: std.mem.Allocator) void {
+            self.allocator = allocator;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (self.allocator) |alloc| {
+                self.events.deinit(alloc);
+                self.allocator = null;
+            }
+        }
+
+        /// Get the number of recorded events
+        pub fn count(self: *const Self) usize {
+            return self.events.items.len;
+        }
+
+        /// Get event at index
+        pub fn get(self: *const Self, index: usize) Payload {
+            return self.events.items[index];
+        }
+
+        /// Clear all recorded events
+        pub fn clear(self: *Self) void {
+            self.events.clearRetainingCapacity();
+        }
+
+        /// Assert the next event matches the expected tag
+        pub fn expectNext(self: *Self, comptime expected_tag: std.meta.Tag(Payload)) !std.meta.TagPayload(Payload, expected_tag) {
+            if (self.events.items.len == 0) {
+                std.debug.print("Expected {s} event but no events recorded\n", .{@tagName(expected_tag)});
+                return error.NoEventsRecorded;
+            }
+            const event = self.events.orderedRemove(0);
+            if (event != expected_tag) {
+                std.debug.print("Expected {s} but got {s}\n", .{ @tagName(expected_tag), @tagName(event) });
+                return error.UnexpectedEvent;
+            }
+            return @field(event, @tagName(expected_tag));
+        }
+
+        /// Assert no more events remain
+        pub fn expectEmpty(self: *const Self) !void {
+            if (self.events.items.len != 0) {
+                std.debug.print("Expected no more events but {} remain (next: {s})\n", .{
+                    self.events.items.len,
+                    @tagName(self.events.items[0]),
+                });
+                return error.UnexpectedEvents;
+            }
+        }
+
+        fn record(self: *Self, payload: Payload) void {
+            const alloc = self.allocator orelse return;
+            self.events.append(alloc, payload) catch return;
+        }
+
+        // Hook methods - record the full payload union
+        pub fn pickup_started(self: *Self, payload: anytype) void {
+            self.record(.{ .pickup_started = .{
+                .worker_id = payload.worker_id,
+                .storage_id = payload.storage_id,
+                .item = payload.item,
+            } });
+        }
+
+        pub fn process_started(self: *Self, payload: anytype) void {
+            self.record(.{ .process_started = .{
+                .workstation_id = payload.workstation_id,
+                .worker_id = payload.worker_id,
+            } });
+        }
+
+        pub fn process_completed(self: *Self, payload: anytype) void {
+            self.record(.{ .process_completed = .{
+                .workstation_id = payload.workstation_id,
+                .worker_id = payload.worker_id,
+            } });
+        }
+
+        pub fn store_started(self: *Self, payload: anytype) void {
+            self.record(.{ .store_started = .{
+                .worker_id = payload.worker_id,
+                .storage_id = payload.storage_id,
+                .item = payload.item,
+            } });
+        }
+
+        pub fn worker_assigned(self: *Self, payload: anytype) void {
+            self.record(.{ .worker_assigned = .{
+                .worker_id = payload.worker_id,
+                .workstation_id = payload.workstation_id,
+            } });
+        }
+
+        pub fn worker_released(self: *Self, payload: anytype) void {
+            self.record(.{ .worker_released = .{
+                .worker_id = payload.worker_id,
+            } });
+        }
+
+        pub fn workstation_blocked(self: *Self, payload: anytype) void {
+            self.record(.{ .workstation_blocked = .{
+                .workstation_id = payload.workstation_id,
+            } });
+        }
+
+        pub fn workstation_queued(self: *Self, payload: anytype) void {
+            self.record(.{ .workstation_queued = .{
+                .workstation_id = payload.workstation_id,
+            } });
+        }
+
+        pub fn workstation_activated(self: *Self, payload: anytype) void {
+            self.record(.{ .workstation_activated = .{
+                .workstation_id = payload.workstation_id,
+            } });
+        }
+
+        pub fn cycle_completed(self: *Self, payload: anytype) void {
+            self.record(.{ .cycle_completed = .{
+                .workstation_id = payload.workstation_id,
+                .cycles_completed = payload.cycles_completed,
+            } });
+        }
+
+        pub fn transport_started(self: *Self, payload: anytype) void {
+            self.record(.{ .transport_started = .{
+                .worker_id = payload.worker_id,
+                .from_storage_id = payload.from_storage_id,
+                .to_storage_id = payload.to_storage_id,
+                .item = payload.item,
+            } });
+        }
+
+        pub fn transport_completed(self: *Self, payload: anytype) void {
+            self.record(.{ .transport_completed = .{
+                .worker_id = payload.worker_id,
+                .to_storage_id = payload.to_storage_id,
+                .item = payload.item,
+            } });
+        }
+
+        pub fn pickup_dangling_started(self: *Self, payload: anytype) void {
+            self.record(.{ .pickup_dangling_started = .{
+                .worker_id = payload.worker_id,
+                .item_id = payload.item_id,
+                .item_type = payload.item_type,
+                .target_eis_id = payload.target_eis_id,
+            } });
+        }
+
+        pub fn item_delivered(self: *Self, payload: anytype) void {
+            self.record(.{ .item_delivered = .{
+                .worker_id = payload.worker_id,
+                .item_id = payload.item_id,
+                .item_type = payload.item_type,
+                .storage_id = payload.storage_id,
+            } });
+        }
+
+        pub fn input_consumed(self: *Self, payload: anytype) void {
+            self.record(.{ .input_consumed = .{
+                .workstation_id = payload.workstation_id,
+                .storage_id = payload.storage_id,
+                .item = payload.item,
+            } });
+        }
+    };
+}
