@@ -137,13 +137,13 @@ pub fn Helpers(
                 if (worker_id) |wid| {
                     assignWorkerToWorkstation(engine, wid, ws_id);
 
-                    // Remove from idle list
-                    for (idle_workers.items, 0..) |id, i| {
-                        if (id == wid) {
-                            _ = idle_workers.swapRemove(i);
-                            break;
-                        }
+                    // Remove from idle list (O(n) search + O(1) swap remove)
+                    if (std.mem.indexOfScalar(GameId, idle_workers.items, wid)) |i| {
+                        _ = idle_workers.swapRemove(i);
                     }
+
+                    // Early exit when no idle workers remain
+                    if (idle_workers.items.len == 0) break;
                 }
             }
         }
