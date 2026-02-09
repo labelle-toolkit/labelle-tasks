@@ -260,7 +260,7 @@ pub fn bind(comptime Item: type, comptime EngineTypes: type) type {
 /// const GameHooks = struct {
 ///     pub fn store_started(payload: anytype) void {
 ///         const registry = payload.registry orelse return;
-///         const worker = engine.entityFromU64(payload.worker_id);
+///         const worker = engine.entityFromU64(payload.original.worker_id);
 ///         registry.set(worker, MovementTarget{ ... });
 ///     }
 /// };
