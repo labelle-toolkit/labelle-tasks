@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const state_mod = @import("state.zig");
+const types = @import("types.zig");
 
 /// Creates helper functions for the engine
 pub fn Helpers(
@@ -138,6 +139,16 @@ pub fn Helpers(
             var idle_workers = idle_scratch.items;
             if (idle_workers.len == 0) return;
 
+            // Sort queued workstations by priority (highest first) so higher-priority
+            // workstations get workers before lower-priority ones
+            std.mem.sort(GameId, queued_scratch.items, engine, struct {
+                fn lessThan(eng: *EngineType, a: GameId, b: GameId) bool {
+                    const a_ws = eng.workstations.get(a) orelse unreachable;
+                    const b_ws = eng.workstations.get(b) orelse unreachable;
+                    return @intFromEnum(a_ws.priority) > @intFromEnum(b_ws.priority);
+                }
+            }.lessThan);
+
             // Assign idle workers to queued workstations (iterating snapshots, safe to mutate sets)
             for (queued_scratch.items) |ws_id| {
                 const ws = engine.workstations.get(ws_id) orelse continue;
@@ -216,32 +227,33 @@ pub fn Helpers(
         // Storage selection
         // ============================================
 
-        pub fn selectEis(engine: *EngineType, workstation_id: GameId) ?GameId {
-            const ws = engine.workstations.get(workstation_id) orelse return null;
+        /// Select the highest-priority storage matching the given has_item condition.
+        fn selectStorage(engine: *EngineType, storage_ids: []const GameId, comptime has_item_check: bool) ?GameId {
+            var best_id: ?GameId = null;
+            var best_priority: i16 = -1;
 
-            // Find first EIS with an item
-            for (ws.eis.items) |eis_id| {
-                if (engine.storages.get(eis_id)) |storage| {
-                    if (storage.has_item) {
-                        return eis_id;
+            for (storage_ids) |id| {
+                if (engine.storages.get(id)) |storage| {
+                    if (storage.has_item == has_item_check) {
+                        const current_priority: i16 = @intFromEnum(storage.priority);
+                        if (current_priority > best_priority) {
+                            best_id = id;
+                            best_priority = current_priority;
+                        }
                     }
                 }
             }
-            return null;
+            return best_id;
+        }
+
+        pub fn selectEis(engine: *EngineType, workstation_id: GameId) ?GameId {
+            const ws = engine.workstations.get(workstation_id) orelse return null;
+            return selectStorage(engine, ws.eis.items, true);
         }
 
         pub fn selectEos(engine: *EngineType, workstation_id: GameId) ?GameId {
             const ws = engine.workstations.get(workstation_id) orelse return null;
-
-            // Find first EOS with space
-            for (ws.eos.items) |eos_id| {
-                if (engine.storages.get(eos_id)) |storage| {
-                    if (!storage.has_item) {
-                        return eos_id;
-                    }
-                }
-            }
-            return null;
+            return selectStorage(engine, ws.eos.items, false);
         }
     };
 }

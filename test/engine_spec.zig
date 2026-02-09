@@ -486,4 +486,110 @@ pub const Engine = zspec.describe("Engine", struct {
             try std.testing.expect(engine.getWorkstationStatus(100).? == .Blocked);
         }
     });
+
+    pub const priority = zspec.describe("priority-based selection", struct {
+        pub fn @"selectEis picks highest priority EIS"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            // Two EIS with items: id=1 Low priority, id=5 High priority
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour, .priority = .Low });
+            try engine.addStorage(5, .{ .role = .eis, .initial_item = .Water, .priority = .High });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{ 1, 5 },
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            // Should pick EIS id=5 (High priority) over id=1 (Low priority)
+            const selected = engine.selectEis(100);
+            try std.testing.expectEqual(@as(?u32, 5), selected);
+        }
+
+        pub fn @"selectEos picks highest priority EOS"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            // Two empty EOS: id=4 Normal priority, id=6 Critical priority
+            try engine.addStorage(4, .{ .role = .eos, .priority = .Normal });
+            try engine.addStorage(6, .{ .role = .eos, .priority = .Critical });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{ 4, 6 },
+            });
+
+            // Should pick EOS id=6 (Critical priority) over id=4 (Normal)
+            const selected = engine.selectEos(100);
+            try std.testing.expectEqual(@as(?u32, 6), selected);
+        }
+
+        pub fn @"higher priority workstation gets worker first"() !void {
+            var assigned_ws: ?u32 = null;
+            const TestHooks = struct {
+                assigned_ws_ptr: *?u32,
+
+                pub fn worker_assigned(self: *@This(), payload: anytype) void {
+                    // Record first assignment only
+                    if (self.assigned_ws_ptr.* == null) {
+                        self.assigned_ws_ptr.* = payload.workstation_id;
+                    }
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .assigned_ws_ptr = &assigned_ws },
+                null,
+            );
+            defer engine.deinit();
+
+            // Two workstations: ws=100 Low, ws=200 Critical
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addStorage(11, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(12, .{ .role = .iis });
+            try engine.addStorage(13, .{ .role = .ios });
+            try engine.addStorage(14, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+                .priority = .Low,
+            });
+
+            try engine.addWorkstation(200, .{
+                .eis = &.{11},
+                .iis = &.{12},
+                .ios = &.{13},
+                .eos = &.{14},
+                .priority = .Critical,
+            });
+
+            // Only one worker - should go to Critical workstation (200)
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            try std.testing.expectEqual(@as(?u32, 200), assigned_ws);
+            try std.testing.expect(engine.getWorkstationStatus(200).? == .Active);
+            try std.testing.expect(engine.getWorkstationStatus(100).? == .Queued);
+        }
+    });
 });

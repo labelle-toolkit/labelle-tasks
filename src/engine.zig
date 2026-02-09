@@ -120,6 +120,7 @@ pub fn Engine(
             role: StorageRole = .eis,
             accepts: ?Item = null, // null = accepts any item type
             initial_item: ?Item = null,
+            priority: Priority = .Normal,
         };
 
         /// Register a storage with the engine
@@ -129,6 +130,7 @@ pub fn Engine(
                 .item_type = config.initial_item,
                 .role = config.role,
                 .accepts = config.accepts,
+                .priority = config.priority,
             });
 
             // If an empty EIS was added, check if any dangling items can be delivered
