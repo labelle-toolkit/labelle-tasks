@@ -80,7 +80,6 @@ pub const Hooks = zspec.describe("Hooks", struct {
             const Recorder = tasks.RecordingHooks(u32, Item);
             var hooks: Recorder = .{};
             hooks.init(std.testing.allocator);
-            defer hooks.deinit();
 
             var engine = tasks.Engine(u32, Item, Recorder).init(
                 std.testing.allocator,
@@ -88,6 +87,7 @@ pub const Hooks = zspec.describe("Hooks", struct {
                 null,
             );
             defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
 
             // Set up a simple workflow
             try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });

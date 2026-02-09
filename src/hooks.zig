@@ -209,7 +209,6 @@ pub const NoHooks = struct {};
 /// // ... trigger events ...
 ///
 /// try recorder.expectNext(&engine.dispatcher, .pickup_started);
-/// try recorder.expectNextWith(&engine.dispatcher, .worker_assigned, .{ .worker_id = 10 });
 /// ```
 pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
     const Payload = TaskHookPayload(GameId, Item);
@@ -273,120 +272,25 @@ pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
         }
 
         fn record(self: *Self, payload: Payload) void {
-            const alloc = self.allocator orelse return;
-            self.events.append(alloc, payload) catch return;
+            const alloc = self.allocator orelse @panic("RecordingHooks not initialized. Call init() with an allocator.");
+            self.events.append(alloc, payload) catch @panic("RecordingHooks: failed to record event (out of memory).");
         }
 
         // Hook methods - record the full payload union
-        pub fn pickup_started(self: *Self, payload: anytype) void {
-            self.record(.{ .pickup_started = .{
-                .worker_id = payload.worker_id,
-                .storage_id = payload.storage_id,
-                .item = payload.item,
-            } });
-        }
-
-        pub fn process_started(self: *Self, payload: anytype) void {
-            self.record(.{ .process_started = .{
-                .workstation_id = payload.workstation_id,
-                .worker_id = payload.worker_id,
-            } });
-        }
-
-        pub fn process_completed(self: *Self, payload: anytype) void {
-            self.record(.{ .process_completed = .{
-                .workstation_id = payload.workstation_id,
-                .worker_id = payload.worker_id,
-            } });
-        }
-
-        pub fn store_started(self: *Self, payload: anytype) void {
-            self.record(.{ .store_started = .{
-                .worker_id = payload.worker_id,
-                .storage_id = payload.storage_id,
-                .item = payload.item,
-            } });
-        }
-
-        pub fn worker_assigned(self: *Self, payload: anytype) void {
-            self.record(.{ .worker_assigned = .{
-                .worker_id = payload.worker_id,
-                .workstation_id = payload.workstation_id,
-            } });
-        }
-
-        pub fn worker_released(self: *Self, payload: anytype) void {
-            self.record(.{ .worker_released = .{
-                .worker_id = payload.worker_id,
-            } });
-        }
-
-        pub fn workstation_blocked(self: *Self, payload: anytype) void {
-            self.record(.{ .workstation_blocked = .{
-                .workstation_id = payload.workstation_id,
-            } });
-        }
-
-        pub fn workstation_queued(self: *Self, payload: anytype) void {
-            self.record(.{ .workstation_queued = .{
-                .workstation_id = payload.workstation_id,
-            } });
-        }
-
-        pub fn workstation_activated(self: *Self, payload: anytype) void {
-            self.record(.{ .workstation_activated = .{
-                .workstation_id = payload.workstation_id,
-            } });
-        }
-
-        pub fn cycle_completed(self: *Self, payload: anytype) void {
-            self.record(.{ .cycle_completed = .{
-                .workstation_id = payload.workstation_id,
-                .cycles_completed = payload.cycles_completed,
-            } });
-        }
-
-        pub fn transport_started(self: *Self, payload: anytype) void {
-            self.record(.{ .transport_started = .{
-                .worker_id = payload.worker_id,
-                .from_storage_id = payload.from_storage_id,
-                .to_storage_id = payload.to_storage_id,
-                .item = payload.item,
-            } });
-        }
-
-        pub fn transport_completed(self: *Self, payload: anytype) void {
-            self.record(.{ .transport_completed = .{
-                .worker_id = payload.worker_id,
-                .to_storage_id = payload.to_storage_id,
-                .item = payload.item,
-            } });
-        }
-
-        pub fn pickup_dangling_started(self: *Self, payload: anytype) void {
-            self.record(.{ .pickup_dangling_started = .{
-                .worker_id = payload.worker_id,
-                .item_id = payload.item_id,
-                .item_type = payload.item_type,
-                .target_eis_id = payload.target_eis_id,
-            } });
-        }
-
-        pub fn item_delivered(self: *Self, payload: anytype) void {
-            self.record(.{ .item_delivered = .{
-                .worker_id = payload.worker_id,
-                .item_id = payload.item_id,
-                .item_type = payload.item_type,
-                .storage_id = payload.storage_id,
-            } });
-        }
-
-        pub fn input_consumed(self: *Self, payload: anytype) void {
-            self.record(.{ .input_consumed = .{
-                .workstation_id = payload.workstation_id,
-                .storage_id = payload.storage_id,
-                .item = payload.item,
-            } });
-        }
+        pub fn pickup_started(self: *Self, payload: anytype) void { self.record(.{ .pickup_started = payload }); }
+        pub fn process_started(self: *Self, payload: anytype) void { self.record(.{ .process_started = payload }); }
+        pub fn process_completed(self: *Self, payload: anytype) void { self.record(.{ .process_completed = payload }); }
+        pub fn store_started(self: *Self, payload: anytype) void { self.record(.{ .store_started = payload }); }
+        pub fn worker_assigned(self: *Self, payload: anytype) void { self.record(.{ .worker_assigned = payload }); }
+        pub fn worker_released(self: *Self, payload: anytype) void { self.record(.{ .worker_released = payload }); }
+        pub fn workstation_blocked(self: *Self, payload: anytype) void { self.record(.{ .workstation_blocked = payload }); }
+        pub fn workstation_queued(self: *Self, payload: anytype) void { self.record(.{ .workstation_queued = payload }); }
+        pub fn workstation_activated(self: *Self, payload: anytype) void { self.record(.{ .workstation_activated = payload }); }
+        pub fn cycle_completed(self: *Self, payload: anytype) void { self.record(.{ .cycle_completed = payload }); }
+        pub fn transport_started(self: *Self, payload: anytype) void { self.record(.{ .transport_started = payload }); }
+        pub fn transport_completed(self: *Self, payload: anytype) void { self.record(.{ .transport_completed = payload }); }
+        pub fn pickup_dangling_started(self: *Self, payload: anytype) void { self.record(.{ .pickup_dangling_started = payload }); }
+        pub fn item_delivered(self: *Self, payload: anytype) void { self.record(.{ .item_delivered = payload }); }
+        pub fn input_consumed(self: *Self, payload: anytype) void { self.record(.{ .input_consumed = payload }); }
     };
 }
