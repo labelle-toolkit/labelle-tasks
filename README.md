@@ -11,16 +11,17 @@ A pure state machine task orchestration engine for games. The engine tracks abst
 ## Features
 
 - **Pure state machine** - Engine tracks abstract state, game owns entity lifecycle
-- **Storage management** - Tracks items in storages (each storage holds one item type)
+- **Storage management** - Tracks items in storages (each storage holds one item)
 - **Automatic step derivation** - Steps derived from storage configuration (Pickup, Process, Store)
-- **Priority-based assignment** - Workstations and transports have priorities (Low, Normal, High, Critical)
+- **Priority-based selection** - Storages and workstations have priorities (Low, Normal, High, Critical)
 - **Producer workstations** - Workstations that produce items without inputs (e.g., water condenser)
-- **Recurring transports** - Automatic item movement between storages
-- **Worker management** - Workers assigned to workstations and transports automatically
+- **Worker management** - Workers assigned to workstations automatically by priority
+- **Dangling item pickup** - Workers auto-collect items not in any storage
 - **Cycle tracking** - Track how many times a workstation has completed its workflow
 - **Hook-based events** - Comptime-resolved event hooks with zero runtime overhead
-- **labelle-engine integration** - TaskEngineContext and createEngineHooks helpers
-- **ECS Components** - Generic components for labelle-engine integration
+- **Recording hooks** - Built-in `RecordingHooks` for test assertions
+- **labelle-engine integration** - `TaskEngineContextWith`, `createEngineHooks`, auto-registering ECS components
+- **Type-erased ECS bridge** - `EcsInterface` vtable pattern for engine-agnostic integration
 
 ## Storage Model
 
@@ -30,13 +31,12 @@ The engine uses a four-storage model for workstations:
 EIS (External Input) → IIS (Internal Input) → [Process] → IOS (Internal Output) → EOS (External Output)
 ```
 
-Each storage holds **one item type** with unlimited quantity:
 - **EIS** - Where raw materials are stored (e.g., ingredients shelf)
-- **IIS** - Recipe inputs - each IIS defines one ingredient needed per cycle
-- **IOS** - Recipe outputs - each IOS defines one product produced per cycle
+- **IIS** - Recipe inputs buffer at the workstation
+- **IOS** - Recipe outputs buffer at the workstation
 - **EOS** - Where finished products go (e.g., serving counter)
 
-For multi-item recipes, use multiple IIS storages (one for each unit of an ingredient required). For example, a recipe needing 2 Flour and 1 Meat would require three IIS storages: two for Flour and one for Meat.
+Each storage holds **one item** (has_item: bool, item_type: ?Item).
 
 ## Concepts
 
@@ -44,42 +44,45 @@ For multi-item recipes, use multiple IIS storages (one for each unit of an ingre
 
 Entities that perform work at workstations. Workers have three states:
 - **Idle** - Available for assignment
-- **Working** - Executing steps at a workstation or transport
-- **Blocked** - Temporarily unavailable (fighting, sleeping, etc.)
+- **Working** - Executing steps at a workstation
+- **Unavailable** - Temporarily unavailable (fighting, sleeping, etc.)
 
 ### Workstations
 
-Locations where work happens. Steps are derived automatically from storage configuration:
-- Has IIS → **Pickup** step (transfer EIS → IIS)
-- Has process_duration → **Process** step (timed, transforms IIS → IOS)
-- Has IOS → **Store** step (transfer IOS → EOS)
+Locations where work happens. Steps are derived from storage configuration:
+- Has EIS/IIS → **Pickup** step (transfer EIS → IIS)
+- Always → **Process** step (transforms IIS → IOS)
+- Has IOS/EOS → **Store** step (transfer IOS → EOS)
 
 Workstation statuses:
-- **Blocked** - EIS doesn't have recipe requirements
+- **Blocked** - EIS doesn't have required items, or EOS is full
 - **Queued** - Has resources, waiting for worker
 - **Active** - Worker assigned and executing steps
 
-### Transports
+### Priority System
 
-Recurring tasks that move items between any two storages. Activate when source has items.
+Storages and workstations support priority levels: `Low`, `Normal` (default), `High`, `Critical`.
+
+- Higher-priority EIS is selected first when picking up items
+- Higher-priority EOS is selected first when storing items
+- Higher-priority workstations receive idle workers before lower-priority ones
 
 ## Engine API
 
 ```zig
 const tasks = @import("labelle-tasks");
 
-// Define your item types (can be enum or tagged union)
-const Item = enum { Vegetable, Meat, Water, Meal };
+// Define your item types
+const Item = enum { Flour, Water, Dough, Bread };
 
-// Define hook handlers (optional - only implement the hooks you need)
+// Define hook handlers (only implement the hooks you need)
 const MyHooks = struct {
     pub fn pickup_started(payload: anytype) void {
-        // payload has worker_id, eis_id, workstation_id, item
-        // Start worker movement to EIS location
+        // payload.worker_id, payload.storage_id, payload.item
     }
 
-    pub fn process_started(payload: anytype) void {
-        // Play cooking animation, start work timer
+    pub fn process_completed(payload: anytype) void {
+        // payload.workstation_id, payload.worker_id
     }
 
     pub fn cycle_completed(payload: anytype) void {
@@ -87,49 +90,40 @@ const MyHooks = struct {
     }
 };
 
-// Create engine with hooks
-var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{});
+// Create engine (with optional distance function)
+var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{}, null);
 defer engine.deinit();
 
-// For an engine without hooks, pass an empty struct:
-// var engine = tasks.Engine(u32, Item, struct {}).init(allocator, .{});
+// Register storages with role and optional priority
+try engine.addStorage(eis_id, .{ .role = .eis, .initial_item = .Flour, .priority = .High });
+try engine.addStorage(iis_id, .{ .role = .iis });
+try engine.addStorage(ios_id, .{ .role = .ios });
+try engine.addStorage(eos_id, .{ .role = .eos });
 
-// Create storages (each storage holds ONE item type)
-_ = try engine.addStorage(VEG_EIS_ID, .Vegetable);
-_ = try engine.addStorage(MEAT_EIS_ID, .Meat);
-_ = try engine.addStorage(VEG_IIS_ID, .Vegetable);  // Recipe needs 1 vegetable
-_ = try engine.addStorage(MEAT_IIS_ID, .Meat);      // Recipe needs 1 meat
-_ = try engine.addStorage(KITCHEN_IOS_ID, .Meal);   // Produces 1 meal
-_ = try engine.addStorage(KITCHEN_EOS_ID, .Meal);
-
-// Create workstation referencing storages
-_ = try engine.addWorkstation(KITCHEN_ID, .{
-    .eis = &.{ VEG_EIS_ID, MEAT_EIS_ID },      // Multiple input sources
-    .iis = &.{ VEG_IIS_ID, MEAT_IIS_ID },      // Recipe: 1 veg + 1 meat
-    .ios = &.{KITCHEN_IOS_ID},                  // Produces: 1 meal
-    .eos = &.{KITCHEN_EOS_ID},                  // Output destination
-    .process_duration = 40,
+// Register workstation referencing storages
+try engine.addWorkstation(ws_id, .{
+    .eis = &.{eis_id},
+    .iis = &.{iis_id},
+    .ios = &.{ios_id},
+    .eos = &.{eos_id},
+    .priority = .Normal,
 });
 
-// Register workers
-_ = try engine.addWorker(CHEF_ID);
-
-// Add items to storage - engine tracks state, emits hooks
-_ = engine.handle(.{ .item_added = .{ .storage_id = VEG_EIS_ID, .item = .Vegetable, .quantity = 5 } });
-_ = engine.handle(.{ .item_added = .{ .storage_id = MEAT_EIS_ID, .item = .Meat, .quantity = 2 } });
+// Register worker
+try engine.addWorker(worker_id);
 
 // Game notifies engine of events via handle()
-_ = engine.handle(.{ .worker_available = .{ .worker_id = CHEF_ID } });
-// Engine emits pickup_started → game starts worker movement
+_ = engine.handle(.{ .worker_available = .{ .worker_id = worker_id } });
+// Engine emits pickup_started hook → game starts movement
 
-_ = engine.handle(.{ .pickup_completed = .{ .worker_id = CHEF_ID } });
-// Engine emits process_started → game starts work timer
+_ = engine.handle(.{ .pickup_completed = .{ .worker_id = worker_id } });
+// Engine emits process_started hook → game starts work timer
 
-_ = engine.handle(.{ .work_completed = .{ .workstation_id = KITCHEN_ID } });
-// Engine emits process_completed, store_started → game handles transformation
+_ = engine.handle(.{ .work_completed = .{ .workstation_id = ws_id } });
+// Engine emits process_completed, store_started hooks
 
-_ = engine.handle(.{ .store_completed = .{ .worker_id = CHEF_ID } });
-// Engine emits cycle_completed → workflow complete
+_ = engine.handle(.{ .store_completed = .{ .worker_id = worker_id } });
+// Engine emits cycle_completed hook
 ```
 
 ## Hook System
@@ -137,27 +131,9 @@ _ = engine.handle(.{ .store_completed = .{ .worker_id = CHEF_ID } });
 The engine emits hooks for lifecycle events with zero runtime overhead.
 Only implement the hooks you need - unhandled hooks are no-ops at comptime.
 
-```zig
-const tasks = @import("labelle-tasks");
-
-// Define hook handlers
-const MyHooks = struct {
-    pub fn pickup_started(payload: anytype) void {
-        std.log.info("Worker {d} picking from EIS {d}", .{ payload.worker_id, payload.eis_id });
-    }
-
-    pub fn cycle_completed(payload: anytype) void {
-        std.log.info("Cycle {d} completed!", .{ payload.cycles_completed });
-    }
-};
-
-// Create engine with hooks
-var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{});
-defer engine.deinit();
-
-_ = try engine.addWorker(WORKER_ID);
-// Hooks are emitted automatically during engine operations
-```
+Hooks support two calling conventions:
+- **1-param (static)**: `pub fn hook_name(payload: anytype) void`
+- **2-param (instance)**: `pub fn hook_name(self: *@This(), payload: anytype) void`
 
 ### Available Hooks
 
@@ -168,7 +144,7 @@ _ = try engine.addWorker(WORKER_ID);
 - `store_started` - Worker begins storing to EOS
 
 **Worker lifecycle:**
-- `worker_assigned` - Worker assigned to workstation or transport
+- `worker_assigned` - Worker assigned to workstation
 - `worker_released` - Worker released from workstation
 
 **Workstation lifecycle:**
@@ -176,16 +152,23 @@ _ = try engine.addWorker(WORKER_ID);
 - `workstation_queued` - Workstation ready, waiting for worker
 - `workstation_activated` - Worker assigned, work starting
 
+**Cycle lifecycle:**
+- `cycle_completed` - Workstation completed a full cycle
+
+**Dangling item lifecycle:**
+- `pickup_dangling_started` - Worker dispatched to pick up a dangling item
+- `item_delivered` - Item delivered to target storage
+
+**Input consumption:**
+- `input_consumed` - IIS item consumed during processing
+
 **Transport lifecycle:**
 - `transport_started` - Transport task began
 - `transport_completed` - Transport task finished
 
-**Cycle lifecycle:**
-- `cycle_completed` - Workstation completed a full cycle
-
 ### Merging Hook Handlers
 
-Combine multiple hook handler structs using `MergeHooks`:
+Combine two hook handler structs using `MergeHooks`:
 
 ```zig
 const GameHooks = struct {
@@ -194,89 +177,30 @@ const GameHooks = struct {
     }
 };
 
-const AnalyticsHooks = struct {
-    pub fn cycle_completed(payload: anytype) void {
-        // Analytics tracking
-    }
-};
-
-// Both handlers will be called (GameHooks has priority)
-const MergedHooks = tasks.MergeHooks(.{ GameHooks, AnalyticsHooks });
-var engine = tasks.Engine(u32, Item, MergedHooks).init(allocator, .{});
+// GameHooks has priority, LoggingHooks is fallback
+const MergedHooks = tasks.MergeHooks(GameHooks, tasks.LoggingHooks);
+var engine = tasks.Engine(u32, Item, MergedHooks).init(allocator, .{}, null);
 ```
 
-### LoggingHooks
+### Recording Hooks (Testing)
 
-A default logging implementation is provided for debugging:
+Built-in recording hooks for test assertions:
 
 ```zig
-// Use LoggingHooks to log all hook events
-var engine = tasks.Engine(u32, Item, tasks.LoggingHooks).init(allocator, .{});
+const Recorder = tasks.RecordingHooks(u32, Item);
+var recorder = Recorder{};
+recorder.init(std.testing.allocator);
+defer recorder.deinit();
 
-// Or merge with your hooks (your hooks have priority)
-const MergedHooks = tasks.MergeHooks(.{ MyHooks, tasks.LoggingHooks });
+var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, recorder, null);
+defer engine.deinit();
+
+// ... trigger events ...
+
+const p = try recorder.expectNext(.pickup_started);
+try std.testing.expectEqual(worker_id, p.worker_id);
+try recorder.expectEmpty();
 ```
-
-## labelle-engine Integration
-
-For integration with labelle-engine, the library provides `createEngineHooks` and `TaskEngineContext`:
-
-```zig
-const tasks = @import("labelle-tasks");
-const engine = @import("labelle-engine");
-
-// Define your item types
-const Items = enum { flour, bread, water };
-
-// Entity ID type from your game
-const GameId = engine.Entity;
-
-// Define game-specific task hooks
-const GameHooks = struct {
-    pub fn pickup_started(payload: anytype) void {
-        // Start worker movement to EIS location
-    }
-    pub fn process_started(payload: anytype) void {
-        // Start work animation/timer
-    }
-};
-
-// Create engine hooks that wrap task events with game context
-const task_engine_hooks = tasks.createEngineHooks(GameId, Items, GameHooks);
-
-// TaskEngineContext provides a pre-built context struct
-pub const TasksContext = task_engine_hooks.Context;
-// Contains: allocator, task_engine pointer, game pointer
-
-// Use in labelle-engine hooks folder:
-pub fn scene_before_load(payload: engine.HookPayload) void {
-    // Initialize task engine before entities are created
-    const allocator = payload.scene_before_load.allocator;
-    task_engine = tasks.Engine(GameId, Items, GameHooks).init(allocator, .{}) catch unreachable;
-}
-```
-
-### Plugin Integration (project.labelle)
-
-When using the labelle-engine generator, configure the plugin in `project.labelle`:
-
-```zig
-.plugins = .{
-    .{
-        .name = "labelle-tasks",
-        .version = "0.9.0",
-        .bind = .{
-            .{ .func = "bind", .arg = "Items", .components = "Storage,Worker,Workstation" },
-        },
-        .engine_hooks = .{
-            .create = "createEngineHooks",
-            .task_hooks = "task_hooks.GameHooks",
-        },
-    },
-},
-```
-
-This auto-generates the engine hook wiring and exports `labelle_tasksContext` for scripts.
 
 ## Producer Workstations
 
@@ -284,16 +208,28 @@ Workstations without EIS/IIS produce items from nothing (e.g., water condenser, 
 
 ```zig
 // Water condenser - produces water without inputs
-_ = engine.addStorage(CONDENSER_IOS_ID, .{ .item = .Water });
-_ = engine.addStorage(CONDENSER_EOS_ID, .{ .item = .Water });
+try engine.addStorage(ios_id, .{ .role = .ios });
+try engine.addStorage(eos_id, .{ .role = .eos });
 
-_ = engine.addWorkstation(CONDENSER_ID, .{
-    .ios = &.{CONDENSER_IOS_ID},
-    .eos = &.{CONDENSER_EOS_ID},
-    .process_duration = 30,
+try engine.addWorkstation(condenser_id, .{
+    .ios = &.{ios_id},
+    .eos = &.{eos_id},
     .priority = .Low,
 });
-// Condenser starts immediately (Queued) - no inputs needed
+// Producer starts as Queued immediately - no inputs needed
+// Skips Pickup step, goes straight to Process
+```
+
+## Dangling Items
+
+Items not in any storage can be tracked and auto-collected:
+
+```zig
+// Register a dangling item (e.g., dropped by player)
+try engine.addDanglingItem(item_entity_id, .Flour);
+
+// Engine dispatches idle worker to pick it up and deliver to matching empty EIS
+// Emits pickup_dangling_started hook, then item_delivered on completion
 ```
 
 ## Multiple Input/Output Storages
@@ -301,129 +237,97 @@ _ = engine.addWorkstation(CONDENSER_ID, .{
 Workstations can reference multiple EIS and EOS for flexible routing:
 
 ```zig
-// Kitchen with multiple ingredient sources and serving counters
-_ = engine.addWorkstation(KITCHEN_ID, .{
-    .eis = &.{ PANTRY_ID, FRIDGE_ID, SHELF_ID },  // Pick from any that has ingredients
-    .iis = &.{INGREDIENT_IIS_ID},                  // Recipe requirement
-    .ios = &.{MEAL_IOS_ID},                        // Produced output
-    .eos = &.{ COUNTER_1_ID, COUNTER_2_ID },       // Store to first available
-    .process_duration = 40,
+try engine.addWorkstation(kitchen_id, .{
+    .eis = &.{ pantry_id, fridge_id, shelf_id },  // Pick from highest-priority with item
+    .iis = &.{ingredient_iis_id},
+    .ios = &.{meal_ios_id},
+    .eos = &.{ counter_1_id, counter_2_id },       // Store to highest-priority empty
     .priority = .High,
 });
 ```
 
-The engine automatically:
-- Checks all EIS storages when looking for available ingredients
-- Picks from the first EIS that has the required item
-- Stores outputs to the first EOS that accepts the item type
-- Blocks only when NO EIS has required ingredients
+## Dynamic Storage Attachment
 
-## Transports
-
-Recurring tasks that move items between storages:
+Storages can be attached to workstations after creation:
 
 ```zig
-// Transport vegetables from garden to kitchen
-_ = engine.addTransport(.{
-    .from = GARDEN_STORAGE_ID,
-    .to = KITCHEN_EIS_ID,
-    .item = .Vegetable,
-    .priority = .Normal,
-});
-// Transport activates when garden has vegetables
+try engine.addWorkstation(ws_id, .{});
+try engine.attachStorageToWorkstation(eis_id, ws_id, .eis);
+try engine.attachStorageToWorkstation(eos_id, ws_id, .eos);
 ```
 
-## ECS Components
-
-For integration with labelle-engine, the library provides generic ECS components parameterized by your game's item type:
+## Query API
 
 ```zig
-const tasks = @import("labelle_tasks");
-
-// Define your game's item types
-const ItemType = enum { wheat, carrot, flour, bread };
-
-// Create components for your item type
-const Components = tasks.EcsComponents(ItemType);
-
-// Use the components
-const worker = Components.TaskWorker{ .priority = 7 };
-const workstation = Components.TaskWorkstation{ .process_duration = 60, .priority = 5 };
-
-// Storage with item filtering using EnumSet
-const wheat_silo = Components.TaskStorage{
-    .accepts = Components.ItemSet.initOne(.wheat),
-};
-const pantry = Components.TaskStorage{
-    .accepts = Components.ItemSet.initMany(&.{ .wheat, .flour, .bread }),
-};
-const general_storage = Components.TaskStorage{}; // accepts all (default)
-
-// Items
-const wheat_item = Components.TaskItem{ .item_type = .wheat };
-
-// Check if storage accepts item
-if (wheat_silo.canAccept(wheat_item.item_type)) {
-    // ...
-}
+engine.getWorkerState(worker_id)       // ?WorkerState
+engine.getWorkerCurrentStep(worker_id) // ?StepType
+engine.getWorkstationStatus(ws_id)     // ?WorkstationStatus
+engine.getStorageHasItem(storage_id)   // ?bool
+engine.getStorageItemType(storage_id)  // ?Item
+engine.getDistance(from_id, to_id)     // ?f32
+engine.findNearest(target, candidates) // ?GameId
 ```
 
-### Available Components
+## labelle-engine Integration
 
-- **TaskWorker** - Marks an entity as a worker with priority (0-15)
-- **TaskWorkstation** - Configures processing duration and priority
-- **TaskStorage** - Storage with item type filtering via `EnumSet`
-- **TaskItem** - Item with its type
-- **TaskTransport** - Transport route with priority
+For integration with labelle-engine, the library provides `createEngineHooks` and `TaskEngineContextWith`:
 
-## Running Examples
+```zig
+const tasks = @import("labelle-tasks");
+const engine = @import("labelle-engine");
+
+const Items = enum { flour, bread, water };
+
+const GameHooks = struct {
+    pub fn store_started(payload: anytype) void {
+        // payload.worker_id, payload.storage_id, payload.item
+        // payload.registry, payload.game (enriched by createEngineHooks)
+    }
+};
+
+pub const TaskHooks = tasks.createEngineHooks(u64, Items, GameHooks, engine.EngineTypes);
+pub const Context = TaskHooks.Context;
+
+// Engine hooks are provided: game_init, scene_load, game_deinit
+```
+
+### Auto-Registering ECS Components
+
+Components auto-register with the task engine via the `EcsInterface` vtable:
+
+```zig
+const Components = tasks.bind(Items, engine.EngineTypes);
+// Components.Storage, Components.Worker, Components.Workstation, Components.DanglingItem
+```
+
+### Plugin Integration (project.labelle)
+
+```zig
+.plugins = .{
+    .{
+        .name = "labelle-tasks",
+        .path = "../../labelle-tasks",
+        .bind = .{
+            .{ .func = "bind", .args = .{"Items", "engine.EngineTypes"} },
+        },
+    },
+},
+```
+
+## Running Tests
 
 ```bash
-# Run the interactive kitchen simulator
-zig build kitchen-sim
-
-# Run the components usage example
-zig build components
-
-# Run the farm game example
-zig build farm
-
-# Run the hooks example
-zig build hooks
-
-# Run all examples
-zig build examples
-
-# Run tests
 zig build test
-```
-
-## Logging
-
-The engine uses Zig's `std.log` with scoped loggers for debugging and monitoring:
-
-- `labelle_tasks_engine` - Task orchestration, worker assignments, cycle events
-- `labelle_tasks_storage` - Item additions, removals, and transfers
-
-Configure log levels in your root file:
-
-```zig
-pub const std_options: std.Options = .{
-    .log_level = .debug,
-    .log_scope_levels = &.{
-        .{ .scope = .labelle_tasks_engine, .level = .info },
-        .{ .scope = .labelle_tasks_storage, .level = .warn },
-    },
-};
 ```
 
 ## Design Philosophy
 
-- **Self-contained engine** - No external ECS dependency, manages state internally
-- **Storage-aware** - Engine tracks resources and validates recipes automatically
-- **Callback-driven** - Engine handles orchestration, game handles movement/animations
-- **Game entity IDs** - Engine is generic over ID type (u32, u64, custom struct)
-- **Automatic state management** - Workstations transition based on storage state
+- **Pure state machine** - No external ECS dependency, manages state internally
+- **Engine-agnostic** - No labelle-engine dependency; types injected via comptime parameters
+- **Storage-aware** - Engine tracks resources and validates automatically
+- **Hook-driven** - Engine handles orchestration, game handles movement/animations
+- **Generic entity IDs** - Engine is generic over ID type (u32, u64, custom)
+- **Priority-aware** - Higher-priority workstations and storages are served first
 
 ## License
 
