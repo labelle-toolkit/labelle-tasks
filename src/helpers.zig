@@ -137,13 +137,16 @@ pub fn Helpers(
                 if (worker_id) |wid| {
                     assignWorkerToWorkstation(engine, wid, ws_id);
 
-                    // Remove from idle list
+                    // Remove from idle list (O(1) swap remove)
                     for (idle_workers.items, 0..) |id, i| {
                         if (id == wid) {
                             _ = idle_workers.swapRemove(i);
                             break;
                         }
                     }
+
+                    // Early exit when no idle workers remain
+                    if (idle_workers.items.len == 0) break;
                 }
             }
         }
