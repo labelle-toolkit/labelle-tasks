@@ -35,6 +35,26 @@ const std = @import("std");
 const ecs_bridge = @import("ecs_bridge.zig");
 const engine_mod = @import("engine.zig");
 
+// ============================================
+// Shared pointers for enriched payloads (non-parameterized)
+// ============================================
+// These are set by TaskEngineContextWith.ensureContext and read by
+// createEngineHooks' enriched payload. They break the circular dependency
+// where WrappedHooks needs Ctx but Ctx depends on WrappedHooks.
+
+var shared_registry_ptr: ?*anyopaque = null;
+var shared_game_ptr: ?*anyopaque = null;
+
+pub fn getSharedRegistry(comptime RegistryType: type) ?*RegistryType {
+    const ptr = shared_registry_ptr orelse return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
+pub fn getSharedGame(comptime GameType: type) ?*GameType {
+    const ptr = shared_game_ptr orelse return null;
+    return @ptrCast(@alignCast(ptr));
+}
+
 /// Context for managing task engine lifecycle and game integration (with injected engine types).
 /// This version accepts EngineTypes to avoid importing labelle-engine directly,
 /// which prevents module collision in WASM builds.
@@ -153,6 +173,8 @@ pub fn TaskEngineContextWith(
         pub fn deinit() void {
             const self = active orelse return;
             active = null;
+            shared_registry_ptr = null;
+            shared_game_ptr = null;
 
             EcsInterface.clearActive();
             self.engine.deinit();
@@ -167,9 +189,11 @@ pub fn TaskEngineContextWith(
             const self = active orelse return;
             if (self.registry_ptr == null) {
                 self.registry_ptr = registry_ptr_raw;
+                shared_registry_ptr = registry_ptr_raw;
             }
             if (self.game_ptr == null) {
                 self.game_ptr = game_ptr_raw;
+                shared_game_ptr = game_ptr_raw;
             }
         }
 

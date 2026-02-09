@@ -301,22 +301,35 @@ pub fn createEngineHooks(
     // Create a wrapper that enriches payloads with registry and game.
     // Uses active context instance for registry/game access.
     const WrappedHooks = struct {
-        /// Simple enriched payload wrapper: stores original payload + context.
+        /// Flat enriched payload: copies all original fields to top level + adds registry/game.
+        /// This preserves backward compatibility so game hooks can access payload.worker_id directly.
         fn EnrichedPayload(comptime Original: type) type {
             return struct {
-                /// The original hook payload with all its fields
-                original: Original,
-                /// Game registry pointer (if available)
+                // Copy original payload fields (void if not present in original)
+                worker_id: if (@hasField(Original, "worker_id")) @FieldType(Original, "worker_id") else void = if (@hasField(Original, "worker_id")) undefined else {},
+                storage_id: if (@hasField(Original, "storage_id")) @FieldType(Original, "storage_id") else void = if (@hasField(Original, "storage_id")) undefined else {},
+                workstation_id: if (@hasField(Original, "workstation_id")) @FieldType(Original, "workstation_id") else void = if (@hasField(Original, "workstation_id")) undefined else {},
+                item: if (@hasField(Original, "item")) @FieldType(Original, "item") else void = if (@hasField(Original, "item")) undefined else {},
+                item_id: if (@hasField(Original, "item_id")) @FieldType(Original, "item_id") else void = if (@hasField(Original, "item_id")) undefined else {},
+                item_type: if (@hasField(Original, "item_type")) @FieldType(Original, "item_type") else void = if (@hasField(Original, "item_type")) undefined else {},
+                target_eis_id: if (@hasField(Original, "target_eis_id")) @FieldType(Original, "target_eis_id") else void = if (@hasField(Original, "target_eis_id")) undefined else {},
+                from_storage_id: if (@hasField(Original, "from_storage_id")) @FieldType(Original, "from_storage_id") else void = if (@hasField(Original, "from_storage_id")) undefined else {},
+                to_storage_id: if (@hasField(Original, "to_storage_id")) @FieldType(Original, "to_storage_id") else void = if (@hasField(Original, "to_storage_id")) undefined else {},
+                cycles_completed: if (@hasField(Original, "cycles_completed")) @FieldType(Original, "cycles_completed") else void = if (@hasField(Original, "cycles_completed")) undefined else {},
+
+                // Added context fields
                 registry: ?*Registry,
-                /// Game pointer (if available)
                 game: ?*Game,
 
-                fn create(orig: Original) @This() {
-                    return .{
-                        .original = orig,
-                        .registry = Ctx.getRegistry(Registry),
-                        .game = Ctx.getGame(Game),
+                fn create(original: Original) @This() {
+                    var result: @This() = .{
+                        .registry = context_mod.getSharedRegistry(Registry),
+                        .game = context_mod.getSharedGame(Game),
                     };
+                    inline for (@typeInfo(Original).@"struct".fields) |field| {
+                        @field(result, field.name) = @field(original, field.name);
+                    }
+                    return result;
                 }
             };
         }
