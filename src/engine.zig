@@ -73,13 +73,10 @@ pub fn Engine(
         }
 
         pub fn deinit(self: *Self) void {
-            // Free workstation storage slices
+            // Free workstation storage lists
             var ws_iter = self.workstations.valueIterator();
             while (ws_iter.next()) |ws| {
-                self.allocator.free(ws.eis);
-                self.allocator.free(ws.iis);
-                self.allocator.free(ws.ios);
-                self.allocator.free(ws.eos);
+                ws.deinit(self.allocator);
             }
             self.workstations.deinit();
             self.workers.deinit();
@@ -137,15 +134,21 @@ pub fn Engine(
 
         /// Register a workstation with the engine
         pub fn addWorkstation(self: *Self, workstation_id: GameId, config: WorkstationConfig) !void {
-            // Copy the storage ID slices since they may be stack-allocated
-            const eis = try self.allocator.dupe(GameId, config.eis);
-            errdefer self.allocator.free(eis);
-            const iis = try self.allocator.dupe(GameId, config.iis);
-            errdefer self.allocator.free(iis);
-            const ios = try self.allocator.dupe(GameId, config.ios);
-            errdefer self.allocator.free(ios);
-            const eos = try self.allocator.dupe(GameId, config.eos);
-            errdefer self.allocator.free(eos);
+            var eis = std.ArrayListUnmanaged(GameId){};
+            errdefer eis.deinit(self.allocator);
+            try eis.appendSlice(self.allocator, config.eis);
+
+            var iis = std.ArrayListUnmanaged(GameId){};
+            errdefer iis.deinit(self.allocator);
+            try iis.appendSlice(self.allocator, config.iis);
+
+            var ios = std.ArrayListUnmanaged(GameId){};
+            errdefer ios.deinit(self.allocator);
+            try ios.appendSlice(self.allocator, config.ios);
+
+            var eos = std.ArrayListUnmanaged(GameId){};
+            errdefer eos.deinit(self.allocator);
+            try eos.appendSlice(self.allocator, config.eos);
 
             try self.workstations.put(workstation_id, .{
                 .eis = eis,
@@ -161,11 +164,8 @@ pub fn Engine(
 
         /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
-            if (self.workstations.fetchRemove(workstation_id)) |kv| {
-                self.allocator.free(kv.value.eis);
-                self.allocator.free(kv.value.iis);
-                self.allocator.free(kv.value.ios);
-                self.allocator.free(kv.value.eos);
+            if (self.workstations.fetchRemove(workstation_id)) |*kv| {
+                kv.value.deinit(self.allocator);
             }
         }
 
@@ -178,37 +178,12 @@ pub fn Engine(
                 return error.WorkstationNotFound;
             };
 
-            // Append storage to appropriate array based on role
-            // Create new slice with additional element, copy old data, free old slice
+            // Append storage to appropriate list based on role
             switch (role) {
-                .eis => {
-                    const new_eis = try self.allocator.alloc(GameId, ws.eis.len + 1);
-                    @memcpy(new_eis[0..ws.eis.len], ws.eis);
-                    new_eis[ws.eis.len] = storage_id;
-                    self.allocator.free(ws.eis);
-                    ws.eis = new_eis;
-                },
-                .iis => {
-                    const new_iis = try self.allocator.alloc(GameId, ws.iis.len + 1);
-                    @memcpy(new_iis[0..ws.iis.len], ws.iis);
-                    new_iis[ws.iis.len] = storage_id;
-                    self.allocator.free(ws.iis);
-                    ws.iis = new_iis;
-                },
-                .ios => {
-                    const new_ios = try self.allocator.alloc(GameId, ws.ios.len + 1);
-                    @memcpy(new_ios[0..ws.ios.len], ws.ios);
-                    new_ios[ws.ios.len] = storage_id;
-                    self.allocator.free(ws.ios);
-                    ws.ios = new_ios;
-                },
-                .eos => {
-                    const new_eos = try self.allocator.alloc(GameId, ws.eos.len + 1);
-                    @memcpy(new_eos[0..ws.eos.len], ws.eos);
-                    new_eos[ws.eos.len] = storage_id;
-                    self.allocator.free(ws.eos);
-                    ws.eos = new_eos;
-                },
+                .eis => try ws.eis.append(self.allocator, storage_id),
+                .iis => try ws.iis.append(self.allocator, storage_id),
+                .ios => try ws.ios.append(self.allocator, storage_id),
+                .eos => try ws.eos.append(self.allocator, storage_id),
             }
 
             // Re-evaluate workstation status after adding storage
