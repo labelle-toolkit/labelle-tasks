@@ -140,6 +140,8 @@ pub fn Engine(
         /// Register a worker with the engine
         pub fn addWorker(self: *Self, worker_id: GameId) !void {
             try self.workers.put(worker_id, .{});
+            errdefer _ = self.workers.remove(worker_id);
+            try self.idle_workers_set.put(worker_id, {});
         }
 
         /// Workstation configuration for registration
@@ -191,6 +193,17 @@ pub fn Engine(
 
         /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
+            // Release assigned worker before removing
+            if (self.workstations.getPtr(workstation_id)) |ws| {
+                if (ws.assigned_worker) |worker_id| {
+                    if (self.workers.getPtr(worker_id)) |worker| {
+                        worker.state = .Idle;
+                        worker.assigned_workstation = null;
+                        self.markWorkerIdle(worker_id);
+                        self.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
+                    }
+                }
+            }
             self.removeWorkstationTracking(workstation_id);
             if (self.workstations.fetchRemove(workstation_id)) |kv| {
                 // Clean up reverse index entries
@@ -517,9 +530,17 @@ pub fn Engine(
 
         /// Evaluate dangling items and try to assign workers
         pub fn evaluateDanglingItems(self: *Self) void {
-            // Get idle workers (we need to free this later)
-            const idle_workers = self.getIdleWorkers() catch return;
-            defer self.allocator.free(idle_workers);
+            if (self.idle_workers_set.count() == 0) return;
+
+            // Snapshot idle workers into local buffer (same reentrancy-safe pattern as tryAssignWorkers)
+            var idle_buf: std.ArrayListUnmanaged(GameId) = .{};
+            defer idle_buf.deinit(self.allocator);
+            idle_buf.ensureTotalCapacity(self.allocator, self.idle_workers_set.count()) catch return;
+            var idle_iter = self.idle_workers_set.keyIterator();
+            while (idle_iter.next()) |wid| {
+                idle_buf.appendAssumeCapacity(wid.*);
+            }
+            const idle_workers = idle_buf.items;
 
             if (idle_workers.len == 0) return;
 

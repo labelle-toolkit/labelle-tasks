@@ -100,6 +100,7 @@ pub fn TaskEngineContextWith(
             eng.* = Engine.init(allocator, .{}, defaultDistanceFn);
 
             const self = try allocator.create(Self);
+            errdefer allocator.destroy(self);
             self.* = Self{
                 .engine = eng,
                 .allocator = allocator,

@@ -178,11 +178,17 @@ pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
 /// tasks.setEngineInterface(u64, Item, task_engine.interface());
 /// ```
 pub fn setEngineInterface(comptime GameId: type, comptime Item: type, iface: EcsInterface(GameId, Item)) void {
+    comptime {
+        if (GameId != u64) @compileError("setEngineInterface requires GameId = u64 to match component bridge type");
+    }
     ecs_bridge.EcsInterface(GameId, Item).setActive(iface);
 }
 
 /// Clear the ECS interface (for cleanup).
 pub fn clearEngineInterface(comptime GameId: type, comptime Item: type) void {
+    comptime {
+        if (GameId != u64) @compileError("clearEngineInterface requires GameId = u64 to match component bridge type");
+    }
     ecs_bridge.EcsInterface(GameId, Item).clearActive();
 }
 
