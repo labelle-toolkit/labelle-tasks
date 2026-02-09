@@ -34,6 +34,13 @@ pub fn Helpers(
                 ws.status = .Blocked;
             }
 
+            // Update tracking set
+            if (ws.status == .Queued) {
+                engine.markWorkstationQueued(workstation_id);
+            } else {
+                engine.markWorkstationNotQueued(workstation_id);
+            }
+
             // Emit status change hooks
             if (ws.status != old_status) {
                 switch (ws.status) {
@@ -105,45 +112,59 @@ pub fn Helpers(
         // ============================================
 
         pub fn tryAssignWorkers(engine: *EngineType) void {
-            // Collect idle workers
-            var idle_workers = std.ArrayListUnmanaged(GameId){};
-            defer idle_workers.deinit(engine.allocator);
+            if (engine.idle_workers_set.count() == 0) return;
+            if (engine.queued_workstations_set.count() == 0) return;
 
-            var worker_iter = engine.workers.iterator();
-            while (worker_iter.next()) |entry| {
-                if (entry.value_ptr.state == .Idle) {
-                    idle_workers.append(engine.allocator, entry.key_ptr.*) catch continue;
-                }
+            // Snapshot into local buffers to avoid reentrancy issues
+            // (assignWorkerToWorkstation dispatches hooks which could trigger tryAssignWorkers again)
+            var idle_scratch: std.ArrayListUnmanaged(GameId) = .{};
+            defer idle_scratch.deinit(engine.allocator);
+            var queued_scratch: std.ArrayListUnmanaged(GameId) = .{};
+            defer queued_scratch.deinit(engine.allocator);
+
+            idle_scratch.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
+            queued_scratch.ensureTotalCapacity(engine.allocator, engine.queued_workstations_set.count()) catch return;
+
+            var idle_iter = engine.idle_workers_set.keyIterator();
+            while (idle_iter.next()) |wid| {
+                idle_scratch.appendAssumeCapacity(wid.*);
             }
 
-            if (idle_workers.items.len == 0) return;
+            var queued_iter = engine.queued_workstations_set.keyIterator();
+            while (queued_iter.next()) |wsid| {
+                queued_scratch.appendAssumeCapacity(wsid.*);
+            }
 
-            // Find queued workstations and assign workers
-            var ws_iter = engine.workstations.iterator();
-            while (ws_iter.next()) |entry| {
-                const ws_id = entry.key_ptr.*;
-                const ws = entry.value_ptr;
+            var idle_workers = idle_scratch.items;
+            if (idle_workers.len == 0) return;
 
+            // Assign idle workers to queued workstations (iterating snapshots, safe to mutate sets)
+            for (queued_scratch.items) |ws_id| {
+                const ws = engine.workstations.get(ws_id) orelse continue;
                 if (ws.status != .Queued) continue;
 
                 // Use callback to select worker, or just pick first
                 const worker_id = if (engine.find_best_worker_fn) |callback|
-                    callback(ws_id, idle_workers.items)
-                else if (idle_workers.items.len > 0)
-                    idle_workers.items[0]
+                    callback(ws_id, idle_workers)
+                else if (idle_workers.len > 0)
+                    idle_workers[0]
                 else
                     null;
 
                 if (worker_id) |wid| {
                     assignWorkerToWorkstation(engine, wid, ws_id);
 
-                    // Remove from idle list (O(n) search + O(1) swap remove)
-                    if (std.mem.indexOfScalar(GameId, idle_workers.items, wid)) |i| {
-                        _ = idle_workers.swapRemove(i);
+                    // O(n) search + O(1) swap remove from local snapshot
+                    for (idle_workers, 0..) |id, idx| {
+                        if (id == wid) {
+                            idle_workers[idx] = idle_workers[idle_workers.len - 1];
+                            idle_workers = idle_workers[0 .. idle_workers.len - 1];
+                            break;
+                        }
                     }
 
                     // Early exit when no idle workers remain
-                    if (idle_workers.items.len == 0) break;
+                    if (idle_workers.len == 0) break;
                 }
             }
         }
@@ -156,6 +177,10 @@ pub fn Helpers(
             worker.assigned_workstation = workstation_id;
             ws.assigned_worker = worker_id;
             ws.status = .Active;
+
+            // Update tracking sets
+            engine.markWorkerBusy(worker_id);
+            engine.markWorkstationNotQueued(workstation_id);
 
             engine.dispatcher.dispatch(.{ .worker_assigned = .{
                 .worker_id = worker_id,
