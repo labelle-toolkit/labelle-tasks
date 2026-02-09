@@ -57,6 +57,11 @@ pub fn Handlers(
 
         pub fn handleStorageCleared(engine: *EngineType, storage_id: GameId) anyerror!void {
             _ = engine.storages.remove(storage_id);
+            // Clean up reverse index entry for this storage
+            if (engine.storage_to_workstations.fetchRemove(storage_id)) |kv| {
+                var list = kv.value;
+                list.deinit(engine.allocator);
+            }
         }
 
         // ============================================
@@ -149,6 +154,7 @@ pub fn Handlers(
                     if (engine.workers.getPtr(worker_id)) |worker| {
                         worker.state = .Idle;
                         worker.assigned_workstation = null;
+                        engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
                     }
                 }
             }

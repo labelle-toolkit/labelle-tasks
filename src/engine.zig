@@ -317,6 +317,10 @@ pub fn Engine(
             if (!gop.found_existing) {
                 gop.value_ptr.* = .{};
             }
+            // Prevent duplicate entries
+            for (gop.value_ptr.items) |existing_id| {
+                if (existing_id == workstation_id) return;
+            }
             gop.value_ptr.append(self.allocator, workstation_id) catch {
                 std.log.err("[tasks] addReverseIndexEntry: failed to append workstation {} for storage {}", .{ workstation_id, storage_id });
             };
