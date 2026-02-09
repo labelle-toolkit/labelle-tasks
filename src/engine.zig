@@ -242,12 +242,11 @@ pub fn Engine(
                 .store_completed => |p| EventHandlers.handleStoreCompleted(self, p.worker_id),
             };
 
-            if (result) |_| {
-                return true;
-            } else |err| {
+            result catch |err| {
                 log.warn("handle: event failed with {}", .{err});
                 return false;
-            }
+            };
+            return true;
         }
 
         // ============================================
