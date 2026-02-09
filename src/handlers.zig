@@ -39,8 +39,8 @@ pub fn Handlers(
             storage.has_item = true;
             storage.item_type = item;
 
-            // Re-evaluate workstations that use this storage
-            engine.reevaluateWorkstations();
+            // Re-evaluate only workstations that reference this storage
+            engine.reevaluateAffectedWorkstations(storage_id);
         }
 
         pub fn handleItemRemoved(engine: *EngineType, storage_id: GameId) anyerror!void {
@@ -52,11 +52,16 @@ pub fn Handlers(
             storage.has_item = false;
             storage.item_type = null;
 
-            engine.reevaluateWorkstations();
+            engine.reevaluateAffectedWorkstations(storage_id);
         }
 
         pub fn handleStorageCleared(engine: *EngineType, storage_id: GameId) anyerror!void {
             _ = engine.storages.remove(storage_id);
+            // Clean up reverse index entry for this storage
+            if (engine.storage_to_workstations.fetchRemove(storage_id)) |kv| {
+                var list = kv.value;
+                list.deinit(engine.allocator);
+            }
         }
 
         // ============================================
@@ -143,19 +148,18 @@ pub fn Handlers(
         }
 
         pub fn handleWorkstationRemoved(engine: *EngineType, workstation_id: GameId) anyerror!void {
+            // Release worker if assigned (before removing workstation)
             if (engine.workstations.getPtr(workstation_id)) |ws| {
-                // Release worker
                 if (ws.assigned_worker) |worker_id| {
                     if (engine.workers.getPtr(worker_id)) |worker| {
                         worker.state = .Idle;
                         worker.assigned_workstation = null;
+                        engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
                     }
                 }
-
-                // Free storage lists
-                ws.deinit(engine.allocator);
             }
-            _ = engine.workstations.remove(workstation_id);
+            // Delegate to removeWorkstation which handles reverse index cleanup and memory freeing
+            engine.removeWorkstation(workstation_id);
         }
 
         // ============================================
