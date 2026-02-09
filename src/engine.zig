@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const log = std.log.scoped(.tasks);
 
 const hooks_mod = @import("hooks.zig");
 const types = @import("types.zig");
@@ -226,7 +227,7 @@ pub fn Engine(
 
         /// Main entry point for game notifications
         pub fn handle(self: *Self, payload: GamePayload) bool {
-            return switch (payload) {
+            const result = switch (payload) {
                 .item_added => |p| EventHandlers.handleItemAdded(self, p.storage_id, p.item),
                 .item_removed => |p| EventHandlers.handleItemRemoved(self, p.storage_id),
                 .storage_cleared => |p| EventHandlers.handleStorageCleared(self, p.storage_id),
@@ -240,6 +241,12 @@ pub fn Engine(
                 .work_completed => |p| EventHandlers.handleWorkCompleted(self, p.workstation_id),
                 .store_completed => |p| EventHandlers.handleStoreCompleted(self, p.worker_id),
             };
+
+            result catch |err| {
+                log.warn("handle: event failed with {}", .{err});
+                return false;
+            };
+            return true;
         }
 
         // ============================================

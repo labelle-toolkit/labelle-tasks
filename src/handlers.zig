@@ -22,10 +22,10 @@ pub fn Handlers(
         // Storage handlers
         // ============================================
 
-        pub fn handleItemAdded(engine: *EngineType, storage_id: GameId, item: Item) bool {
+        pub fn handleItemAdded(engine: *EngineType, storage_id: GameId, item: Item) anyerror!void {
             const storage = engine.storages.getPtr(storage_id) orelse {
                 log.err("item_added: unknown storage {}", .{storage_id});
-                return false;
+                return error.UnknownStorage;
             };
 
             // Allow setting item_type even if has_item is already true
@@ -33,7 +33,7 @@ pub fn Handlers(
             // but game sets item_type via process_completed hook
             if (storage.has_item and storage.item_type != null) {
                 log.warn("item_added: storage {} already has item {s}, ignoring", .{ storage_id, @tagName(storage.item_type.?) });
-                return false;
+                return error.StorageAlreadyFull;
             }
 
             storage.has_item = true;
@@ -41,35 +41,32 @@ pub fn Handlers(
 
             // Re-evaluate workstations that use this storage
             engine.reevaluateWorkstations();
-            return true;
         }
 
-        pub fn handleItemRemoved(engine: *EngineType, storage_id: GameId) bool {
+        pub fn handleItemRemoved(engine: *EngineType, storage_id: GameId) anyerror!void {
             const storage = engine.storages.getPtr(storage_id) orelse {
                 log.err("item_removed: unknown storage {}", .{storage_id});
-                return false;
+                return error.UnknownStorage;
             };
 
             storage.has_item = false;
             storage.item_type = null;
 
             engine.reevaluateWorkstations();
-            return true;
         }
 
-        pub fn handleStorageCleared(engine: *EngineType, storage_id: GameId) bool {
+        pub fn handleStorageCleared(engine: *EngineType, storage_id: GameId) anyerror!void {
             _ = engine.storages.remove(storage_id);
-            return true;
         }
 
         // ============================================
         // Worker handlers
         // ============================================
 
-        pub fn handleWorkerAvailable(engine: *EngineType, worker_id: GameId) bool {
+        pub fn handleWorkerAvailable(engine: *EngineType, worker_id: GameId) anyerror!void {
             const worker = engine.workers.getPtr(worker_id) orelse {
                 log.err("worker_available: unknown worker {}", .{worker_id});
-                return false;
+                return error.UnknownWorker;
             };
 
             worker.state = .Idle;
@@ -82,13 +79,12 @@ pub fn Handlers(
             if (worker.state == .Idle) {
                 engine.tryAssignWorkers();
             }
-            return true;
         }
 
-        pub fn handleWorkerUnavailable(engine: *EngineType, worker_id: GameId) bool {
+        pub fn handleWorkerUnavailable(engine: *EngineType, worker_id: GameId) anyerror!void {
             const worker = engine.workers.getPtr(worker_id) orelse {
                 log.err("worker_unavailable: unknown worker {}", .{worker_id});
-                return false;
+                return error.UnknownWorker;
             };
 
             // If worker was assigned, release from workstation
@@ -104,10 +100,9 @@ pub fn Handlers(
 
             worker.state = .Unavailable;
             worker.assigned_workstation = null;
-            return true;
         }
 
-        pub fn handleWorkerRemoved(engine: *EngineType, worker_id: GameId) bool {
+        pub fn handleWorkerRemoved(engine: *EngineType, worker_id: GameId) anyerror!void {
             if (engine.workers.getPtr(worker_id)) |worker| {
                 // Release from workstation first
                 if (worker.assigned_workstation) |ws_id| {
@@ -118,21 +113,19 @@ pub fn Handlers(
                 }
             }
             _ = engine.workers.remove(worker_id);
-            return true;
         }
 
         // ============================================
         // Workstation handlers
         // ============================================
 
-        pub fn handleWorkstationEnabled(engine: *EngineType, workstation_id: GameId) bool {
+        pub fn handleWorkstationEnabled(engine: *EngineType, workstation_id: GameId) anyerror!void {
             engine.evaluateWorkstationStatus(workstation_id);
-            return true;
         }
 
-        pub fn handleWorkstationDisabled(engine: *EngineType, workstation_id: GameId) bool {
+        pub fn handleWorkstationDisabled(engine: *EngineType, workstation_id: GameId) anyerror!void {
             const ws = engine.workstations.getPtr(workstation_id) orelse {
-                return false;
+                return error.UnknownWorkstation;
             };
 
             // Release worker if assigned
@@ -147,10 +140,9 @@ pub fn Handlers(
             ws.status = .Blocked;
             ws.assigned_worker = null;
             engine.dispatcher.dispatch(.{ .workstation_blocked = .{ .workstation_id = workstation_id } });
-            return true;
         }
 
-        pub fn handleWorkstationRemoved(engine: *EngineType, workstation_id: GameId) bool {
+        pub fn handleWorkstationRemoved(engine: *EngineType, workstation_id: GameId) anyerror!void {
             if (engine.workstations.getPtr(workstation_id)) |ws| {
                 // Release worker
                 if (ws.assigned_worker) |worker_id| {
@@ -167,24 +159,23 @@ pub fn Handlers(
                 engine.allocator.free(ws.eos);
             }
             _ = engine.workstations.remove(workstation_id);
-            return true;
         }
 
         // ============================================
         // Step completion handlers
         // ============================================
 
-        pub fn handlePickupCompleted(engine: *EngineType, worker_id: GameId) bool {
+        pub fn handlePickupCompleted(engine: *EngineType, worker_id: GameId) anyerror!void {
             const worker = engine.workers.getPtr(worker_id) orelse {
                 log.err("pickup_completed: unknown worker {}", .{worker_id});
-                return false;
+                return error.UnknownWorker;
             };
 
             // Handle dangling item delivery
             if (worker.dangling_task) |task| {
                 const item_type = engine.dangling_items.get(task.item_id) orelse {
                     log.err("pickup_completed: dangling item {} no longer exists", .{task.item_id});
-                    return false;
+                    return error.DanglingItemNotFound;
                 };
 
                 // Dispatch store_started to move worker to EIS
@@ -193,22 +184,22 @@ pub fn Handlers(
                     .storage_id = task.target_eis_id,
                     .item = item_type,
                 } });
-                return true;
+                return;
             }
 
             const ws_id = worker.assigned_workstation orelse {
                 log.err("pickup_completed: worker {} not assigned to workstation", .{worker_id});
-                return false;
+                return error.WorkerNotAssigned;
             };
 
             const ws = engine.workstations.getPtr(ws_id) orelse {
                 log.err("pickup_completed: unknown workstation {}", .{ws_id});
-                return false;
+                return error.UnknownWorkstation;
             };
 
             if (ws.current_step != .Pickup) {
                 log.err("pickup_completed: workstation {} not in Pickup step", .{ws_id});
-                return false;
+                return error.InvalidStep;
             }
 
             // Update abstract state: item moved from EIS to IIS
@@ -263,24 +254,22 @@ pub fn Handlers(
                     } });
                 }
             }
-
-            return true;
         }
 
-        pub fn handleWorkCompleted(engine: *EngineType, workstation_id: GameId) bool {
+        pub fn handleWorkCompleted(engine: *EngineType, workstation_id: GameId) anyerror!void {
             const ws = engine.workstations.getPtr(workstation_id) orelse {
                 log.err("work_completed: unknown workstation {}", .{workstation_id});
-                return false;
+                return error.UnknownWorkstation;
             };
 
             if (ws.current_step != .Process) {
                 log.err("work_completed: workstation {} not in Process step", .{workstation_id});
-                return false;
+                return error.InvalidStep;
             }
 
             const worker_id = ws.assigned_worker orelse {
                 log.err("work_completed: workstation {} has no assigned worker", .{workstation_id});
-                return false;
+                return error.NoAssignedWorker;
             };
 
             // Update abstract state: IIS → IOS transformation
@@ -335,24 +324,22 @@ pub fn Handlers(
                 engine.dispatcher.dispatch(.{ .store_started = .{
                     .worker_id = worker_id,
                     .storage_id = eos_id,
-                    .item = item orelse return true, // No item to store
+                    .item = item orelse return, // No item to store
                 } });
             }
-
-            return true;
         }
 
-        pub fn handleStoreCompleted(engine: *EngineType, worker_id: GameId) bool {
+        pub fn handleStoreCompleted(engine: *EngineType, worker_id: GameId) anyerror!void {
             const worker = engine.workers.getPtr(worker_id) orelse {
                 log.err("store_completed: unknown worker {}", .{worker_id});
-                return false;
+                return error.UnknownWorker;
             };
 
             // Handle dangling item delivery completion
             if (worker.dangling_task) |task| {
                 const item_type = engine.dangling_items.get(task.item_id) orelse {
                     log.err("store_completed: dangling item {} no longer exists", .{task.item_id});
-                    return false;
+                    return error.DanglingItemNotFound;
                 };
 
                 // Update EIS state - now has the item
@@ -391,22 +378,22 @@ pub fn Handlers(
                     }
                 }
 
-                return true;
+                return;
             }
 
             const ws_id = worker.assigned_workstation orelse {
                 log.err("store_completed: worker {} not assigned to workstation", .{worker_id});
-                return false;
+                return error.WorkerNotAssigned;
             };
 
             const ws = engine.workstations.getPtr(ws_id) orelse {
                 log.err("store_completed: unknown workstation {}", .{ws_id});
-                return false;
+                return error.UnknownWorkstation;
             };
 
             if (ws.current_step != .Store) {
                 log.err("store_completed: workstation {} not in Store step", .{ws_id});
-                return false;
+                return error.InvalidStep;
             }
 
             // Update abstract state: IOS → EOS
@@ -490,8 +477,6 @@ pub fn Handlers(
                     }
                 }
             }
-
-            return true;
         }
     };
 }
