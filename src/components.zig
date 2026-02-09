@@ -27,6 +27,10 @@ pub const StorageRole = ecs_bridge.StorageRole;
 /// Components parameterized by EngineTypes to avoid direct labelle-engine imports.
 /// This prevents WASM module collision when both labelle-engine and labelle-tasks
 /// try to import the same engine module.
+///
+/// Note: Components use `EcsInterface(u64, Item)` because ECS entity IDs are always u64.
+/// The task engine must also be initialized with `GameId = u64` so the bridge's
+/// comptime-scoped active pointer matches (enforced by TaskEngineContextWith).
 pub fn ComponentsWith(comptime EngineTypes: type) type {
     const Entity = EngineTypes.Entity;
     const ComponentPayload = EngineTypes.ComponentPayload;
@@ -45,6 +49,8 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
         /// Parent Reference (RFC #169): When nested inside a Workstation component,
         /// the `workstation` field is automatically populated by the loader.
         pub fn Storage(comptime Item: type) type {
+            const Interface = ecs_bridge.EcsInterface(u64, Item);
+
             return struct {
                 /// Role in the workflow (EIS, IIS, IOS, EOS)
                 role: StorageRole = .eis,
@@ -87,8 +93,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
                 /// Component callback - called after hierarchy is complete (RFC #169).
                 /// Registers the storage with the task engine and attaches to parent workstation.
                 pub fn onReady(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse {
+                    const iface = Interface.getActive() orelse {
                         std.log.warn("[tasks.Storage] No ECS interface set - storage {d} not registered", .{payload.entity_id});
                         return;
                     };
@@ -130,8 +135,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
                 /// Component callback - called when component is removed from entity.
                 /// Automatically unregisters the storage from the task engine.
                 pub fn onRemove(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse return;
+                    const iface = Interface.getActive() orelse return;
                     iface.removeStorage(payload.entity_id);
                 }
             };
@@ -143,6 +147,8 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
         /// When this component is added to an entity, it automatically registers
         /// with the task engine as idle. When removed, it unregisters.
         pub fn Worker(comptime Item: type) type {
+            const Interface = ecs_bridge.EcsInterface(u64, Item);
+
             return struct {
                 /// Whether the worker starts as available (default: true)
                 available: bool = true,
@@ -151,8 +157,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
 
                 /// Component callback - called when component is added to entity.
                 pub fn onAdd(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse {
+                    const iface = Interface.getActive() orelse {
                         std.log.warn("[tasks.Worker] No ECS interface set - worker {d} not registered", .{payload.entity_id});
                         return;
                     };
@@ -179,8 +184,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
 
                 /// Component callback - called when component is removed from entity.
                 pub fn onRemove(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse return;
+                    const iface = Interface.getActive() orelse return;
                     iface.removeWorker(payload.entity_id);
                 }
             };
@@ -193,6 +197,8 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
         /// with the task engine. Nested Storage components will auto-attach via
         /// parent reference (RFC #169).
         pub fn Workstation(comptime Item: type) type {
+            const Interface = ecs_bridge.EcsInterface(u64, Item);
+
             return struct {
                 /// Processing duration in frames (0 = use default)
                 process_duration: u32 = 120,
@@ -204,8 +210,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
                 /// Component callback - called when component is added.
                 /// Registers immediately so it's available when Storage.onReady fires.
                 pub fn onAdd(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse {
+                    const iface = Interface.getActive() orelse {
                         std.log.warn("[tasks.Workstation] No ECS interface set - workstation {d} not registered", .{payload.entity_id});
                         return;
                     };
@@ -225,8 +230,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
 
                 /// Component callback - called when component is removed.
                 pub fn onRemove(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse return;
+                    const iface = Interface.getActive() orelse return;
                     iface.removeWorkstation(payload.entity_id);
                     std.log.info("[tasks.Workstation] Entity {d} removed", .{payload.entity_id});
                 }
@@ -239,6 +243,8 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
         /// When this component is added to an entity, it registers as a dangling item
         /// that idle workers can pick up and deliver to an empty EIS.
         pub fn DanglingItem(comptime Item: type) type {
+            const Interface = ecs_bridge.EcsInterface(u64, Item);
+
             return struct {
                 /// The type of item this entity represents
                 item_type: Item,
@@ -247,8 +253,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
 
                 /// Component callback - called when component is added to entity.
                 pub fn onAdd(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse {
+                    const iface = Interface.getActive() orelse {
                         std.log.warn("[tasks.DanglingItem] No ECS interface set - item {d} not registered", .{payload.entity_id});
                         return;
                     };
@@ -269,8 +274,7 @@ pub fn ComponentsWith(comptime EngineTypes: type) type {
 
                 /// Component callback - called when component is removed from entity.
                 pub fn onRemove(payload: ComponentPayload) void {
-                    const Interface = ecs_bridge.InterfaceStorage(u64, Item);
-                    const iface = Interface.getInterface() orelse return;
+                    const iface = Interface.getActive() orelse return;
                     iface.removeDanglingItem(payload.entity_id);
                 }
             };
