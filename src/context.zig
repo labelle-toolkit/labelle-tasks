@@ -71,7 +71,6 @@ pub fn TaskEngineContextWith(
 
         pub const Engine = engine_mod.Engine(GameId, Item, Hooks);
         pub const EcsInterface = ecs_bridge.EcsInterface(GameId, Item);
-        pub const InterfaceStorage = ecs_bridge.InterfaceStorage(GameId, Item);
 
         // Injected types from labelle-engine
         const Registry = EngineTypes.Registry;
@@ -113,11 +112,10 @@ pub fn TaskEngineContextWith(
             custom_vtable = engine_iface.vtable.*;
             custom_vtable.ensureContext = ensureContext;
 
-            const custom_iface = EcsInterface{
+            EcsInterface.setActive(.{
                 .ptr = engine_iface.ptr,
                 .vtable = &custom_vtable,
-            };
-            InterfaceStorage.setInterface(custom_iface);
+            });
 
             std.log.info("[TaskEngineContext] Initialized", .{});
         }
@@ -151,7 +149,7 @@ pub fn TaskEngineContextWith(
         /// Call this during game cleanup (e.g., in game_deinit hook).
         pub fn deinit() void {
             if (task_engine) |eng| {
-                InterfaceStorage.clearInterface();
+                EcsInterface.clearActive();
                 eng.deinit();
                 if (engine_allocator) |allocator| {
                     allocator.destroy(eng);

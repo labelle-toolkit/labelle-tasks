@@ -175,12 +175,12 @@ pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
 /// tasks.setEngineInterface(u64, Item, task_engine.interface());
 /// ```
 pub fn setEngineInterface(comptime GameId: type, comptime Item: type, iface: EcsInterface(GameId, Item)) void {
-    ecs_bridge.InterfaceStorage(GameId, Item).setInterface(iface);
+    ecs_bridge.EcsInterface(GameId, Item).setActive(iface);
 }
 
 /// Clear the ECS interface (for cleanup).
 pub fn clearEngineInterface(comptime GameId: type, comptime Item: type) void {
-    ecs_bridge.InterfaceStorage(GameId, Item).clearInterface();
+    ecs_bridge.EcsInterface(GameId, Item).clearActive();
 }
 
 /// Storage component for the task engine.
