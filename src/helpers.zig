@@ -143,9 +143,9 @@ pub fn Helpers(
             // workstations get workers before lower-priority ones
             std.mem.sort(GameId, queued_scratch.items, engine, struct {
                 fn lessThan(eng: *EngineType, a: GameId, b: GameId) bool {
-                    const a_priority = if (eng.workstations.get(a)) |ws| @intFromEnum(ws.priority) else @intFromEnum(types.Priority.Low);
-                    const b_priority = if (eng.workstations.get(b)) |ws| @intFromEnum(ws.priority) else @intFromEnum(types.Priority.Low);
-                    return a_priority > b_priority; // Higher priority first
+                    const a_ws = eng.workstations.get(a) orelse unreachable;
+                    const b_ws = eng.workstations.get(b) orelse unreachable;
+                    return @intFromEnum(a_ws.priority) > @intFromEnum(b_ws.priority);
                 }
             }.lessThan);
 
@@ -230,14 +230,15 @@ pub fn Helpers(
         /// Select the highest-priority storage matching the given has_item condition.
         fn selectStorage(engine: *EngineType, storage_ids: []const GameId, comptime has_item_check: bool) ?GameId {
             var best_id: ?GameId = null;
-            var best_priority: ?types.Priority = null;
+            var best_priority: i16 = -1;
 
             for (storage_ids) |id| {
                 if (engine.storages.get(id)) |storage| {
                     if (storage.has_item == has_item_check) {
-                        if (best_priority == null or @intFromEnum(storage.priority) > @intFromEnum(best_priority.?)) {
+                        const current_priority: i16 = @intFromEnum(storage.priority);
+                        if (current_priority > best_priority) {
                             best_id = id;
-                            best_priority = storage.priority;
+                            best_priority = current_priority;
                         }
                     }
                 }
