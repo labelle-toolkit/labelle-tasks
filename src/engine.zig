@@ -296,9 +296,8 @@ pub fn Engine(
 
         /// Mark a worker as idle in the tracking set
         pub fn markWorkerIdle(self: *Self, worker_id: GameId) void {
-            self.idle_workers_set.put(worker_id, {}) catch {
-                std.log.err("[tasks] markWorkerIdle: failed to track worker {}", .{worker_id});
-            };
+            self.idle_workers_set.put(worker_id, {}) catch
+                @panic("markWorkerIdle: allocation failed, engine state is inconsistent");
         }
 
         /// Mark a worker as non-idle in the tracking set
@@ -313,9 +312,8 @@ pub fn Engine(
 
         /// Mark a workstation as queued in the tracking set
         pub fn markWorkstationQueued(self: *Self, workstation_id: GameId) void {
-            self.queued_workstations_set.put(workstation_id, {}) catch {
-                std.log.err("[tasks] markWorkstationQueued: failed to track workstation {}", .{workstation_id});
-            };
+            self.queued_workstations_set.put(workstation_id, {}) catch
+                @panic("markWorkstationQueued: allocation failed, engine state is inconsistent");
         }
 
         /// Mark a workstation as non-queued in the tracking set
