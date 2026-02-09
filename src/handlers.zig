@@ -92,11 +92,9 @@ pub fn Handlers(
             if (worker.assigned_workstation) |ws_id| {
                 if (engine.workstations.getPtr(ws_id)) |ws| {
                     ws.assigned_worker = null;
-                    ws.status = .Queued;
-                    engine.markWorkstationQueued(ws_id);
-
                     engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
-                    engine.dispatcher.dispatch(.{ .workstation_queued = .{ .workstation_id = ws_id } });
+                    // Re-evaluate: workstation may be Blocked if conditions changed
+                    engine.evaluateWorkstationStatus(ws_id);
                 }
             }
 

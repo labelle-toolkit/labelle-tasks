@@ -56,10 +56,6 @@ pub fn Engine(
         idle_workers_set: std.AutoHashMap(GameId, void),
         queued_workstations_set: std.AutoHashMap(GameId, void),
 
-        // Scratch buffers for tryAssignWorkers (avoid per-tick allocations)
-        idle_workers_scratch: std.ArrayListUnmanaged(GameId) = .{},
-        queued_workstations_scratch: std.ArrayListUnmanaged(GameId) = .{},
-
         // Hook dispatcher
         dispatcher: Dispatcher,
 
@@ -95,8 +91,6 @@ pub fn Engine(
             self.dangling_items.deinit();
             self.idle_workers_set.deinit();
             self.queued_workstations_set.deinit();
-            self.idle_workers_scratch.deinit(self.allocator);
-            self.queued_workstations_scratch.deinit(self.allocator);
         }
 
         /// Set or update the distance function for spatial queries.
@@ -136,6 +130,7 @@ pub fn Engine(
         /// Register a worker with the engine
         pub fn addWorker(self: *Self, worker_id: GameId) !void {
             try self.workers.put(worker_id, .{});
+            errdefer _ = self.workers.remove(worker_id);
             // Workers start idle
             try self.idle_workers_set.put(worker_id, {});
         }

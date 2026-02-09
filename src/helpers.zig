@@ -115,28 +115,31 @@ pub fn Helpers(
             if (engine.idle_workers_set.count() == 0) return;
             if (engine.queued_workstations_set.count() == 0) return;
 
-            // Build snapshots so we can safely mutate the sets during assignment
-            engine.idle_workers_scratch.clearRetainingCapacity();
-            engine.queued_workstations_scratch.clearRetainingCapacity();
+            // Snapshot into local buffers to avoid reentrancy issues
+            // (assignWorkerToWorkstation dispatches hooks which could trigger tryAssignWorkers again)
+            var idle_scratch: std.ArrayListUnmanaged(GameId) = .{};
+            defer idle_scratch.deinit(engine.allocator);
+            var queued_scratch: std.ArrayListUnmanaged(GameId) = .{};
+            defer queued_scratch.deinit(engine.allocator);
 
-            engine.idle_workers_scratch.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
-            engine.queued_workstations_scratch.ensureTotalCapacity(engine.allocator, engine.queued_workstations_set.count()) catch return;
+            idle_scratch.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
+            queued_scratch.ensureTotalCapacity(engine.allocator, engine.queued_workstations_set.count()) catch return;
 
             var idle_iter = engine.idle_workers_set.keyIterator();
             while (idle_iter.next()) |wid| {
-                engine.idle_workers_scratch.append(engine.allocator, wid.*) catch return;
+                idle_scratch.appendAssumeCapacity(wid.*);
             }
 
             var queued_iter = engine.queued_workstations_set.keyIterator();
             while (queued_iter.next()) |wsid| {
-                engine.queued_workstations_scratch.append(engine.allocator, wsid.*) catch return;
+                queued_scratch.appendAssumeCapacity(wsid.*);
             }
 
-            var idle_workers = engine.idle_workers_scratch.items;
+            var idle_workers = idle_scratch.items;
             if (idle_workers.len == 0) return;
 
             // Assign idle workers to queued workstations (iterating snapshots, safe to mutate sets)
-            for (engine.queued_workstations_scratch.items) |ws_id| {
+            for (queued_scratch.items) |ws_id| {
                 const ws = engine.workstations.get(ws_id) orelse continue;
                 if (ws.status != .Queued) continue;
 
@@ -151,10 +154,10 @@ pub fn Helpers(
                 if (worker_id) |wid| {
                     assignWorkerToWorkstation(engine, wid, ws_id);
 
-                    // O(n) search + O(1) swap remove
-                    for (idle_workers, 0..) |id, i| {
+                    // O(n) search + O(1) swap remove from local snapshot
+                    for (idle_workers, 0..) |id, idx| {
                         if (id == wid) {
-                            idle_workers[i] = idle_workers[idle_workers.len - 1];
+                            idle_workers[idx] = idle_workers[idle_workers.len - 1];
                             idle_workers = idle_workers[0 .. idle_workers.len - 1];
                             break;
                         }
