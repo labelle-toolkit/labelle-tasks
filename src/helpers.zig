@@ -34,6 +34,13 @@ pub fn Helpers(
                 ws.status = .Blocked;
             }
 
+            // Update tracking set
+            if (ws.status == .Queued) {
+                engine.markWorkstationQueued(workstation_id);
+            } else {
+                engine.markWorkstationNotQueued(workstation_id);
+            }
+
             // Emit status change hooks
             if (ws.status != old_status) {
                 switch (ws.status) {
@@ -105,26 +112,39 @@ pub fn Helpers(
         // ============================================
 
         pub fn tryAssignWorkers(engine: *EngineType) void {
-            // Collect idle workers
-            var idle_workers = std.ArrayListUnmanaged(GameId){};
-            defer idle_workers.deinit(engine.allocator);
+            if (engine.idle_workers_set.count() == 0) return;
+            if (engine.queued_workstations_set.count() == 0) return;
 
-            var worker_iter = engine.workers.iterator();
-            while (worker_iter.next()) |entry| {
-                if (entry.value_ptr.state == .Idle) {
-                    idle_workers.append(engine.allocator, entry.key_ptr.*) catch continue;
+            // Build a snapshot of idle worker IDs for the callback API
+            // (uses stack buffer to avoid heap allocation for small counts)
+            var idle_buf: [64]GameId = undefined;
+            var idle_workers = std.ArrayListUnmanaged(GameId){};
+            defer if (idle_workers.capacity > 64) idle_workers.deinit(engine.allocator);
+
+            // Try to use stack buffer first
+            if (engine.idle_workers_set.count() <= 64) {
+                idle_workers = .{ .items = idle_buf[0..0], .capacity = 64 };
+            }
+
+            var idle_iter = engine.idle_workers_set.keyIterator();
+            while (idle_iter.next()) |wid| {
+                if (idle_workers.capacity <= 64) {
+                    // Using stack buffer
+                    if (idle_workers.items.len < 64) {
+                        idle_buf[idle_workers.items.len] = wid.*;
+                        idle_workers.items = idle_buf[0 .. idle_workers.items.len + 1];
+                    }
+                } else {
+                    idle_workers.append(engine.allocator, wid.*) catch continue;
                 }
             }
 
             if (idle_workers.items.len == 0) return;
 
-            // Find queued workstations and assign workers
-            var ws_iter = engine.workstations.iterator();
-            while (ws_iter.next()) |entry| {
-                const ws_id = entry.key_ptr.*;
-                const ws = entry.value_ptr;
-
-                if (ws.status != .Queued) continue;
+            // Iterate queued workstations from tracking set
+            var queued_iter = engine.queued_workstations_set.keyIterator();
+            while (queued_iter.next()) |ws_id_ptr| {
+                const ws_id = ws_id_ptr.*;
 
                 // Use callback to select worker, or just pick first
                 const worker_id = if (engine.find_best_worker_fn) |callback|
@@ -137,9 +157,12 @@ pub fn Helpers(
                 if (worker_id) |wid| {
                     assignWorkerToWorkstation(engine, wid, ws_id);
 
-                    // Remove from idle list (O(n) search + O(1) swap remove)
-                    if (std.mem.indexOfScalar(GameId, idle_workers.items, wid)) |i| {
-                        _ = idle_workers.swapRemove(i);
+                    // O(n) search + O(1) swap remove from local snapshot
+                    for (idle_workers.items, 0..) |id, i| {
+                        if (id == wid) {
+                            _ = idle_workers.swapRemove(i);
+                            break;
+                        }
                     }
 
                     // Early exit when no idle workers remain
@@ -156,6 +179,10 @@ pub fn Helpers(
             worker.assigned_workstation = workstation_id;
             ws.assigned_worker = worker_id;
             ws.status = .Active;
+
+            // Update tracking sets
+            engine.markWorkerBusy(worker_id);
+            engine.markWorkstationNotQueued(workstation_id);
 
             engine.dispatcher.dispatch(.{ .worker_assigned = .{
                 .worker_id = worker_id,
