@@ -281,7 +281,7 @@ pub fn createEngineHooks(
     const Game = EngineTypes.Game;
 
     // Create a wrapper that enriches payloads with registry and game.
-    // Uses shared global storage from context module (set by ensureContext).
+    // Uses active context instance for registry/game access.
     const WrappedHooks = struct {
         /// Simple enriched payload wrapper: stores original payload + context.
         fn EnrichedPayload(comptime Original: type) type {
@@ -296,8 +296,8 @@ pub fn createEngineHooks(
                 fn create(orig: Original) @This() {
                     return .{
                         .original = orig,
-                        .registry = context_mod.getSharedRegistry(Registry),
-                        .game = context_mod.getSharedGame(Game),
+                        .registry = Ctx.getRegistry(Registry),
+                        .game = Ctx.getGame(Game),
                     };
                 }
             };
@@ -342,7 +342,7 @@ pub fn createEngineHooks(
         pub fn game_init(payload: EngineTypes.HookPayload) void {
             const info = payload.game_init;
 
-            Context.init(info.allocator) catch |err| {
+            _ = Context.init(info.allocator) catch |err| {
                 std.log.err("[labelle-tasks] Failed to initialize task engine: {}", .{err});
                 return;
             };
