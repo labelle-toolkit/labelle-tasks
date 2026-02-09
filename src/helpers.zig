@@ -48,14 +48,14 @@ pub fn Helpers(
             // Producer: just needs empty IOS and at least one empty EOS
             if (ws.isProducer()) {
                 // Check IOS has space (all IOS must be empty for producer to start new cycle)
-                for (ws.ios) |ios_id| {
+                for (ws.ios.items) |ios_id| {
                     if (engine.storages.get(ios_id)) |storage| {
                         if (storage.has_item) return false; // IOS full
                     }
                 }
                 // Check at least one EOS has space
                 var has_eos_space = false;
-                for (ws.eos) |eos_id| {
+                for (ws.eos.items) |eos_id| {
                     if (engine.storages.get(eos_id)) |storage| {
                         if (!storage.has_item) {
                             has_eos_space = true;
@@ -68,7 +68,7 @@ pub fn Helpers(
 
             // Regular workstation: needs ALL EIS to have items and space in EOS
             // (All ingredients must be present before processing can begin)
-            for (ws.eis) |eis_id| {
+            for (ws.eis.items) |eis_id| {
                 if (engine.storages.get(eis_id)) |storage| {
                     if (!storage.has_item) {
                         return false; // Missing ingredient
@@ -79,7 +79,7 @@ pub fn Helpers(
             }
 
             var has_output_space = false;
-            for (ws.eos) |eos_id| {
+            for (ws.eos.items) |eos_id| {
                 if (engine.storages.get(eos_id)) |storage| {
                     if (!storage.has_item) {
                         has_output_space = true;
@@ -195,7 +195,7 @@ pub fn Helpers(
             const ws = engine.workstations.get(workstation_id) orelse return null;
 
             // Find first EIS with an item
-            for (ws.eis) |eis_id| {
+            for (ws.eis.items) |eis_id| {
                 if (engine.storages.get(eis_id)) |storage| {
                     if (storage.has_item) {
                         return eis_id;
@@ -209,7 +209,7 @@ pub fn Helpers(
             const ws = engine.workstations.get(workstation_id) orelse return null;
 
             // Find first EOS with space
-            for (ws.eos) |eos_id| {
+            for (ws.eos.items) |eos_id| {
                 if (engine.storages.get(eos_id)) |storage| {
                     if (!storage.has_item) {
                         return eos_id;

@@ -152,11 +152,8 @@ pub fn Handlers(
                     }
                 }
 
-                // Free storage slices
-                engine.allocator.free(ws.eis);
-                engine.allocator.free(ws.iis);
-                engine.allocator.free(ws.ios);
-                engine.allocator.free(ws.eos);
+                // Free storage lists
+                ws.deinit(engine.allocator);
             }
             _ = engine.workstations.remove(workstation_id);
         }
@@ -212,7 +209,7 @@ pub fn Handlers(
                     eis_storage.item_type = null;
 
                     // Fill first empty IIS
-                    for (ws.iis) |iis_id| {
+                    for (ws.iis.items) |iis_id| {
                         if (engine.storages.getPtr(iis_id)) |iis_storage| {
                             if (!iis_storage.has_item) {
                                 iis_storage.has_item = true;
@@ -226,7 +223,7 @@ pub fn Handlers(
 
             // Check if all IIS are filled
             var all_iis_filled = true;
-            for (ws.iis) |iis_id| {
+            for (ws.iis.items) |iis_id| {
                 if (engine.storages.get(iis_id)) |iis_storage| {
                     if (!iis_storage.has_item) {
                         all_iis_filled = false;
@@ -274,7 +271,7 @@ pub fn Handlers(
 
             // Update abstract state: IIS → IOS transformation
             // Emit input_consumed for each IIS item, then clear
-            for (ws.iis) |iis_id| {
+            for (ws.iis.items) |iis_id| {
                 if (engine.storages.getPtr(iis_id)) |storage| {
                     if (storage.has_item) {
                         if (storage.item_type) |item| {
@@ -292,7 +289,7 @@ pub fn Handlers(
 
             // Fill all IOS (game determines actual output items via process_completed hook)
             // For now, we just mark them as having items - game will set the actual entity
-            for (ws.ios) |ios_id| {
+            for (ws.ios.items) |ios_id| {
                 if (engine.storages.getPtr(ios_id)) |storage| {
                     storage.has_item = true;
                     // item_type will be set by game via item_added or left for game to track
@@ -312,7 +309,7 @@ pub fn Handlers(
             if (ws.selected_eos) |eos_id| {
                 // Get item from first IOS that has one
                 var item: ?Item = null;
-                for (ws.ios) |ios_id| {
+                for (ws.ios.items) |ios_id| {
                     if (engine.storages.get(ios_id)) |storage| {
                         if (storage.item_type) |it| {
                             item = it;
@@ -398,7 +395,7 @@ pub fn Handlers(
 
             // Update abstract state: IOS → EOS
             // Find first IOS with item and move to selected EOS
-            for (ws.ios) |ios_id| {
+            for (ws.ios.items) |ios_id| {
                 if (engine.storages.getPtr(ios_id)) |ios_storage| {
                     if (ios_storage.has_item) {
                         const item = ios_storage.item_type;
@@ -421,7 +418,7 @@ pub fn Handlers(
 
             // Check if all IOS are empty
             var all_ios_empty = true;
-            for (ws.ios) |ios_id| {
+            for (ws.ios.items) |ios_id| {
                 if (engine.storages.get(ios_id)) |storage| {
                     if (storage.has_item) {
                         all_ios_empty = false;
@@ -459,7 +456,7 @@ pub fn Handlers(
                 ws.selected_eos = engine.selectEos(ws_id);
                 if (ws.selected_eos) |eos_id| {
                     var item: ?Item = null;
-                    for (ws.ios) |ios_id| {
+                    for (ws.ios.items) |ios_id| {
                         if (engine.storages.get(ios_id)) |storage| {
                             if (storage.item_type) |it| {
                                 item = it;
