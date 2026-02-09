@@ -183,7 +183,7 @@ pub fn Engine(
 
         /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
-            if (self.workstations.fetchRemove(workstation_id)) |*kv| {
+            if (self.workstations.fetchRemove(workstation_id)) |kv| {
                 // Clean up reverse index entries
                 const all_storages = [_][]const GameId{ kv.value.eis.items, kv.value.iis.items, kv.value.ios.items, kv.value.eos.items };
                 for (all_storages) |storage_ids| {
@@ -191,7 +191,8 @@ pub fn Engine(
                         self.removeReverseIndexEntry(sid, workstation_id);
                     }
                 }
-                kv.value.deinit(self.allocator);
+                var ws = kv.value;
+                ws.deinit(self.allocator);
             }
         }
 
@@ -309,11 +310,16 @@ pub fn Engine(
         // ============================================
 
         fn addReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
-            const gop = self.storage_to_workstations.getOrPut(storage_id) catch return;
+            const gop = self.storage_to_workstations.getOrPut(storage_id) catch {
+                std.log.err("[tasks] addReverseIndexEntry: failed to allocate for storage {}", .{storage_id});
+                return;
+            };
             if (!gop.found_existing) {
                 gop.value_ptr.* = .{};
             }
-            gop.value_ptr.append(self.allocator, workstation_id) catch return;
+            gop.value_ptr.append(self.allocator, workstation_id) catch {
+                std.log.err("[tasks] addReverseIndexEntry: failed to append workstation {} for storage {}", .{ workstation_id, storage_id });
+            };
         }
 
         fn removeReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
@@ -550,6 +556,11 @@ pub fn Engine(
         fn removeStorageVTable(ptr: *anyopaque, id: GameId) void {
             const self: *Self = @ptrCast(@alignCast(ptr));
             _ = self.storages.remove(id);
+            // Clean up reverse index entry for this storage
+            if (self.storage_to_workstations.fetchRemove(id)) |kv| {
+                var list = kv.value;
+                list.deinit(self.allocator);
+            }
         }
 
         fn attachStorageToWorkstationVTable(ptr: *anyopaque, storage_id: GameId, workstation_id: GameId, role: StorageRole) anyerror!void {

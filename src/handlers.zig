@@ -143,19 +143,17 @@ pub fn Handlers(
         }
 
         pub fn handleWorkstationRemoved(engine: *EngineType, workstation_id: GameId) anyerror!void {
+            // Release worker if assigned (before removing workstation)
             if (engine.workstations.getPtr(workstation_id)) |ws| {
-                // Release worker
                 if (ws.assigned_worker) |worker_id| {
                     if (engine.workers.getPtr(worker_id)) |worker| {
                         worker.state = .Idle;
                         worker.assigned_workstation = null;
                     }
                 }
-
-                // Free storage lists
-                ws.deinit(engine.allocator);
             }
-            _ = engine.workstations.remove(workstation_id);
+            // Delegate to removeWorkstation which handles reverse index cleanup and memory freeing
+            engine.removeWorkstation(workstation_id);
         }
 
         // ============================================
