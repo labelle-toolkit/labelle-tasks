@@ -52,6 +52,10 @@ pub fn Engine(
         workstations: std.AutoHashMap(GameId, WorkstationData),
         dangling_items: std.AutoHashMap(GameId, Item),
 
+        // Status tracking sets (eliminate per-tick allocations)
+        idle_workers_set: std.AutoHashMap(GameId, void),
+        queued_workstations_set: std.AutoHashMap(GameId, void),
+
         // Hook dispatcher
         dispatcher: Dispatcher,
 
@@ -68,6 +72,8 @@ pub fn Engine(
                 .workers = std.AutoHashMap(GameId, WorkerData).init(allocator),
                 .workstations = std.AutoHashMap(GameId, WorkstationData).init(allocator),
                 .dangling_items = std.AutoHashMap(GameId, Item).init(allocator),
+                .idle_workers_set = std.AutoHashMap(GameId, void).init(allocator),
+                .queued_workstations_set = std.AutoHashMap(GameId, void).init(allocator),
                 .dispatcher = Dispatcher.init(task_hooks),
                 .distance_fn = distance_fn,
             };
@@ -83,6 +89,8 @@ pub fn Engine(
             self.workers.deinit();
             self.storages.deinit();
             self.dangling_items.deinit();
+            self.idle_workers_set.deinit();
+            self.queued_workstations_set.deinit();
         }
 
         /// Set or update the distance function for spatial queries.
@@ -122,6 +130,9 @@ pub fn Engine(
         /// Register a worker with the engine
         pub fn addWorker(self: *Self, worker_id: GameId) !void {
             try self.workers.put(worker_id, .{});
+            errdefer _ = self.workers.remove(worker_id);
+            // Workers start idle
+            try self.idle_workers_set.put(worker_id, {});
         }
 
         /// Workstation configuration for registration
@@ -165,8 +176,10 @@ pub fn Engine(
 
         /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
-            if (self.workstations.fetchRemove(workstation_id)) |*kv| {
-                kv.value.deinit(self.allocator);
+            self.removeWorkstationTracking(workstation_id);
+            if (self.workstations.fetchRemove(workstation_id)) |kv| {
+                var ws = kv.value;
+                ws.deinit(self.allocator);
             }
         }
 
@@ -275,6 +288,42 @@ pub fn Engine(
 
         pub fn selectEos(self: *Self, workstation_id: GameId) ?GameId {
             return EngineHelpers.selectEos(self, workstation_id);
+        }
+
+        // ============================================
+        // Status tracking set operations
+        // ============================================
+
+        /// Mark a worker as idle in the tracking set
+        pub fn markWorkerIdle(self: *Self, worker_id: GameId) void {
+            self.idle_workers_set.put(worker_id, {}) catch
+                @panic("markWorkerIdle: allocation failed, engine state is inconsistent");
+        }
+
+        /// Mark a worker as non-idle in the tracking set
+        pub fn markWorkerBusy(self: *Self, worker_id: GameId) void {
+            _ = self.idle_workers_set.remove(worker_id);
+        }
+
+        /// Remove a worker from all tracking sets
+        pub fn removeWorkerTracking(self: *Self, worker_id: GameId) void {
+            _ = self.idle_workers_set.remove(worker_id);
+        }
+
+        /// Mark a workstation as queued in the tracking set
+        pub fn markWorkstationQueued(self: *Self, workstation_id: GameId) void {
+            self.queued_workstations_set.put(workstation_id, {}) catch
+                @panic("markWorkstationQueued: allocation failed, engine state is inconsistent");
+        }
+
+        /// Mark a workstation as non-queued in the tracking set
+        pub fn markWorkstationNotQueued(self: *Self, workstation_id: GameId) void {
+            _ = self.queued_workstations_set.remove(workstation_id);
+        }
+
+        /// Remove a workstation from all tracking sets
+        pub fn removeWorkstationTracking(self: *Self, workstation_id: GameId) void {
+            _ = self.queued_workstations_set.remove(workstation_id);
         }
 
         // ============================================
@@ -417,6 +466,7 @@ pub fn Engine(
                 // Assign worker to pick up this dangling item
                 if (self.workers.getPtr(worker_id)) |worker| {
                     worker.state = .Working;
+                    self.markWorkerBusy(worker_id);
                     worker.dangling_task = .{
                         .item_id = item_id,
                         .target_eis_id = target_eis,

@@ -71,6 +71,7 @@ pub fn Handlers(
 
             worker.state = .Idle;
             worker.assigned_workstation = null;
+            engine.markWorkerIdle(worker_id);
 
             // First, try to assign worker to pick up dangling items (higher priority)
             engine.evaluateDanglingItems();
@@ -91,15 +92,15 @@ pub fn Handlers(
             if (worker.assigned_workstation) |ws_id| {
                 if (engine.workstations.getPtr(ws_id)) |ws| {
                     ws.assigned_worker = null;
-                    ws.status = .Queued;
-
                     engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
-                    engine.dispatcher.dispatch(.{ .workstation_queued = .{ .workstation_id = ws_id } });
+                    // Re-evaluate: workstation may be Blocked if conditions changed
+                    engine.evaluateWorkstationStatus(ws_id);
                 }
             }
 
             worker.state = .Unavailable;
             worker.assigned_workstation = null;
+            engine.markWorkerBusy(worker_id);
         }
 
         pub fn handleWorkerRemoved(engine: *EngineType, worker_id: GameId) anyerror!void {
@@ -112,6 +113,7 @@ pub fn Handlers(
                     }
                 }
             }
+            engine.removeWorkerTracking(worker_id);
             _ = engine.workers.remove(worker_id);
         }
 
@@ -133,12 +135,14 @@ pub fn Handlers(
                 if (engine.workers.getPtr(worker_id)) |worker| {
                     worker.state = .Idle;
                     worker.assigned_workstation = null;
+                    engine.markWorkerIdle(worker_id);
                     engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
                 }
             }
 
             ws.status = .Blocked;
             ws.assigned_worker = null;
+            engine.markWorkstationNotQueued(workstation_id);
             engine.dispatcher.dispatch(.{ .workstation_blocked = .{ .workstation_id = workstation_id } });
         }
 
@@ -149,12 +153,14 @@ pub fn Handlers(
                     if (engine.workers.getPtr(worker_id)) |worker| {
                         worker.state = .Idle;
                         worker.assigned_workstation = null;
+                        engine.markWorkerIdle(worker_id);
                     }
                 }
 
                 // Free storage lists
                 ws.deinit(engine.allocator);
             }
+            engine.removeWorkstationTracking(workstation_id);
             _ = engine.workstations.remove(workstation_id);
         }
 
@@ -359,6 +365,7 @@ pub fn Handlers(
                 // Clear worker task and set to idle
                 worker.dangling_task = null;
                 worker.state = .Idle;
+                engine.markWorkerIdle(worker_id);
 
                 // First, check for remaining dangling items (higher priority)
                 engine.evaluateDanglingItems();
@@ -444,6 +451,7 @@ pub fn Handlers(
                 ws.assigned_worker = null;
                 worker.state = .Idle;
                 worker.assigned_workstation = null;
+                engine.markWorkerIdle(worker_id);
                 engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
 
                 // Re-evaluate workstation status
