@@ -271,8 +271,8 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.attachStorageToWorkstation(3, 100, .ios);
             try engine.attachStorageToWorkstation(4, 100, .eos);
 
-            // Re-evaluate: now it should be queued (EIS has item, EOS has space)
-            engine.evaluateWorkstationStatus(100);
+            // After attaching storages, it should be queued (EIS has item, EOS has space)
+            // (attachStorageToWorkstation triggers re-evaluation automatically)
             try std.testing.expect(engine.getWorkstationStatus(100).? == .Queued);
         }
     });
