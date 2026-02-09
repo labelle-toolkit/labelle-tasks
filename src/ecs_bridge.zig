@@ -1,7 +1,7 @@
 //! ECS Bridge for labelle-tasks
 //!
 //! Provides type-erased interface for tasks components to register with the engine.
-//! Games call `setInterface()` during initialization to connect tasks to the engine.
+//! The active interface is tracked directly on EcsInterface via setActive/getActive.
 //!
 //! This approach allows labelle-tasks to export components with built-in callbacks
 //! without requiring a compile-time dependency on labelle-engine.
@@ -10,6 +10,9 @@ const std = @import("std");
 
 /// Type-erased interface for ECS operations.
 /// Implemented by games to bridge between tasks components and the task engine.
+///
+/// Tracks the active interface via a comptime-scoped static pointer (per GameId/Item).
+/// Components use `getActive()` to find the current engine interface.
 pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
     return struct {
         ptr: *anyopaque,
@@ -40,7 +43,32 @@ pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
             removeWorkstation: *const fn (ptr: *anyopaque, id: GameId) void,
         };
 
+        // ============================================
+        // Active interface tracking
+        // ============================================
+
+        var active: ?Self = null;
+
+        /// Set the active ECS interface for this GameId/Item combination.
+        /// Called by engine/context during initialization.
+        pub fn setActive(iface: Self) void {
+            active = iface;
+        }
+
+        /// Get the active ECS interface.
+        /// Returns null if not set. Used by components to find the engine.
+        pub fn getActive() ?Self {
+            return active;
+        }
+
+        /// Clear the active interface (for cleanup).
+        pub fn clearActive() void {
+            active = null;
+        }
+
+        // ============================================
         // Convenience methods that delegate to vtable
+        // ============================================
 
         pub fn ensureContext(self: Self, game_ptr: *anyopaque, registry_ptr: *anyopaque) void {
             if (self.vtable.ensureContext) |ensure_fn| {
@@ -92,30 +120,3 @@ pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
 
 /// Storage role in the workflow
 pub const StorageRole = @import("state.zig").StorageRole;
-
-/// Global interface storage (per GameId/Item type combination).
-/// Uses module-level storage keyed by type hash.
-pub fn InterfaceStorage(comptime GameId: type, comptime Item: type) type {
-    return struct {
-        const Interface = EcsInterface(GameId, Item);
-
-        var interface: ?Interface = null;
-
-        /// Set the ECS interface for this GameId/Item combination.
-        /// Called by games during initialization.
-        pub fn setInterface(iface: Interface) void {
-            interface = iface;
-        }
-
-        /// Get the current ECS interface.
-        /// Returns null if not set.
-        pub fn getInterface() ?Interface {
-            return interface;
-        }
-
-        /// Clear the interface (for cleanup).
-        pub fn clearInterface() void {
-            interface = null;
-        }
-    };
-}

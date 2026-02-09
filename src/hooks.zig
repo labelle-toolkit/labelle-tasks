@@ -195,3 +195,106 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
 
 /// Empty hooks struct for engines that don't need hooks
 pub const NoHooks = struct {};
+
+/// Recording hooks struct for testing.
+/// Records all dispatched hook events for later assertion.
+/// Use with Engine as the TaskHooks parameter.
+///
+/// Usage:
+/// ```zig
+/// var recorder = RecordingHooks(u32, Item){};
+/// var engine = Engine(u32, Item, RecordingHooks(u32, Item)).init(allocator, recorder, null);
+/// defer engine.deinit();
+///
+/// // ... trigger events ...
+///
+/// try recorder.expectNext(&engine.dispatcher, .pickup_started);
+/// ```
+pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
+    const Payload = TaskHookPayload(GameId, Item);
+
+    return struct {
+        const Self = @This();
+
+        events: std.ArrayListUnmanaged(Payload) = .{},
+        allocator: ?std.mem.Allocator = null,
+        next_idx: usize = 0,
+
+        /// Initialize with an allocator. Must be called before use.
+        pub fn init(self: *Self, allocator: std.mem.Allocator) void {
+            self.allocator = allocator;
+        }
+
+        pub fn deinit(self: *Self) void {
+            if (self.allocator) |alloc| {
+                self.events.deinit(alloc);
+                self.* = .{};
+            }
+        }
+
+        /// Get the number of recorded events
+        pub fn count(self: *const Self) usize {
+            return self.events.items.len;
+        }
+
+        /// Get event at index
+        pub fn get(self: *const Self, index: usize) Payload {
+            return self.events.items[index];
+        }
+
+        /// Clear all recorded events and reset index
+        pub fn clear(self: *Self) void {
+            self.events.clearRetainingCapacity();
+            self.next_idx = 0;
+        }
+
+        /// Assert the next event matches the expected tag (O(1), non-destructive)
+        pub fn expectNext(self: *Self, comptime expected_tag: std.meta.Tag(Payload)) !std.meta.TagPayload(Payload, expected_tag) {
+            if (self.next_idx >= self.events.items.len) {
+                std.debug.print("Expected {s} event but no more events recorded\n", .{@tagName(expected_tag)});
+                return error.NoEventsRecorded;
+            }
+            const event = self.events.items[self.next_idx];
+            self.next_idx += 1;
+            if (event != expected_tag) {
+                std.debug.print("Expected {s} but got {s}\n", .{ @tagName(expected_tag), @tagName(event) });
+                return error.UnexpectedEvent;
+            }
+            return @field(event, @tagName(expected_tag));
+        }
+
+        /// Assert no more events remain after the current index
+        pub fn expectEmpty(self: *const Self) !void {
+            const remaining = self.events.items.len - self.next_idx;
+            if (remaining != 0) {
+                std.debug.print("Expected no more events but {} remain (next: {s})\n", .{
+                    remaining,
+                    @tagName(self.events.items[self.next_idx]),
+                });
+                return error.UnexpectedEvents;
+            }
+        }
+
+        fn record(self: *Self, payload: Payload) void {
+            const alloc = self.allocator orelse @panic("RecordingHooks not initialized. Call init() with an allocator.");
+            self.events.append(alloc, payload) catch @panic("RecordingHooks: failed to record event (out of memory).");
+        }
+
+        // Hook methods - record the full payload union
+        pub fn pickup_started(self: *Self, payload: anytype) void { self.record(.{ .pickup_started = payload }); }
+        pub fn process_started(self: *Self, payload: anytype) void { self.record(.{ .process_started = payload }); }
+        pub fn process_completed(self: *Self, payload: anytype) void { self.record(.{ .process_completed = payload }); }
+        pub fn store_started(self: *Self, payload: anytype) void { self.record(.{ .store_started = payload }); }
+        pub fn worker_assigned(self: *Self, payload: anytype) void { self.record(.{ .worker_assigned = payload }); }
+        pub fn worker_released(self: *Self, payload: anytype) void { self.record(.{ .worker_released = payload }); }
+        pub fn workstation_blocked(self: *Self, payload: anytype) void { self.record(.{ .workstation_blocked = payload }); }
+        pub fn workstation_queued(self: *Self, payload: anytype) void { self.record(.{ .workstation_queued = payload }); }
+        pub fn workstation_activated(self: *Self, payload: anytype) void { self.record(.{ .workstation_activated = payload }); }
+        pub fn cycle_completed(self: *Self, payload: anytype) void { self.record(.{ .cycle_completed = payload }); }
+        pub fn transport_started(self: *Self, payload: anytype) void { self.record(.{ .transport_started = payload }); }
+        pub fn transport_completed(self: *Self, payload: anytype) void { self.record(.{ .transport_completed = payload }); }
+        pub fn pickup_dangling_started(self: *Self, payload: anytype) void { self.record(.{ .pickup_dangling_started = payload }); }
+        pub fn item_delivered(self: *Self, payload: anytype) void { self.record(.{ .item_delivered = payload }); }
+        pub fn input_consumed(self: *Self, payload: anytype) void { self.record(.{ .input_consumed = payload }); }
+    };
+}

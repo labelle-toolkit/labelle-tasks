@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const log = std.log.scoped(.tasks);
 
 const hooks_mod = @import("hooks.zig");
 const types = @import("types.zig");
@@ -51,6 +52,13 @@ pub fn Engine(
         workstations: std.AutoHashMap(GameId, WorkstationData),
         dangling_items: std.AutoHashMap(GameId, Item),
 
+        // Status tracking sets (eliminate per-tick allocations)
+        idle_workers_set: std.AutoHashMap(GameId, void),
+        queued_workstations_set: std.AutoHashMap(GameId, void),
+
+        // Reverse index: storage_id → workstation_ids that reference it
+        storage_to_workstations: std.AutoHashMap(GameId, std.ArrayListUnmanaged(GameId)),
+
         // Hook dispatcher
         dispatcher: Dispatcher,
 
@@ -67,24 +75,32 @@ pub fn Engine(
                 .workers = std.AutoHashMap(GameId, WorkerData).init(allocator),
                 .workstations = std.AutoHashMap(GameId, WorkstationData).init(allocator),
                 .dangling_items = std.AutoHashMap(GameId, Item).init(allocator),
+                .idle_workers_set = std.AutoHashMap(GameId, void).init(allocator),
+                .queued_workstations_set = std.AutoHashMap(GameId, void).init(allocator),
+                .storage_to_workstations = std.AutoHashMap(GameId, std.ArrayListUnmanaged(GameId)).init(allocator),
                 .dispatcher = Dispatcher.init(task_hooks),
                 .distance_fn = distance_fn,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            // Free workstation storage slices
+            // Free workstation storage lists
             var ws_iter = self.workstations.valueIterator();
             while (ws_iter.next()) |ws| {
-                self.allocator.free(ws.eis);
-                self.allocator.free(ws.iis);
-                self.allocator.free(ws.ios);
-                self.allocator.free(ws.eos);
+                ws.deinit(self.allocator);
             }
             self.workstations.deinit();
             self.workers.deinit();
             self.storages.deinit();
             self.dangling_items.deinit();
+            self.idle_workers_set.deinit();
+            self.queued_workstations_set.deinit();
+            // Free reverse index lists
+            var ri_iter = self.storage_to_workstations.valueIterator();
+            while (ri_iter.next()) |list| {
+                list.deinit(self.allocator);
+            }
+            self.storage_to_workstations.deinit();
         }
 
         /// Set or update the distance function for spatial queries.
@@ -104,6 +120,7 @@ pub fn Engine(
             role: StorageRole = .eis,
             accepts: ?Item = null, // null = accepts any item type
             initial_item: ?Item = null,
+            priority: Priority = .Normal,
         };
 
         /// Register a storage with the engine
@@ -113,6 +130,7 @@ pub fn Engine(
                 .item_type = config.initial_item,
                 .role = config.role,
                 .accepts = config.accepts,
+                .priority = config.priority,
             });
 
             // If an empty EIS was added, check if any dangling items can be delivered
@@ -124,6 +142,8 @@ pub fn Engine(
         /// Register a worker with the engine
         pub fn addWorker(self: *Self, worker_id: GameId) !void {
             try self.workers.put(worker_id, .{});
+            errdefer _ = self.workers.remove(worker_id);
+            try self.idle_workers_set.put(worker_id, {});
         }
 
         /// Workstation configuration for registration
@@ -137,15 +157,21 @@ pub fn Engine(
 
         /// Register a workstation with the engine
         pub fn addWorkstation(self: *Self, workstation_id: GameId, config: WorkstationConfig) !void {
-            // Copy the storage ID slices since they may be stack-allocated
-            const eis = try self.allocator.dupe(GameId, config.eis);
-            errdefer self.allocator.free(eis);
-            const iis = try self.allocator.dupe(GameId, config.iis);
-            errdefer self.allocator.free(iis);
-            const ios = try self.allocator.dupe(GameId, config.ios);
-            errdefer self.allocator.free(ios);
-            const eos = try self.allocator.dupe(GameId, config.eos);
-            errdefer self.allocator.free(eos);
+            var eis = std.ArrayListUnmanaged(GameId){};
+            errdefer eis.deinit(self.allocator);
+            try eis.appendSlice(self.allocator, config.eis);
+
+            var iis = std.ArrayListUnmanaged(GameId){};
+            errdefer iis.deinit(self.allocator);
+            try iis.appendSlice(self.allocator, config.iis);
+
+            var ios = std.ArrayListUnmanaged(GameId){};
+            errdefer ios.deinit(self.allocator);
+            try ios.appendSlice(self.allocator, config.ios);
+
+            var eos = std.ArrayListUnmanaged(GameId){};
+            errdefer eos.deinit(self.allocator);
+            try eos.appendSlice(self.allocator, config.eos);
 
             try self.workstations.put(workstation_id, .{
                 .eis = eis,
@@ -155,17 +181,42 @@ pub fn Engine(
                 .priority = config.priority,
             });
 
+            // Update reverse index for all storage IDs
+            const all_storages = [_][]const GameId{ config.eis, config.iis, config.ios, config.eos };
+            for (all_storages) |storage_ids| {
+                for (storage_ids) |sid| {
+                    self.addReverseIndexEntry(sid, workstation_id);
+                }
+            }
+
             // Evaluate initial status
             self.evaluateWorkstationStatus(workstation_id);
         }
 
         /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
+            // Release assigned worker before removing
+            if (self.workstations.getPtr(workstation_id)) |ws| {
+                if (ws.assigned_worker) |worker_id| {
+                    if (self.workers.getPtr(worker_id)) |worker| {
+                        worker.state = .Idle;
+                        worker.assigned_workstation = null;
+                        self.markWorkerIdle(worker_id);
+                        self.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
+                    }
+                }
+            }
+            self.removeWorkstationTracking(workstation_id);
             if (self.workstations.fetchRemove(workstation_id)) |kv| {
-                self.allocator.free(kv.value.eis);
-                self.allocator.free(kv.value.iis);
-                self.allocator.free(kv.value.ios);
-                self.allocator.free(kv.value.eos);
+                // Clean up reverse index entries
+                const all_storages = [_][]const GameId{ kv.value.eis.items, kv.value.iis.items, kv.value.ios.items, kv.value.eos.items };
+                for (all_storages) |storage_ids| {
+                    for (storage_ids) |sid| {
+                        self.removeReverseIndexEntry(sid, workstation_id);
+                    }
+                }
+                var ws = kv.value;
+                ws.deinit(self.allocator);
             }
         }
 
@@ -178,38 +229,17 @@ pub fn Engine(
                 return error.WorkstationNotFound;
             };
 
-            // Append storage to appropriate array based on role
-            // Create new slice with additional element, copy old data, free old slice
-            switch (role) {
-                .eis => {
-                    const new_eis = try self.allocator.alloc(GameId, ws.eis.len + 1);
-                    @memcpy(new_eis[0..ws.eis.len], ws.eis);
-                    new_eis[ws.eis.len] = storage_id;
-                    self.allocator.free(ws.eis);
-                    ws.eis = new_eis;
-                },
-                .iis => {
-                    const new_iis = try self.allocator.alloc(GameId, ws.iis.len + 1);
-                    @memcpy(new_iis[0..ws.iis.len], ws.iis);
-                    new_iis[ws.iis.len] = storage_id;
-                    self.allocator.free(ws.iis);
-                    ws.iis = new_iis;
-                },
-                .ios => {
-                    const new_ios = try self.allocator.alloc(GameId, ws.ios.len + 1);
-                    @memcpy(new_ios[0..ws.ios.len], ws.ios);
-                    new_ios[ws.ios.len] = storage_id;
-                    self.allocator.free(ws.ios);
-                    ws.ios = new_ios;
-                },
-                .eos => {
-                    const new_eos = try self.allocator.alloc(GameId, ws.eos.len + 1);
-                    @memcpy(new_eos[0..ws.eos.len], ws.eos);
-                    new_eos[ws.eos.len] = storage_id;
-                    self.allocator.free(ws.eos);
-                    ws.eos = new_eos;
-                },
-            }
+            // Append storage to appropriate list based on role
+            const list = switch (role) {
+                .eis => &ws.eis,
+                .iis => &ws.iis,
+                .ios => &ws.ios,
+                .eos => &ws.eos,
+            };
+            try list.append(self.allocator, storage_id);
+
+            // Update reverse index
+            self.addReverseIndexEntry(storage_id, workstation_id);
 
             // Re-evaluate workstation status after adding storage
             self.evaluateWorkstationStatus(workstation_id);
@@ -226,7 +256,7 @@ pub fn Engine(
 
         /// Main entry point for game notifications
         pub fn handle(self: *Self, payload: GamePayload) bool {
-            return switch (payload) {
+            const result = switch (payload) {
                 .item_added => |p| EventHandlers.handleItemAdded(self, p.storage_id, p.item),
                 .item_removed => |p| EventHandlers.handleItemRemoved(self, p.storage_id),
                 .storage_cleared => |p| EventHandlers.handleStorageCleared(self, p.storage_id),
@@ -240,6 +270,12 @@ pub fn Engine(
                 .work_completed => |p| EventHandlers.handleWorkCompleted(self, p.workstation_id),
                 .store_completed => |p| EventHandlers.handleStoreCompleted(self, p.worker_id),
             };
+
+            result catch |err| {
+                log.warn("handle: event failed with {}", .{err});
+                return false;
+            };
+            return true;
         }
 
         // ============================================
@@ -282,6 +318,53 @@ pub fn Engine(
             EngineHelpers.reevaluateWorkstations(self);
         }
 
+        /// Re-evaluate only workstations affected by a specific storage change.
+        /// Uses the reverse index instead of scanning all workstations.
+        pub fn reevaluateAffectedWorkstations(self: *Self, storage_id: GameId) void {
+            if (self.storage_to_workstations.get(storage_id)) |ws_ids| {
+                for (ws_ids.items) |ws_id| {
+                    self.evaluateWorkstationStatus(ws_id);
+                }
+            }
+            self.tryAssignWorkers();
+        }
+
+        // ============================================
+        // Reverse Index helpers
+        // ============================================
+
+        fn addReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
+            const gop = self.storage_to_workstations.getOrPut(storage_id) catch {
+                std.log.err("[tasks] addReverseIndexEntry: failed to allocate for storage {}", .{storage_id});
+                return;
+            };
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{};
+            }
+            // Prevent duplicate entries
+            for (gop.value_ptr.items) |existing_id| {
+                if (existing_id == workstation_id) return;
+            }
+            gop.value_ptr.append(self.allocator, workstation_id) catch {
+                std.log.err("[tasks] addReverseIndexEntry: failed to append workstation {} for storage {}", .{ workstation_id, storage_id });
+            };
+        }
+
+        fn removeReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
+            const list = self.storage_to_workstations.getPtr(storage_id) orelse return;
+            for (list.items, 0..) |id, i| {
+                if (id == workstation_id) {
+                    _ = list.swapRemove(i);
+                    break;
+                }
+            }
+            // Clean up empty entries
+            if (list.items.len == 0) {
+                list.deinit(self.allocator);
+                _ = self.storage_to_workstations.remove(storage_id);
+            }
+        }
+
         pub fn tryAssignWorkers(self: *Self) void {
             EngineHelpers.tryAssignWorkers(self);
         }
@@ -292,6 +375,42 @@ pub fn Engine(
 
         pub fn selectEos(self: *Self, workstation_id: GameId) ?GameId {
             return EngineHelpers.selectEos(self, workstation_id);
+        }
+
+        // ============================================
+        // Status tracking set operations
+        // ============================================
+
+        /// Mark a worker as idle in the tracking set
+        pub fn markWorkerIdle(self: *Self, worker_id: GameId) void {
+            self.idle_workers_set.put(worker_id, {}) catch
+                @panic("markWorkerIdle: allocation failed, engine state is inconsistent");
+        }
+
+        /// Mark a worker as non-idle in the tracking set
+        pub fn markWorkerBusy(self: *Self, worker_id: GameId) void {
+            _ = self.idle_workers_set.remove(worker_id);
+        }
+
+        /// Remove a worker from all tracking sets
+        pub fn removeWorkerTracking(self: *Self, worker_id: GameId) void {
+            _ = self.idle_workers_set.remove(worker_id);
+        }
+
+        /// Mark a workstation as queued in the tracking set
+        pub fn markWorkstationQueued(self: *Self, workstation_id: GameId) void {
+            self.queued_workstations_set.put(workstation_id, {}) catch
+                @panic("markWorkstationQueued: allocation failed, engine state is inconsistent");
+        }
+
+        /// Mark a workstation as non-queued in the tracking set
+        pub fn markWorkstationNotQueued(self: *Self, workstation_id: GameId) void {
+            _ = self.queued_workstations_set.remove(workstation_id);
+        }
+
+        /// Remove a workstation from all tracking sets
+        pub fn removeWorkstationTracking(self: *Self, workstation_id: GameId) void {
+            _ = self.queued_workstations_set.remove(workstation_id);
         }
 
         // ============================================
@@ -413,9 +532,17 @@ pub fn Engine(
 
         /// Evaluate dangling items and try to assign workers
         pub fn evaluateDanglingItems(self: *Self) void {
-            // Get idle workers (we need to free this later)
-            const idle_workers = self.getIdleWorkers() catch return;
-            defer self.allocator.free(idle_workers);
+            if (self.idle_workers_set.count() == 0) return;
+
+            // Snapshot idle workers into local buffer (same reentrancy-safe pattern as tryAssignWorkers)
+            var idle_buf: std.ArrayListUnmanaged(GameId) = .{};
+            defer idle_buf.deinit(self.allocator);
+            idle_buf.ensureTotalCapacity(self.allocator, self.idle_workers_set.count()) catch return;
+            var idle_iter = self.idle_workers_set.keyIterator();
+            while (idle_iter.next()) |wid| {
+                idle_buf.appendAssumeCapacity(wid.*);
+            }
+            const idle_workers = idle_buf.items;
 
             if (idle_workers.len == 0) return;
 
@@ -434,6 +561,7 @@ pub fn Engine(
                 // Assign worker to pick up this dangling item
                 if (self.workers.getPtr(worker_id)) |worker| {
                     worker.state = .Working;
+                    self.markWorkerBusy(worker_id);
                     worker.dangling_task = .{
                         .item_id = item_id,
                         .target_eis_id = target_eis,
@@ -501,6 +629,11 @@ pub fn Engine(
         fn removeStorageVTable(ptr: *anyopaque, id: GameId) void {
             const self: *Self = @ptrCast(@alignCast(ptr));
             _ = self.storages.remove(id);
+            // Clean up reverse index entry for this storage
+            if (self.storage_to_workstations.fetchRemove(id)) |kv| {
+                var list = kv.value;
+                list.deinit(self.allocator);
+            }
         }
 
         fn attachStorageToWorkstationVTable(ptr: *anyopaque, storage_id: GameId, workstation_id: GameId, role: StorageRole) anyerror!void {
