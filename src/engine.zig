@@ -56,6 +56,10 @@ pub fn Engine(
         idle_workers_set: std.AutoHashMap(GameId, void),
         queued_workstations_set: std.AutoHashMap(GameId, void),
 
+        // Scratch buffers for tryAssignWorkers (avoid per-tick allocations)
+        idle_workers_scratch: std.ArrayListUnmanaged(GameId) = .{},
+        queued_workstations_scratch: std.ArrayListUnmanaged(GameId) = .{},
+
         // Hook dispatcher
         dispatcher: Dispatcher,
 
@@ -91,6 +95,8 @@ pub fn Engine(
             self.dangling_items.deinit();
             self.idle_workers_set.deinit();
             self.queued_workstations_set.deinit();
+            self.idle_workers_scratch.deinit(self.allocator);
+            self.queued_workstations_scratch.deinit(self.allocator);
         }
 
         /// Set or update the distance function for spatial queries.
@@ -175,8 +181,10 @@ pub fn Engine(
 
         /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
-            if (self.workstations.fetchRemove(workstation_id)) |*kv| {
-                kv.value.deinit(self.allocator);
+            self.removeWorkstationTracking(workstation_id);
+            if (self.workstations.fetchRemove(workstation_id)) |kv| {
+                var ws = kv.value;
+                ws.deinit(self.allocator);
             }
         }
 
@@ -293,7 +301,9 @@ pub fn Engine(
 
         /// Mark a worker as idle in the tracking set
         pub fn markWorkerIdle(self: *Self, worker_id: GameId) void {
-            self.idle_workers_set.put(worker_id, {}) catch {};
+            self.idle_workers_set.put(worker_id, {}) catch {
+                std.log.err("[tasks] markWorkerIdle: failed to track worker {}", .{worker_id});
+            };
         }
 
         /// Mark a worker as non-idle in the tracking set
@@ -308,7 +318,9 @@ pub fn Engine(
 
         /// Mark a workstation as queued in the tracking set
         pub fn markWorkstationQueued(self: *Self, workstation_id: GameId) void {
-            self.queued_workstations_set.put(workstation_id, {}) catch {};
+            self.queued_workstations_set.put(workstation_id, {}) catch {
+                std.log.err("[tasks] markWorkstationQueued: failed to track workstation {}", .{workstation_id});
+            };
         }
 
         /// Mark a workstation as non-queued in the tracking set

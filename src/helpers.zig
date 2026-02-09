@@ -115,58 +115,53 @@ pub fn Helpers(
             if (engine.idle_workers_set.count() == 0) return;
             if (engine.queued_workstations_set.count() == 0) return;
 
-            // Build a snapshot of idle worker IDs for the callback API
-            // (uses stack buffer to avoid heap allocation for small counts)
-            var idle_buf: [64]GameId = undefined;
-            var idle_workers = std.ArrayListUnmanaged(GameId){};
-            defer if (idle_workers.capacity > 64) idle_workers.deinit(engine.allocator);
+            // Build snapshots so we can safely mutate the sets during assignment
+            engine.idle_workers_scratch.clearRetainingCapacity();
+            engine.queued_workstations_scratch.clearRetainingCapacity();
 
-            // Try to use stack buffer first
-            if (engine.idle_workers_set.count() <= 64) {
-                idle_workers = .{ .items = idle_buf[0..0], .capacity = 64 };
-            }
+            engine.idle_workers_scratch.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
+            engine.queued_workstations_scratch.ensureTotalCapacity(engine.allocator, engine.queued_workstations_set.count()) catch return;
 
             var idle_iter = engine.idle_workers_set.keyIterator();
             while (idle_iter.next()) |wid| {
-                if (idle_workers.capacity <= 64) {
-                    // Using stack buffer
-                    if (idle_workers.items.len < 64) {
-                        idle_buf[idle_workers.items.len] = wid.*;
-                        idle_workers.items = idle_buf[0 .. idle_workers.items.len + 1];
-                    }
-                } else {
-                    idle_workers.append(engine.allocator, wid.*) catch continue;
-                }
+                engine.idle_workers_scratch.append(engine.allocator, wid.*) catch return;
             }
 
-            if (idle_workers.items.len == 0) return;
-
-            // Iterate queued workstations from tracking set
             var queued_iter = engine.queued_workstations_set.keyIterator();
-            while (queued_iter.next()) |ws_id_ptr| {
-                const ws_id = ws_id_ptr.*;
+            while (queued_iter.next()) |wsid| {
+                engine.queued_workstations_scratch.append(engine.allocator, wsid.*) catch return;
+            }
+
+            var idle_workers = engine.idle_workers_scratch.items;
+            if (idle_workers.len == 0) return;
+
+            // Assign idle workers to queued workstations (iterating snapshots, safe to mutate sets)
+            for (engine.queued_workstations_scratch.items) |ws_id| {
+                const ws = engine.workstations.get(ws_id) orelse continue;
+                if (ws.status != .Queued) continue;
 
                 // Use callback to select worker, or just pick first
                 const worker_id = if (engine.find_best_worker_fn) |callback|
-                    callback(ws_id, idle_workers.items)
-                else if (idle_workers.items.len > 0)
-                    idle_workers.items[0]
+                    callback(ws_id, idle_workers)
+                else if (idle_workers.len > 0)
+                    idle_workers[0]
                 else
                     null;
 
                 if (worker_id) |wid| {
                     assignWorkerToWorkstation(engine, wid, ws_id);
 
-                    // O(n) search + O(1) swap remove from local snapshot
-                    for (idle_workers.items, 0..) |id, i| {
+                    // O(n) search + O(1) swap remove
+                    for (idle_workers, 0..) |id, i| {
                         if (id == wid) {
-                            _ = idle_workers.swapRemove(i);
+                            idle_workers[i] = idle_workers[idle_workers.len - 1];
+                            idle_workers = idle_workers[0 .. idle_workers.len - 1];
                             break;
                         }
                     }
 
                     // Early exit when no idle workers remain
-                    if (idle_workers.items.len == 0) break;
+                    if (idle_workers.len == 0) break;
                 }
             }
         }
