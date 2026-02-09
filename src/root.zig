@@ -186,6 +186,18 @@ pub fn clearEngineInterface(comptime GameId: type, comptime Item: type) void {
     ecs_bridge.EcsInterface(GameId, Item).clearActive();
 }
 
+/// Pure registration functions for task engine components.
+/// These functions accept the ECS interface and data directly, enabling
+/// unit testing without requiring a full ECS setup.
+///
+/// Example:
+/// ```zig
+/// const Reg = tasks.Registration(u64, Item);
+/// try Reg.registerStorage(iface, entity_id, .eis, .Flour, null, null);
+/// try Reg.registerWorker(iface, worker_id, true);
+/// ```
+pub const Registration = components_mod.Registration;
+
 /// Storage component for the task engine.
 /// Auto-registers with task engine when added to an entity.
 pub fn Storage(comptime Item: type) type {
