@@ -88,6 +88,9 @@ pub const HookDispatcher = hooks_mod.HookDispatcher;
 /// Empty hooks struct for engines that don't need hooks.
 pub const NoHooks = hooks_mod.NoHooks;
 
+/// Recording hooks for testing. Records all dispatched events for assertion.
+pub const RecordingHooks = hooks_mod.RecordingHooks;
+
 // === Logging Hooks ===
 
 const logging_hooks_mod = @import("logging_hooks.zig");
@@ -175,13 +178,31 @@ pub fn EcsInterface(comptime GameId: type, comptime Item: type) type {
 /// tasks.setEngineInterface(u64, Item, task_engine.interface());
 /// ```
 pub fn setEngineInterface(comptime GameId: type, comptime Item: type, iface: EcsInterface(GameId, Item)) void {
-    ecs_bridge.InterfaceStorage(GameId, Item).setInterface(iface);
+    comptime {
+        if (GameId != u64) @compileError("setEngineInterface requires GameId = u64 to match component bridge type");
+    }
+    ecs_bridge.EcsInterface(GameId, Item).setActive(iface);
 }
 
 /// Clear the ECS interface (for cleanup).
 pub fn clearEngineInterface(comptime GameId: type, comptime Item: type) void {
-    ecs_bridge.InterfaceStorage(GameId, Item).clearInterface();
+    comptime {
+        if (GameId != u64) @compileError("clearEngineInterface requires GameId = u64 to match component bridge type");
+    }
+    ecs_bridge.EcsInterface(GameId, Item).clearActive();
 }
+
+/// Pure registration functions for task engine components.
+/// These functions accept the ECS interface and data directly, enabling
+/// unit testing without requiring a full ECS setup.
+///
+/// Example:
+/// ```zig
+/// const Reg = tasks.Registration(u64, Item);
+/// try Reg.registerStorage(iface, entity_id, .eis, .Flour, null, null);
+/// try Reg.registerWorker(iface, worker_id, true);
+/// ```
+pub const Registration = components_mod.Registration;
 
 /// Storage component for the task engine.
 /// Auto-registers with task engine when added to an entity.
@@ -260,7 +281,7 @@ pub fn bind(comptime Item: type, comptime EngineTypes: type) type {
 /// const GameHooks = struct {
 ///     pub fn store_started(payload: anytype) void {
 ///         const registry = payload.registry orelse return;
-///         const worker = engine.entityFromU64(payload.worker_id);
+///         const worker = engine.entityFromU64(payload.original.worker_id);
 ///         registry.set(worker, MovementTarget{ ... });
 ///     }
 /// };
@@ -278,12 +299,13 @@ pub fn createEngineHooks(
     const Game = EngineTypes.Game;
 
     // Create a wrapper that enriches payloads with registry and game.
-    // Uses shared global storage from context module (set by ensureContext).
+    // Uses active context instance for registry/game access.
     const WrappedHooks = struct {
-        /// Create an enriched payload struct type that includes registry and game.
+        /// Flat enriched payload: copies all original fields to top level + adds registry/game.
+        /// This preserves backward compatibility so game hooks can access payload.worker_id directly.
         fn EnrichedPayload(comptime Original: type) type {
             return struct {
-                // Copy original payload fields
+                // Copy original payload fields (void if not present in original)
                 worker_id: if (@hasField(Original, "worker_id")) @FieldType(Original, "worker_id") else void = if (@hasField(Original, "worker_id")) undefined else {},
                 storage_id: if (@hasField(Original, "storage_id")) @FieldType(Original, "storage_id") else void = if (@hasField(Original, "storage_id")) undefined else {},
                 workstation_id: if (@hasField(Original, "workstation_id")) @FieldType(Original, "workstation_id") else void = if (@hasField(Original, "workstation_id")) undefined else {},
@@ -351,7 +373,7 @@ pub fn createEngineHooks(
         pub fn game_init(payload: EngineTypes.HookPayload) void {
             const info = payload.game_init;
 
-            Context.init(info.allocator) catch |err| {
+            _ = Context.init(info.allocator) catch |err| {
                 std.log.err("[labelle-tasks] Failed to initialize task engine: {}", .{err});
                 return;
             };

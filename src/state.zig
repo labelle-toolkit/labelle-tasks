@@ -1,5 +1,6 @@
 //! Internal state structs for the task engine
 
+const std = @import("std");
 const types = @import("types.zig");
 
 const WorkerState = types.WorkerState;
@@ -51,18 +52,25 @@ pub fn WorkstationData(comptime GameId: type) type {
         cycles_completed: u32 = 0,
         priority: Priority = .Normal,
 
-        // Storage references (by GameId)
-        eis: []const GameId,
-        iis: []const GameId,
-        ios: []const GameId,
-        eos: []const GameId,
+        // Storage references (by GameId) - dynamically growable lists
+        eis: std.ArrayListUnmanaged(GameId) = .{},
+        iis: std.ArrayListUnmanaged(GameId) = .{},
+        ios: std.ArrayListUnmanaged(GameId) = .{},
+        eos: std.ArrayListUnmanaged(GameId) = .{},
 
         // Selected storages for current cycle
         selected_eis: ?GameId = null,
         selected_eos: ?GameId = null,
 
         pub fn isProducer(self: *const Self) bool {
-            return self.eis.len == 0 and self.iis.len == 0;
+            return self.eis.items.len == 0 and self.iis.items.len == 0;
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.eis.deinit(allocator);
+            self.iis.deinit(allocator);
+            self.ios.deinit(allocator);
+            self.eos.deinit(allocator);
         }
     };
 }

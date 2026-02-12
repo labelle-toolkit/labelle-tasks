@@ -26,6 +26,7 @@ The engine tracks **abstract workflow state** only:
 - `item_type: ?Item` - What type of item?
 - `current_step: StepType` - Pickup/Process/Store
 - `assigned_worker: ?GameId` - Which worker is assigned?
+- `priority: Priority` - Low/Normal/High/Critical
 
 The engine **never**:
 - Holds entity references
@@ -66,12 +67,21 @@ Items flow through storages: `EIS → IIS (Pickup) → IOS (Process) → EOS (St
 
 Each storage holds **one item** (has_item: bool).
 
+### Priority System
+
+Storages and workstations support priority levels: `.Low`, `.Normal`, `.High`, `.Critical`.
+
+- `selectEis` picks the highest-priority EIS with an item
+- `selectEos` picks the highest-priority empty EOS
+- `tryAssignWorkers` assigns idle workers to highest-priority queued workstations first
+
 ### State Ownership
 
 | State | Owner |
 |-------|-------|
 | `has_item`, `item_type` | Task Engine |
 | `current_step`, `assigned_worker` | Task Engine |
+| `priority` (storage/workstation) | Task Engine |
 | Entity references | Game |
 | Work timers, progress | Game |
 | Positions, sprites | Game |
@@ -79,9 +89,17 @@ Each storage holds **one item** (has_item: bool).
 
 ### Main Files
 
-- `src/root.zig` - Public API exports
-- `src/engine.zig` - Core Engine implementation
-- `src/hooks.zig` - Hook payloads and dispatcher
+- `src/root.zig` - Public API exports + `createEngineHooks`
+- `src/engine.zig` - Core Engine (storages, workers, workstations, dangling items)
+- `src/handlers.zig` - Event handlers (game → engine), return `anyerror!void`
+- `src/helpers.zig` - Internal helpers (evaluation, assignment, priority-based selection)
+- `src/hooks.zig` - Hook payloads, dispatcher, `RecordingHooks` for testing
+- `src/state.zig` - Internal state structs (StorageState, WorkerData, WorkstationData)
+- `src/types.zig` - Core enums (WorkerState, WorkstationStatus, StepType, Priority)
+- `src/context.zig` - `TaskEngineContextWith` (engine lifecycle + ECS integration)
+- `src/ecs_bridge.zig` - Type-erased `EcsInterface` with vtable pattern
+- `src/components.zig` - ECS components with auto-registration callbacks
+- `src/logging_hooks.zig` - `LoggingHooks` + `MergeHooks` for hook composition
 
 ### Core Types
 
@@ -91,6 +109,8 @@ Each storage holds **one item** (has_item: bool).
 
 **Step Types**: `.Pickup`, `.Process`, `.Store`
 
+**Priority**: `.Low`, `.Normal`, `.High`, `.Critical` (u8: 0-3)
+
 ### Hook Types (Tasks → Game)
 
 - `pickup_started`, `process_started`, `process_completed`, `store_started` - Step lifecycle
@@ -98,6 +118,8 @@ Each storage holds **one item** (has_item: bool).
 - `workstation_blocked`, `workstation_queued`, `workstation_activated` - Workstation status
 - `cycle_completed` - Cycle lifecycle
 - `transport_started`, `transport_completed` - Transport lifecycle
+- `pickup_dangling_started`, `item_delivered` - Dangling item lifecycle
+- `input_consumed` - IIS item consumed during processing
 
 ### GameHook Types (Game → Tasks)
 
@@ -106,64 +128,72 @@ Each storage holds **one item** (has_item: bool).
 - `workstation_enabled`, `workstation_disabled`, `workstation_removed` - Workstation changes
 - `pickup_completed`, `work_completed`, `store_completed` - Step completion
 
+### Key Internal Patterns
+
+- **Reverse index**: `storage_to_workstations` map enables `reevaluateAffectedWorkstations()` for targeted re-evaluation instead of scanning all workstations
+- **Status tracking sets**: `idle_workers_set` and `queued_workstations_set` provide O(1) lookups
+- **Snapshot-based assignment**: `tryAssignWorkers` snapshots sets into local buffers to avoid reentrancy issues during hook dispatch
+- **Error unions**: Internal handlers return `anyerror!void`; `engine.handle()` catches and returns `bool`
+
 ## Usage Pattern
 
 ```zig
 const tasks = @import("labelle-tasks");
 const Item = enum { Flour, Bread };
 
-// Define hooks to receive from task engine (pure functions)
+// Define hooks (2-param with self or 1-param static)
 const MyHooks = struct {
     pub fn process_completed(payload: anytype) void {
-        // Game handles entity transformation
-        // payload.workstation_id, payload.item, etc.
+        // payload.workstation_id, payload.worker_id
     }
-
     pub fn store_started(payload: anytype) void {
-        // payload.worker_id, payload.storage_id
+        // payload.worker_id, payload.storage_id, payload.item
     }
 };
 
 // Create engine
-var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{});
+var engine = tasks.Engine(u32, Item, MyHooks).init(allocator, .{}, null);
 defer engine.deinit();
 
-// Register entities (just IDs - engine doesn't know about game's data)
-try engine.addStorage(eis_id, .Flour);  // Has flour
-try engine.addStorage(iis_id, null);     // Empty
-try engine.addStorage(ios_id, null);     // Empty
-try engine.addStorage(eos_id, null);     // Empty
+// Register entities
+try engine.addStorage(eis_id, .{ .role = .eis, .initial_item = .Flour, .priority = .High });
+try engine.addStorage(iis_id, .{ .role = .iis });
+try engine.addStorage(ios_id, .{ .role = .ios });
+try engine.addStorage(eos_id, .{ .role = .eos });
 
 try engine.addWorkstation(ws_id, .{
     .eis = &.{eis_id},
     .iis = &.{iis_id},
     .ios = &.{ios_id},
     .eos = &.{eos_id},
+    .priority = .Normal,
 });
 
 try engine.addWorker(worker_id);
 
 // Game notifies engine of events
 _ = engine.handle(.{ .worker_available = .{ .worker_id = worker_id } });
-// Engine emits pickup_started hook → game starts movement
-
-// When worker arrives at EIS...
 _ = engine.handle(.{ .pickup_completed = .{ .worker_id = worker_id } });
-// Engine emits process_started hook → game starts work timer
-
-// When game's work timer completes...
 _ = engine.handle(.{ .work_completed = .{ .workstation_id = ws_id } });
-// Engine emits process_completed, store_started hooks
-// Game destroys input entities, creates output entities, starts movement
-
-// When worker arrives at EOS...
 _ = engine.handle(.{ .store_completed = .{ .worker_id = worker_id } });
-// Engine emits cycle_completed hook
 ```
 
 ## Testing
 
-Tests are in the source files using Zig's built-in test framework.
+Tests use the **zspec** BDD framework in `test/` directory:
+- `test/root.zig` - Test root, aggregates all specs
+- `test/engine_spec.zig` - Engine workflow tests (priority, lifecycle, dangling items)
+- `test/hooks_spec.zig` - Hook dispatcher tests
+
+`RecordingHooks(GameId, Item)` enables test assertions:
+```zig
+var recorder = RecordingHooks(u32, Item){};
+recorder.init(allocator);
+defer recorder.deinit();
+// ... use recorder as TaskHooks ...
+try recorder.expectNext(.pickup_started);
+try recorder.expectEmpty();
+```
 
 Run with: `zig build test`
 
@@ -171,15 +201,17 @@ Run with: `zig build test`
 
 - **Language**: Zig 0.15+
 - **Build System**: Zig build system (`build.zig`)
+- **Testing**: zspec BDD framework
 
 ## labelle-engine Integration
 
 For integration with labelle-engine, the library provides helpers:
 
-- `createEngineHooks(GameId, Items, GameHooks)` - Creates engine lifecycle hooks
-- `TaskEngineContext` - Pre-built context struct with allocator, task_engine, and game pointers
-- `MergeHooks` - Combines multiple hook handler structs
+- `createEngineHooks(GameId, Items, GameHooks, EngineTypes)` - Creates engine lifecycle hooks with enriched payloads
+- `TaskEngineContextWith` - Context with injected engine types (avoids WASM module collision)
+- `MergeHooks` - Combines two hook handler structs (Primary + Fallback)
 - `LoggingHooks` - Default logging implementation for all hooks
-- `bind(Items)` - Returns parameterized component types (Storage, Worker, Workstation)
-
-See README.md for detailed integration examples.
+- `bind(Items, EngineTypes)` - Returns parameterized component types for plugin integration
+- `Registration` - Pure registration functions for unit testing without full ECS
+- `EcsInterface` - Type-erased vtable interface for ECS bridge
+- Auto-registering components: `Storage`, `Worker`, `Workstation`, `DanglingItem`

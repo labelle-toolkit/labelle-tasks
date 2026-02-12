@@ -1,7 +1,7 @@
 //! TaskEngineContext - Helper to reduce game integration boilerplate
 //!
 //! Wraps the task engine with common setup patterns:
-//! - Global state management (engine, registry, game pointers)
+//! - Instance-based state management (engine, registry, game pointers)
 //! - Custom vtable with ensureContext callback
 //! - Init/deinit lifecycle
 //! - Movement queue for hook-triggered worker movements
@@ -22,7 +22,7 @@
 //!
 //! // In game init hook - uses default distance function:
 //! pub fn game_init(payload: engine.HookPayload) void {
-//!     Context.init(payload.game_init.allocator) catch return;
+//!     _ = Context.init(payload.game_init.allocator) catch return;
 //! }
 //!
 //! // In game deinit hook:
@@ -36,42 +36,49 @@ const ecs_bridge = @import("ecs_bridge.zig");
 const engine_mod = @import("engine.zig");
 
 // ============================================
-// Shared Global State (accessible from hooks without Context type)
+// Shared pointers for enriched payloads (non-parameterized)
 // ============================================
-// These are set by TaskEngineContext.ensureContext and can be accessed
-// by enriched hook payloads without knowing the specific Context type.
+// These are set by TaskEngineContextWith.ensureContext and read by
+// createEngineHooks' enriched payload. They break the circular dependency
+// where WrappedHooks needs Ctx but Ctx depends on WrappedHooks.
 
-var shared_registry: ?*anyopaque = null;
-var shared_game: ?*anyopaque = null;
+var shared_registry_ptr: ?*anyopaque = null;
+var shared_game_ptr: ?*anyopaque = null;
 
-/// Get the shared registry pointer (for use by enriched hook payloads)
 pub fn getSharedRegistry(comptime RegistryType: type) ?*RegistryType {
-    const ptr = shared_registry orelse return null;
+    const ptr = shared_registry_ptr orelse return null;
     return @ptrCast(@alignCast(ptr));
 }
 
-/// Get the shared game pointer (for use by enriched hook payloads)
 pub fn getSharedGame(comptime GameType: type) ?*GameType {
-    const ptr = shared_game orelse return null;
+    const ptr = shared_game_ptr orelse return null;
     return @ptrCast(@alignCast(ptr));
 }
 
 /// Context for managing task engine lifecycle and game integration (with injected engine types).
 /// This version accepts EngineTypes to avoid importing labelle-engine directly,
 /// which prevents module collision in WASM builds.
-/// Eliminates boilerplate for vtable wrapping, global state, and movement queuing.
+///
+/// State is stored in a heap-allocated instance. A single `active` pointer per
+/// comptime instantiation provides static access for hooks and convenience wrappers.
+/// Multiple instances can coexist for testing by creating instances without setting active.
 pub fn TaskEngineContextWith(
     comptime GameId: type,
     comptime Item: type,
     comptime Hooks: type,
     comptime EngineTypes: type,
 ) type {
+    // Components always use EcsInterface(u64, Item) since ECS entity IDs are u64.
+    // GameId must match to ensure the same comptime static is used.
+    comptime {
+        if (GameId != u64) @compileError("TaskEngineContextWith requires GameId = u64 to match component bridge type");
+    }
+
     return struct {
         const Self = @This();
 
         pub const Engine = engine_mod.Engine(GameId, Item, Hooks);
         pub const EcsInterface = ecs_bridge.EcsInterface(GameId, Item);
-        pub const InterfaceStorage = ecs_bridge.InterfaceStorage(GameId, Item);
 
         // Injected types from labelle-engine
         const Registry = EngineTypes.Registry;
@@ -79,17 +86,20 @@ pub fn TaskEngineContextWith(
         const entityFromU64 = EngineTypes.entityFromU64;
 
         // ============================================
-        // Global State
+        // Active instance pointer (single remaining global)
         // ============================================
 
-        var task_engine: ?*Engine = null;
-        var engine_allocator: ?std.mem.Allocator = null;
-        var game_registry: ?*anyopaque = null;
-        var game_ptr: ?*anyopaque = null;
-        var distance_fn: ?*const fn (GameId, GameId) ?f32 = null;
+        var active: ?*Self = null;
 
-        // Custom vtable with ensureContext
-        var custom_vtable: EcsInterface.VTable = undefined;
+        // ============================================
+        // Instance fields (previously module-level globals)
+        // ============================================
+
+        engine: *Engine,
+        allocator: std.mem.Allocator,
+        registry_ptr: ?*anyopaque,
+        game_ptr: ?*anyopaque,
+        vtable: EcsInterface.VTable,
 
         // ============================================
         // Lifecycle
@@ -98,37 +108,48 @@ pub fn TaskEngineContextWith(
         /// Initialize the task engine context with default distance function.
         /// Call this during game initialization (e.g., in game_init hook).
         /// Uses euclidean distance based on Position components by default.
-        pub fn init(allocator: std.mem.Allocator) !void {
-            if (task_engine != null) return;
-
-            engine_allocator = allocator;
-            distance_fn = defaultDistanceFn;
+        /// Returns the instance and sets it as the active context.
+        pub fn init(allocator: std.mem.Allocator) !*Self {
+            if (active != null) return error.AlreadyInitialized;
 
             const eng = try allocator.create(Engine);
+            errdefer {
+                eng.deinit();
+                allocator.destroy(eng);
+            }
             eng.* = Engine.init(allocator, .{}, defaultDistanceFn);
-            task_engine = eng;
+
+            const self = try allocator.create(Self);
+            errdefer allocator.destroy(self);
+            self.* = Self{
+                .engine = eng,
+                .allocator = allocator,
+                .registry_ptr = null,
+                .game_ptr = null,
+                .vtable = undefined,
+            };
 
             // Set up ECS interface with ensureContext callback
             const engine_iface = eng.interface();
-            custom_vtable = engine_iface.vtable.*;
-            custom_vtable.ensureContext = ensureContext;
+            self.vtable = engine_iface.vtable.*;
+            self.vtable.ensureContext = ensureContext;
 
-            const custom_iface = EcsInterface{
+            EcsInterface.setActive(.{
                 .ptr = engine_iface.ptr,
-                .vtable = &custom_vtable,
-            };
-            InterfaceStorage.setInterface(custom_iface);
+                .vtable = &self.vtable,
+            });
+
+            active = self;
 
             std.log.info("[TaskEngineContext] Initialized", .{});
+            return self;
         }
 
         /// Set a custom distance function (overrides default).
         /// Call after init() if you need custom distance calculations.
         pub fn setDistanceFunction(func: *const fn (GameId, GameId) ?f32) void {
-            distance_fn = func;
-            if (task_engine) |eng| {
-                eng.setDistanceFunction(func);
-            }
+            const self = active orelse return;
+            self.engine.setDistanceFunction(func);
         }
 
         /// Default distance function using Position components.
@@ -150,34 +171,29 @@ pub fn TaskEngineContextWith(
         /// Deinitialize the task engine context.
         /// Call this during game cleanup (e.g., in game_deinit hook).
         pub fn deinit() void {
-            if (task_engine) |eng| {
-                InterfaceStorage.clearInterface();
-                eng.deinit();
-                if (engine_allocator) |allocator| {
-                    allocator.destroy(eng);
-                }
-            }
-            task_engine = null;
-            engine_allocator = null;
-            game_registry = null;
-            game_ptr = null;
-            // Clear shared globals
-            shared_registry = null;
-            shared_game = null;
+            const self = active orelse return;
+            active = null;
+            shared_registry_ptr = null;
+            shared_game_ptr = null;
+
+            EcsInterface.clearActive();
+            self.engine.deinit();
+            const alloc = self.allocator;
+            alloc.destroy(self.engine);
+            alloc.destroy(self);
             std.log.info("[TaskEngineContext] Deinitialized", .{});
         }
 
         /// ECS bridge callback - sets game/registry pointers on first component registration.
         fn ensureContext(game_ptr_raw: *anyopaque, registry_ptr_raw: *anyopaque) void {
-            if (game_registry == null) {
-                game_registry = registry_ptr_raw;
-                // Also set shared globals for hook payload enrichment
-                shared_registry = registry_ptr_raw;
+            const self = active orelse return;
+            if (self.registry_ptr == null) {
+                self.registry_ptr = registry_ptr_raw;
+                shared_registry_ptr = registry_ptr_raw;
             }
-            if (game_ptr == null) {
-                game_ptr = game_ptr_raw;
-                // Also set shared globals for hook payload enrichment
-                shared_game = game_ptr_raw;
+            if (self.game_ptr == null) {
+                self.game_ptr = game_ptr_raw;
+                shared_game_ptr = game_ptr_raw;
             }
         }
 
@@ -185,30 +201,40 @@ pub fn TaskEngineContextWith(
         // Accessors
         // ============================================
 
+        /// Get the active instance (if initialized).
+        pub fn getInstance() ?*Self {
+            return active;
+        }
+
         /// Get the task engine instance (if initialized).
         pub fn getEngine() ?*Engine {
-            return task_engine;
+            const self = active orelse return null;
+            return self.engine;
         }
 
         /// Get the game registry pointer (if set via ensureContext).
         pub fn getRegistryPtr() ?*anyopaque {
-            return game_registry;
+            const self = active orelse return null;
+            return self.registry_ptr;
         }
 
         /// Get the game pointer (if set via ensureContext).
         pub fn getGamePtr() ?*anyopaque {
-            return game_ptr;
+            const self = active orelse return null;
+            return self.game_ptr;
         }
 
         /// Get the registry cast to a specific type.
         pub fn getRegistry(comptime RegistryType: type) ?*RegistryType {
-            const ptr = game_registry orelse return null;
+            const self = active orelse return null;
+            const ptr = self.registry_ptr orelse return null;
             return @ptrCast(@alignCast(ptr));
         }
 
         /// Get the game cast to a specific type.
         pub fn getGame(comptime GameType: type) ?*GameType {
-            const ptr = game_ptr orelse return null;
+            const self = active orelse return null;
+            const ptr = self.game_ptr orelse return null;
             return @ptrCast(@alignCast(ptr));
         }
 
@@ -218,38 +244,38 @@ pub fn TaskEngineContextWith(
 
         /// Notify that a pickup was completed.
         pub fn pickupCompleted(worker_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            return eng.pickupCompleted(worker_id);
+            const self = active orelse return false;
+            return self.engine.pickupCompleted(worker_id);
         }
 
         /// Notify that a store was completed.
         pub fn storeCompleted(worker_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            return eng.storeCompleted(worker_id);
+            const self = active orelse return false;
+            return self.engine.storeCompleted(worker_id);
         }
 
         /// Notify that work was completed at a workstation.
         pub fn workCompleted(workstation_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            return eng.workCompleted(workstation_id);
+            const self = active orelse return false;
+            return self.engine.workCompleted(workstation_id);
         }
 
         /// Notify that an item was added to a storage.
         pub fn itemAdded(storage_id: GameId, item: Item) bool {
-            const eng = task_engine orelse return false;
-            return eng.itemAdded(storage_id, item);
+            const self = active orelse return false;
+            return self.engine.itemAdded(storage_id, item);
         }
 
         /// Notify that an item was removed from a storage.
         pub fn itemRemoved(storage_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            return eng.itemRemoved(storage_id);
+            const self = active orelse return false;
+            return self.engine.itemRemoved(storage_id);
         }
 
         /// Notify that a worker became available.
         pub fn workerAvailable(worker_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            return eng.workerAvailable(worker_id);
+            const self = active orelse return false;
+            return self.engine.workerAvailable(worker_id);
         }
 
         /// Notify that a worker became unavailable.
@@ -262,11 +288,11 @@ pub fn TaskEngineContextWith(
         /// Automatically determines the correct completion based on current step.
         /// Returns true if an event was handled.
         pub fn workerArrived(worker_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            const step = eng.getWorkerCurrentStep(worker_id) orelse return false;
+            const self = active orelse return false;
+            const step = self.engine.getWorkerCurrentStep(worker_id) orelse return false;
             return switch (step) {
-                .Pickup => eng.pickupCompleted(worker_id),
-                .Store => eng.storeCompleted(worker_id),
+                .Pickup => self.engine.pickupCompleted(worker_id),
+                .Store => self.engine.storeCompleted(worker_id),
                 .Process => false, // Process uses workCompleted when timer finishes
             };
         }
@@ -280,9 +306,8 @@ pub fn TaskEngineContextWith(
 
         /// Re-evaluate dangling items (call after scene load).
         pub fn evaluateDanglingItems() void {
-            if (task_engine) |eng| {
-                eng.evaluateDanglingItems();
-            }
+            const self = active orelse return;
+            self.engine.evaluateDanglingItems();
         }
     };
 }
