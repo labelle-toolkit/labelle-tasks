@@ -280,8 +280,8 @@ pub fn TaskEngineContextWith(
 
         /// Notify that a worker became unavailable.
         pub fn workerUnavailable(worker_id: GameId) bool {
-            const eng = task_engine orelse return false;
-            return eng.handle(.{ .worker_unavailable = .{ .worker_id = worker_id } });
+            const self = active orelse return false;
+            return self.engine.handle(.{ .worker_unavailable = .{ .worker_id = worker_id } });
         }
 
         /// Generic handler for when a worker arrives at its destination.
