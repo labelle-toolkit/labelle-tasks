@@ -377,6 +377,10 @@ pub fn Engine(
             return EngineHelpers.selectEos(self, workstation_id);
         }
 
+        pub fn canWorkstationOperate(self: *Self, ws: *const WorkstationData) bool {
+            return EngineHelpers.canWorkstationOperate(self, ws);
+        }
+
         // ============================================
         // Status tracking set operations
         // ============================================

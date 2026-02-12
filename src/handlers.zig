@@ -74,6 +74,13 @@ pub fn Handlers(
                 return error.UnknownWorker;
             };
 
+            // Guard: if worker is already actively assigned, don't clear the assignment.
+            // This can happen if workerAvailable is called redundantly (e.g., onAdd + init script).
+            if (worker.state == .Working and worker.assigned_workstation != null) {
+                log.debug("worker_available: worker {} already working at ws {}, ignoring", .{ worker_id, worker.assigned_workstation.? });
+                return;
+            }
+
             worker.state = .Idle;
             worker.assigned_workstation = null;
             engine.markWorkerIdle(worker_id);
@@ -413,8 +420,14 @@ pub fn Handlers(
             }
 
             const ws_id = worker.assigned_workstation orelse {
-                log.err("store_completed: worker {} not assigned to workstation", .{worker_id});
-                return error.WorkerNotAssigned;
+                // Recover: worker lost workstation assignment (can happen if reentrancy
+                // during process_completed hook disrupted state). Return to idle.
+                log.warn("store_completed: worker {} not assigned to workstation, recovering to idle", .{worker_id});
+                worker.state = .Idle;
+                engine.markWorkerIdle(worker_id);
+                engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
+                engine.tryAssignWorkers();
+                return;
             };
 
             const ws = engine.workstations.getPtr(ws_id) orelse {
@@ -469,23 +482,46 @@ pub fn Handlers(
                     .cycles_completed = ws.cycles_completed,
                 } });
 
-                // Reset for next cycle
-                ws.current_step = .Pickup;
+                // Reset per-cycle selections
                 ws.selected_eis = null;
                 ws.selected_eos = null;
 
-                // Release worker
-                ws.assigned_worker = null;
-                worker.state = .Idle;
-                worker.assigned_workstation = null;
-                engine.markWorkerIdle(worker_id);
-                engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
+                // Check if workstation can start another cycle immediately
+                if (engine.canWorkstationOperate(ws)) {
+                    // Keep worker assigned — start next cycle directly
+                    if (ws.isProducer()) {
+                        ws.current_step = .Process;
+                        engine.dispatcher.dispatch(.{ .process_started = .{
+                            .workstation_id = ws_id,
+                            .worker_id = worker_id,
+                        } });
+                    } else {
+                        ws.current_step = .Pickup;
+                        ws.selected_eis = engine.selectEis(ws_id);
 
-                // Re-evaluate workstation status
-                engine.evaluateWorkstationStatus(ws_id);
+                        if (ws.selected_eis) |eis_id| {
+                            const item = engine.storages.get(eis_id).?.item_type.?;
+                            engine.dispatcher.dispatch(.{ .pickup_started = .{
+                                .worker_id = worker_id,
+                                .storage_id = eis_id,
+                                .item = item,
+                            } });
+                        }
+                    }
+                } else {
+                    // Can't continue — release worker normally
+                    ws.assigned_worker = null;
+                    worker.state = .Idle;
+                    worker.assigned_workstation = null;
+                    engine.markWorkerIdle(worker_id);
+                    engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
 
-                // Try to assign workers
-                engine.tryAssignWorkers();
+                    // Re-evaluate workstation status
+                    engine.evaluateWorkstationStatus(ws_id);
+
+                    // Try to assign workers
+                    engine.tryAssignWorkers();
+                }
             } else {
                 // More items to store
                 ws.selected_eos = engine.selectEos(ws_id);
