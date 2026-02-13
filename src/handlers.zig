@@ -249,6 +249,9 @@ pub fn Handlers(
                         }
                     }
                 }
+
+                // EIS is now free — check if idle workers can deliver dangling items to it
+                engine.evaluateDanglingItems();
             }
 
             // Check if all IIS are filled

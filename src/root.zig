@@ -381,13 +381,14 @@ pub fn createEngineHooks(
             std.log.info("[labelle-tasks] Task engine initialized", .{});
         }
 
-        /// Re-evaluate dangling items after scene is loaded (all entities now registered)
+        /// Re-evaluate after scene is loaded (all entities now registered)
         pub fn scene_load(payload: EngineTypes.HookPayload) void {
             const info = payload.scene_load;
-            std.log.debug("[labelle-tasks] scene_load: {s} - re-evaluating dangling items", .{info.name});
+            std.log.debug("[labelle-tasks] scene_load: {s} - re-evaluating dangling items and workstations", .{info.name});
 
             if (Context.getEngine()) |task_eng| {
                 task_eng.evaluateDanglingItems();
+                task_eng.reevaluateWorkstations();
             }
         }
 

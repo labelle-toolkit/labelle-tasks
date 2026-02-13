@@ -564,12 +564,10 @@ pub fn Engine(
             while (idle_iter.next()) |wid| {
                 idle_buf.appendAssumeCapacity(wid.*);
             }
-            const idle_workers = idle_buf.items;
-
-            if (idle_workers.len == 0) return;
+            if (idle_buf.items.len == 0) return;
 
             log.debug("evaluateDanglingItems: {d} idle workers, {d} dangling items", .{
-                idle_workers.len,
+                idle_buf.items.len,
                 self.dangling_items.count(),
             });
 
@@ -611,7 +609,7 @@ pub fn Engine(
                 const target_eis = self.findEmptyEisForItemExcluding(item_type, &reserved_eis) orelse continue;
 
                 // Find nearest idle worker to the dangling item
-                const worker_id = self.findNearest(item_id, idle_workers) orelse continue;
+                const worker_id = self.findNearest(item_id, idle_buf.items) orelse continue;
 
                 // BUG FIX: Check if this worker was already assigned in this evaluation
                 if (assigned_workers.contains(worker_id)) {
@@ -650,9 +648,15 @@ pub fn Engine(
                         .target_eis_id = target_eis,
                     } });
 
-                    // Only assign one item per evaluation cycle
-                    // (we'd need to refresh idle_workers list for more)
-                    return;
+                    // Remove assigned worker from idle_buf so findNearest won't return it again
+                    for (idle_buf.items, 0..) |id, i| {
+                        if (id == worker_id) {
+                            _ = idle_buf.swapRemove(i);
+                            break;
+                        }
+                    }
+                    if (idle_buf.items.len == 0) return;
+                    continue;
                 }
             }
         }

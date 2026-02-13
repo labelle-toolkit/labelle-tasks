@@ -337,6 +337,102 @@ pub const Engine = zspec.describe("Engine", struct {
             try std.testing.expect(engine.getStorageHasItem(1).? == true); // EIS now has item
             try std.testing.expect(engine.getDanglingItemType(50) == null); // Removed from tracking
         }
+
+        pub fn @"multiple workers assigned to multiple dangling items in single call"() !void {
+            var assignment_count: u32 = 0;
+            const TestHooks = struct {
+                count_ptr: *u32,
+
+                pub fn pickup_dangling_started(self: *@This(), _: anytype) void {
+                    self.count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .count_ptr = &assignment_count },
+                null,
+            );
+            defer engine.deinit();
+
+            // Add 2 workers and make available (no work → stay idle)
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+            try engine.addWorker(20);
+            _ = engine.workerAvailable(20);
+
+            // No EIS yet → dangling items can't be assigned
+            try engine.addDanglingItem(50, .Flour);
+            try engine.addDanglingItem(51, .Water);
+
+            try std.testing.expectEqual(@as(u32, 0), assignment_count);
+            try std.testing.expect(engine.getWorkerState(10).? == .Idle);
+            try std.testing.expect(engine.getWorkerState(20).? == .Idle);
+
+            // Now add empty EIS that accept the items
+            try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Water });
+
+            // Single call should assign both workers
+            engine.evaluateDanglingItems();
+
+            try std.testing.expectEqual(@as(u32, 2), assignment_count);
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+            try std.testing.expect(engine.getWorkerState(20).? == .Working);
+        }
+
+        pub fn @"EIS cleared by workstation pickup triggers dangling item assignment"() !void {
+            var dangling_started = false;
+            const TestHooks = struct {
+                started_ptr: *bool,
+
+                pub fn pickup_dangling_started(self: *@This(), _: anytype) void {
+                    self.started_ptr.* = true;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .started_ptr = &dangling_started },
+                null,
+            );
+            defer engine.deinit();
+
+            // Workstation with a filled EIS
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour, .accepts = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            // Worker 10: gets assigned to workstation pickup (EIS → IIS)
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+
+            // Worker 20: idle, no work available
+            try engine.addWorker(20);
+            _ = engine.workerAvailable(20);
+            try std.testing.expect(engine.getWorkerState(20).? == .Idle);
+
+            // Add dangling item — EIS is full, so no assignment yet
+            try engine.addDanglingItem(50, .Flour);
+            try std.testing.expect(dangling_started == false);
+            try std.testing.expect(engine.getWorkerState(20).? == .Idle);
+
+            // Worker 10 completes pickup → clears EIS → should trigger dangling assignment
+            _ = engine.pickupCompleted(10);
+
+            // Worker 20 should now be assigned to deliver dangling item to the freed EIS
+            try std.testing.expect(dangling_started == true);
+            try std.testing.expect(engine.getWorkerState(20).? == .Working);
+        }
     });
 
     pub const producer = zspec.describe("producer workstation", struct {
