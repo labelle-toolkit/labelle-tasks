@@ -449,6 +449,166 @@ pub fn Engine(
         }
 
         // ============================================
+        // Introspection API
+        // ============================================
+
+        /// Full storage state snapshot for diagnostics
+        pub fn getStorageInfo(self: *const Self, storage_id: GameId) ?StorageInfo {
+            const s = self.storages.get(storage_id) orelse return null;
+            return .{
+                .has_item = s.has_item,
+                .item_type = s.item_type,
+                .role = s.role,
+                .accepts = s.accepts,
+                .priority = s.priority,
+            };
+        }
+
+        pub const StorageInfo = struct {
+            has_item: bool,
+            item_type: ?Item,
+            role: state_mod.StorageRole,
+            accepts: ?Item,
+            priority: Priority,
+        };
+
+        /// Full worker state snapshot for diagnostics
+        pub fn getWorkerInfo(self: *const Self, worker_id: GameId) ?WorkerInfo {
+            const w = self.workers.get(worker_id) orelse return null;
+            return .{
+                .state = w.state,
+                .assigned_workstation = w.assigned_workstation,
+                .has_dangling_task = w.dangling_task != null,
+            };
+        }
+
+        pub const WorkerInfo = struct {
+            state: WorkerState,
+            assigned_workstation: ?GameId,
+            has_dangling_task: bool,
+        };
+
+        /// Full workstation state snapshot for diagnostics
+        pub fn getWorkstationInfo(self: *const Self, workstation_id: GameId) ?WorkstationInfo {
+            const ws = self.workstations.get(workstation_id) orelse return null;
+            return .{
+                .status = ws.status,
+                .assigned_worker = ws.assigned_worker,
+                .current_step = ws.current_step,
+                .cycles_completed = ws.cycles_completed,
+                .priority = ws.priority,
+                .eis_count = ws.eis.items.len,
+                .iis_count = ws.iis.items.len,
+                .ios_count = ws.ios.items.len,
+                .eos_count = ws.eos.items.len,
+            };
+        }
+
+        pub const WorkstationInfo = struct {
+            status: WorkstationStatus,
+            assigned_worker: ?GameId,
+            current_step: StepType,
+            cycles_completed: u32,
+            priority: Priority,
+            eis_count: usize,
+            iis_count: usize,
+            ios_count: usize,
+            eos_count: usize,
+        };
+
+        /// Check if a storage is full (has an item)
+        pub fn isStorageFull(self: *const Self, storage_id: GameId) bool {
+            const storage = self.storages.get(storage_id) orelse return false;
+            return storage.has_item;
+        }
+
+        /// Get the workstation a worker is assigned to (if any)
+        pub fn getWorkerAssignment(self: *const Self, worker_id: GameId) ?GameId {
+            const worker = self.workers.get(worker_id) orelse return null;
+            return worker.assigned_workstation;
+        }
+
+        /// Entity counts for quick overview
+        pub const EngineCounts = struct {
+            storages: u32,
+            workers: u32,
+            workstations: u32,
+            dangling_items: u32,
+            idle_workers: u32,
+            queued_workstations: u32,
+        };
+
+        /// Get entity counts for quick diagnostics
+        pub fn getCounts(self: *const Self) EngineCounts {
+            return .{
+                .storages = @intCast(self.storages.count()),
+                .workers = @intCast(self.workers.count()),
+                .workstations = @intCast(self.workstations.count()),
+                .dangling_items = @intCast(self.dangling_items.count()),
+                .idle_workers = @intCast(self.idle_workers_set.count()),
+                .queued_workstations = @intCast(self.queued_workstations_set.count()),
+            };
+        }
+
+        /// Dump full engine state to a writer for diagnostics
+        pub fn dumpState(self: *const Self, writer: anytype) !void {
+            const counts = self.getCounts();
+            try writer.print("=== Task Engine State ===\n", .{});
+            try writer.print("Storages: {d}  Workers: {d}  Workstations: {d}  Dangling: {d}\n", .{
+                counts.storages, counts.workers, counts.workstations, counts.dangling_items,
+            });
+            try writer.print("Idle workers: {d}  Queued workstations: {d}\n\n", .{
+                counts.idle_workers, counts.queued_workstations,
+            });
+
+            // Storages
+            var s_iter = self.storages.iterator();
+            while (s_iter.next()) |entry| {
+                const id = entry.key_ptr.*;
+                const s = entry.value_ptr.*;
+                try writer.print("  Storage {d}: role={s} has_item={} item={s} accepts={s} priority={s}\n", .{
+                    id,
+                    @tagName(s.role),
+                    s.has_item,
+                    if (s.item_type) |it| @tagName(it) else "none",
+                    if (s.accepts) |a| @tagName(a) else "any",
+                    @tagName(s.priority),
+                });
+            }
+
+            // Workers
+            var w_iter = self.workers.iterator();
+            while (w_iter.next()) |entry| {
+                const id = entry.key_ptr.*;
+                const w = entry.value_ptr.*;
+                try writer.print("  Worker {d}: state={s} ws={?d} dangling={}\n", .{
+                    id,
+                    @tagName(w.state),
+                    w.assigned_workstation,
+                    w.dangling_task != null,
+                });
+            }
+
+            // Workstations
+            var ws_iter = self.workstations.iterator();
+            while (ws_iter.next()) |entry| {
+                const id = entry.key_ptr.*;
+                const ws = entry.value_ptr.*;
+                try writer.print("  Workstation {d}: status={s} worker={?d} step={s} cycles={d} priority={s}\n", .{
+                    id,
+                    @tagName(ws.status),
+                    ws.assigned_worker,
+                    @tagName(ws.current_step),
+                    ws.cycles_completed,
+                    @tagName(ws.priority),
+                });
+                try writer.print("    EIS({d}) IIS({d}) IOS({d}) EOS({d})\n", .{
+                    ws.eis.items.len, ws.iis.items.len, ws.ios.items.len, ws.eos.items.len,
+                });
+            }
+        }
+
+        // ============================================
         // Distance API
         // ============================================
 

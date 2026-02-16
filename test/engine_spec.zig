@@ -688,4 +688,240 @@ pub const Engine = zspec.describe("Engine", struct {
             try std.testing.expect(engine.getWorkstationStatus(100).? == .Queued);
         }
     });
+
+    pub const introspection = zspec.describe("introspection API", struct {
+        pub fn @"getStorageInfo returns full storage state"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour, .accepts = .Flour, .priority = .High });
+
+            const info = engine.getStorageInfo(1).?;
+            try std.testing.expect(info.has_item == true);
+            try std.testing.expect(info.item_type.? == .Flour);
+            try std.testing.expect(info.role == .eis);
+            try std.testing.expect(info.accepts.? == .Flour);
+            try std.testing.expect(info.priority == .High);
+        }
+
+        pub fn @"getStorageInfo returns null for unknown storage"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try std.testing.expect(engine.getStorageInfo(999) == null);
+        }
+
+        pub fn @"getWorkerInfo returns full worker state"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+
+            // Before assignment
+            const idle_info = engine.getWorkerInfo(10).?;
+            try std.testing.expect(idle_info.state == .Idle);
+            try std.testing.expect(idle_info.assigned_workstation == null);
+            try std.testing.expect(idle_info.has_dangling_task == false);
+
+            // After assignment
+            _ = engine.workerAvailable(10);
+            const working_info = engine.getWorkerInfo(10).?;
+            try std.testing.expect(working_info.state == .Working);
+            try std.testing.expect(working_info.assigned_workstation.? == 100);
+        }
+
+        pub fn @"getWorkstationInfo returns full workstation state"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+                .priority = .Critical,
+            });
+
+            const info = engine.getWorkstationInfo(100).?;
+            try std.testing.expect(info.status == .Queued);
+            try std.testing.expect(info.assigned_worker == null);
+            try std.testing.expect(info.priority == .Critical);
+            try std.testing.expectEqual(@as(usize, 1), info.eis_count);
+            try std.testing.expectEqual(@as(usize, 1), info.iis_count);
+            try std.testing.expectEqual(@as(usize, 1), info.ios_count);
+            try std.testing.expectEqual(@as(usize, 1), info.eos_count);
+            try std.testing.expectEqual(@as(u32, 0), info.cycles_completed);
+        }
+
+        pub fn @"isStorageFull works correctly"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .eis });
+
+            try std.testing.expect(engine.isStorageFull(1) == true);
+            try std.testing.expect(engine.isStorageFull(2) == false);
+            try std.testing.expect(engine.isStorageFull(999) == false); // unknown returns false
+        }
+
+        pub fn @"getWorkerAssignment tracks assignment correctly"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+
+            // Not assigned yet
+            try std.testing.expect(engine.getWorkerAssignment(10) == null);
+
+            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.getWorkerAssignment(10).? == 100);
+
+            // Unknown worker
+            try std.testing.expect(engine.getWorkerAssignment(999) == null);
+        }
+
+        pub fn @"getCounts returns correct entity counts"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            var counts = engine.getCounts();
+            try std.testing.expectEqual(@as(u32, 0), counts.storages);
+            try std.testing.expectEqual(@as(u32, 0), counts.workers);
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+            try engine.addWorker(10);
+            try engine.addWorker(20);
+
+            counts = engine.getCounts();
+            try std.testing.expectEqual(@as(u32, 4), counts.storages);
+            try std.testing.expectEqual(@as(u32, 2), counts.workers);
+            try std.testing.expectEqual(@as(u32, 1), counts.workstations);
+            try std.testing.expectEqual(@as(u32, 0), counts.dangling_items);
+            try std.testing.expectEqual(@as(u32, 2), counts.idle_workers);
+            try std.testing.expectEqual(@as(u32, 1), counts.queued_workstations);
+        }
+
+        pub fn @"dumpState writes diagnostic output"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+            try engine.addWorker(10);
+
+            var buf: [4096]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&buf);
+            try engine.dumpState(stream.writer());
+
+            const output = stream.getWritten();
+            // Verify it contains key information
+            try std.testing.expect(std.mem.indexOf(u8, output, "Task Engine State") != null);
+            try std.testing.expect(std.mem.indexOf(u8, output, "Storages: 4") != null);
+            try std.testing.expect(std.mem.indexOf(u8, output, "Workers: 1") != null);
+            try std.testing.expect(std.mem.indexOf(u8, output, "Workstations: 1") != null);
+        }
+
+        pub fn @"getWorkerInfo detects dangling task"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Before dangling assignment
+            try std.testing.expect(engine.getWorkerInfo(10).?.has_dangling_task == false);
+
+            // Add dangling item — worker gets assigned
+            try engine.addDanglingItem(50, .Flour);
+            try std.testing.expect(engine.getWorkerInfo(10).?.has_dangling_task == true);
+        }
+
+        pub fn @"workstation info updates after cycle"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            try std.testing.expect(engine.getWorkstationInfo(100).?.status == .Active);
+            try std.testing.expect(engine.getWorkstationInfo(100).?.assigned_worker.? == 10);
+
+            // Complete full cycle
+            _ = engine.pickupCompleted(10);
+            _ = engine.workCompleted(100);
+            _ = engine.storeCompleted(10);
+
+            try std.testing.expectEqual(@as(u32, 1), engine.getWorkstationInfo(100).?.cycles_completed);
+        }
+    });
 });
