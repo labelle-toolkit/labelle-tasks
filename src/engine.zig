@@ -467,7 +467,7 @@ pub fn Engine(
         pub const StorageInfo = struct {
             has_item: bool,
             item_type: ?Item,
-            role: state_mod.StorageRole,
+            role: StorageRole,
             accepts: ?Item,
             priority: Priority,
         };
@@ -550,7 +550,8 @@ pub fn Engine(
             };
         }
 
-        /// Dump full engine state to a writer for diagnostics
+        /// Dump engine state to a writer for diagnostics.
+        /// Output is sorted by entity ID for deterministic results.
         pub fn dumpState(self: *const Self, writer: anytype) !void {
             const counts = self.getCounts();
             try writer.print("=== Task Engine State ===\n", .{});
@@ -561,11 +562,14 @@ pub fn Engine(
                 counts.idle_workers, counts.queued_workstations,
             });
 
-            // Storages
-            var s_iter = self.storages.iterator();
-            while (s_iter.next()) |entry| {
-                const id = entry.key_ptr.*;
-                const s = entry.value_ptr.*;
+            // Storages (sorted by ID for deterministic output)
+            var s_keys: std.ArrayListUnmanaged(GameId) = .{};
+            defer s_keys.deinit(self.allocator);
+            var s_iter = self.storages.keyIterator();
+            while (s_iter.next()) |key| try s_keys.append(self.allocator, key.*);
+            std.mem.sort(GameId, s_keys.items, {}, std.sort.asc(GameId));
+            for (s_keys.items) |id| {
+                const s = self.storages.get(id).?;
                 try writer.print("  Storage {d}: role={s} has_item={} item={s} accepts={s} priority={s}\n", .{
                     id,
                     @tagName(s.role),
@@ -576,11 +580,14 @@ pub fn Engine(
                 });
             }
 
-            // Workers
-            var w_iter = self.workers.iterator();
-            while (w_iter.next()) |entry| {
-                const id = entry.key_ptr.*;
-                const w = entry.value_ptr.*;
+            // Workers (sorted by ID)
+            var w_keys: std.ArrayListUnmanaged(GameId) = .{};
+            defer w_keys.deinit(self.allocator);
+            var w_iter = self.workers.keyIterator();
+            while (w_iter.next()) |key| try w_keys.append(self.allocator, key.*);
+            std.mem.sort(GameId, w_keys.items, {}, std.sort.asc(GameId));
+            for (w_keys.items) |id| {
+                const w = self.workers.get(id).?;
                 try writer.print("  Worker {d}: state={s} ws={?d} dangling={}\n", .{
                     id,
                     @tagName(w.state),
@@ -589,11 +596,14 @@ pub fn Engine(
                 });
             }
 
-            // Workstations
-            var ws_iter = self.workstations.iterator();
-            while (ws_iter.next()) |entry| {
-                const id = entry.key_ptr.*;
-                const ws = entry.value_ptr.*;
+            // Workstations (sorted by ID)
+            var ws_keys: std.ArrayListUnmanaged(GameId) = .{};
+            defer ws_keys.deinit(self.allocator);
+            var ws_iter = self.workstations.keyIterator();
+            while (ws_iter.next()) |key| try ws_keys.append(self.allocator, key.*);
+            std.mem.sort(GameId, ws_keys.items, {}, std.sort.asc(GameId));
+            for (ws_keys.items) |id| {
+                const ws = self.workstations.get(id).?;
                 try writer.print("  Workstation {d}: status={s} worker={?d} step={s} cycles={d} priority={s}\n", .{
                     id,
                     @tagName(ws.status),
@@ -605,6 +615,19 @@ pub fn Engine(
                 try writer.print("    EIS({d}) IIS({d}) IOS({d}) EOS({d})\n", .{
                     ws.eis.items.len, ws.iis.items.len, ws.ios.items.len, ws.eos.items.len,
                 });
+            }
+
+            // Dangling items (sorted by ID)
+            if (self.dangling_items.count() > 0) {
+                var d_keys: std.ArrayListUnmanaged(GameId) = .{};
+                defer d_keys.deinit(self.allocator);
+                var d_iter = self.dangling_items.keyIterator();
+                while (d_iter.next()) |key| try d_keys.append(self.allocator, key.*);
+                std.mem.sort(GameId, d_keys.items, {}, std.sort.asc(GameId));
+                for (d_keys.items) |id| {
+                    const item_type = self.dangling_items.get(id).?;
+                    try writer.print("  Dangling {d}: type={s}\n", .{ id, @tagName(item_type) });
+                }
             }
         }
 
