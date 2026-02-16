@@ -698,11 +698,11 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour, .accepts = .Flour, .priority = .High });
 
             const info = engine.getStorageInfo(1).?;
-            try std.testing.expect(info.has_item == true);
-            try std.testing.expect(info.item_type.? == .Flour);
-            try std.testing.expect(info.role == .eis);
-            try std.testing.expect(info.accepts.? == .Flour);
-            try std.testing.expect(info.priority == .High);
+            try std.testing.expectEqual(true, info.has_item);
+            try std.testing.expectEqual(Item.Flour, info.item_type.?);
+            try std.testing.expectEqual(tasks.StorageRole.eis, info.role);
+            try std.testing.expectEqual(Item.Flour, info.accepts.?);
+            try std.testing.expectEqual(tasks.Priority.High, info.priority);
         }
 
         pub fn @"getStorageInfo returns null for unknown storage"() !void {
@@ -710,7 +710,7 @@ pub const Engine = zspec.describe("Engine", struct {
             var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
             defer engine.deinit();
 
-            try std.testing.expect(engine.getStorageInfo(999) == null);
+            try std.testing.expectEqual(null, engine.getStorageInfo(999));
         }
 
         pub fn @"getWorkerInfo returns full worker state"() !void {
@@ -734,15 +734,15 @@ pub const Engine = zspec.describe("Engine", struct {
 
             // Before assignment
             const idle_info = engine.getWorkerInfo(10).?;
-            try std.testing.expect(idle_info.state == .Idle);
-            try std.testing.expect(idle_info.assigned_workstation == null);
-            try std.testing.expect(idle_info.has_dangling_task == false);
+            try std.testing.expectEqual(tasks.WorkerState.Idle, idle_info.state);
+            try std.testing.expectEqual(null, idle_info.assigned_workstation);
+            try std.testing.expectEqual(false, idle_info.has_dangling_task);
 
             // After assignment
             _ = engine.workerAvailable(10);
             const working_info = engine.getWorkerInfo(10).?;
-            try std.testing.expect(working_info.state == .Working);
-            try std.testing.expect(working_info.assigned_workstation.? == 100);
+            try std.testing.expectEqual(tasks.WorkerState.Working, working_info.state);
+            try std.testing.expectEqual(@as(u32, 100), working_info.assigned_workstation.?);
         }
 
         pub fn @"getWorkstationInfo returns full workstation state"() !void {
@@ -764,9 +764,9 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             const info = engine.getWorkstationInfo(100).?;
-            try std.testing.expect(info.status == .Queued);
-            try std.testing.expect(info.assigned_worker == null);
-            try std.testing.expect(info.priority == .Critical);
+            try std.testing.expectEqual(tasks.WorkstationStatus.Queued, info.status);
+            try std.testing.expectEqual(null, info.assigned_worker);
+            try std.testing.expectEqual(tasks.Priority.Critical, info.priority);
             try std.testing.expectEqual(@as(usize, 1), info.eis_count);
             try std.testing.expectEqual(@as(usize, 1), info.iis_count);
             try std.testing.expectEqual(@as(usize, 1), info.ios_count);
@@ -782,9 +782,9 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
             try engine.addStorage(2, .{ .role = .eis });
 
-            try std.testing.expect(engine.isStorageFull(1) == true);
-            try std.testing.expect(engine.isStorageFull(2) == false);
-            try std.testing.expect(engine.isStorageFull(999) == false); // unknown returns false
+            try std.testing.expectEqual(true, engine.isStorageFull(1));
+            try std.testing.expectEqual(false, engine.isStorageFull(2));
+            try std.testing.expectEqual(false, engine.isStorageFull(999)); // unknown returns false
         }
 
         pub fn @"getWorkerAssignment tracks assignment correctly"() !void {
@@ -807,13 +807,13 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addWorker(10);
 
             // Not assigned yet
-            try std.testing.expect(engine.getWorkerAssignment(10) == null);
+            try std.testing.expectEqual(null, engine.getWorkerAssignment(10));
 
             _ = engine.workerAvailable(10);
-            try std.testing.expect(engine.getWorkerAssignment(10).? == 100);
+            try std.testing.expectEqual(@as(u32, 100), engine.getWorkerAssignment(10).?);
 
             // Unknown worker
-            try std.testing.expect(engine.getWorkerAssignment(999) == null);
+            try std.testing.expectEqual(null, engine.getWorkerAssignment(999));
         }
 
         pub fn @"getCounts returns correct entity counts"() !void {
@@ -870,10 +870,10 @@ pub const Engine = zspec.describe("Engine", struct {
 
             const output = stream.getWritten();
             // Verify it contains key information
-            try std.testing.expect(std.mem.indexOf(u8, output, "Task Engine State") != null);
-            try std.testing.expect(std.mem.indexOf(u8, output, "Storages: 4") != null);
-            try std.testing.expect(std.mem.indexOf(u8, output, "Workers: 1") != null);
-            try std.testing.expect(std.mem.indexOf(u8, output, "Workstations: 1") != null);
+            try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Task Engine State"));
+            try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Storages: 4"));
+            try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Workers: 1"));
+            try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Workstations: 1"));
         }
 
         pub fn @"getWorkerInfo detects dangling task"() !void {
@@ -886,11 +886,11 @@ pub const Engine = zspec.describe("Engine", struct {
             _ = engine.workerAvailable(10);
 
             // Before dangling assignment
-            try std.testing.expect(engine.getWorkerInfo(10).?.has_dangling_task == false);
+            try std.testing.expectEqual(false, engine.getWorkerInfo(10).?.has_dangling_task);
 
             // Add dangling item — worker gets assigned
             try engine.addDanglingItem(50, .Flour);
-            try std.testing.expect(engine.getWorkerInfo(10).?.has_dangling_task == true);
+            try std.testing.expectEqual(true, engine.getWorkerInfo(10).?.has_dangling_task);
         }
 
         pub fn @"workstation info updates after cycle"() !void {
@@ -913,8 +913,8 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addWorker(10);
             _ = engine.workerAvailable(10);
 
-            try std.testing.expect(engine.getWorkstationInfo(100).?.status == .Active);
-            try std.testing.expect(engine.getWorkstationInfo(100).?.assigned_worker.? == 10);
+            try std.testing.expectEqual(tasks.WorkstationStatus.Active, engine.getWorkstationInfo(100).?.status);
+            try std.testing.expectEqual(@as(u32, 10), engine.getWorkstationInfo(100).?.assigned_worker.?);
 
             // Complete full cycle
             _ = engine.pickupCompleted(10);
