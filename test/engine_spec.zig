@@ -822,8 +822,8 @@ pub const Engine = zspec.describe("Engine", struct {
             defer engine.deinit();
 
             var counts = engine.getCounts();
-            try std.testing.expectEqual(@as(u32, 0), counts.storages);
-            try std.testing.expectEqual(@as(u32, 0), counts.workers);
+            try std.testing.expectEqual(@as(usize, 0), counts.storages);
+            try std.testing.expectEqual(@as(usize, 0), counts.workers);
 
             try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
             try engine.addStorage(2, .{ .role = .iis });
@@ -839,12 +839,12 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addWorker(20);
 
             counts = engine.getCounts();
-            try std.testing.expectEqual(@as(u32, 4), counts.storages);
-            try std.testing.expectEqual(@as(u32, 2), counts.workers);
-            try std.testing.expectEqual(@as(u32, 1), counts.workstations);
-            try std.testing.expectEqual(@as(u32, 0), counts.dangling_items);
-            try std.testing.expectEqual(@as(u32, 2), counts.idle_workers);
-            try std.testing.expectEqual(@as(u32, 1), counts.queued_workstations);
+            try std.testing.expectEqual(@as(usize, 4), counts.storages);
+            try std.testing.expectEqual(@as(usize, 2), counts.workers);
+            try std.testing.expectEqual(@as(usize, 1), counts.workstations);
+            try std.testing.expectEqual(@as(usize, 0), counts.dangling_items);
+            try std.testing.expectEqual(@as(usize, 2), counts.idle_workers);
+            try std.testing.expectEqual(@as(usize, 1), counts.queued_workstations);
         }
 
         pub fn @"dumpState writes diagnostic output"() !void {

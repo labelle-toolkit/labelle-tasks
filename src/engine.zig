@@ -530,23 +530,23 @@ pub fn Engine(
 
         /// Entity counts for quick overview
         pub const EngineCounts = struct {
-            storages: u32,
-            workers: u32,
-            workstations: u32,
-            dangling_items: u32,
-            idle_workers: u32,
-            queued_workstations: u32,
+            storages: usize,
+            workers: usize,
+            workstations: usize,
+            dangling_items: usize,
+            idle_workers: usize,
+            queued_workstations: usize,
         };
 
         /// Get entity counts for quick diagnostics
         pub fn getCounts(self: *const Self) EngineCounts {
             return .{
-                .storages = @intCast(self.storages.count()),
-                .workers = @intCast(self.workers.count()),
-                .workstations = @intCast(self.workstations.count()),
-                .dangling_items = @intCast(self.dangling_items.count()),
-                .idle_workers = @intCast(self.idle_workers_set.count()),
-                .queued_workstations = @intCast(self.queued_workstations_set.count()),
+                .storages = self.storages.count(),
+                .workers = self.workers.count(),
+                .workstations = self.workstations.count(),
+                .dangling_items = self.dangling_items.count(),
+                .idle_workers = self.idle_workers_set.count(),
+                .queued_workstations = self.queued_workstations_set.count(),
             };
         }
 
