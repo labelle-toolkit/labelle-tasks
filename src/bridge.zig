@@ -1,6 +1,7 @@
 //! ECS bridge vtable implementation for the task engine.
 //! Provides type-erased function implementations for the EcsInterface vtable.
 
+const std = @import("std");
 const state_mod = @import("state.zig");
 const ecs_bridge = @import("ecs_bridge.zig");
 
@@ -37,15 +38,26 @@ pub fn VTableBridge(
         }
 
         /// Remove a storage from the engine via the ECS bridge.
-        /// Note: callers of reevaluateAffectedWorkstations snapshot the
-        /// workstation list before iterating, so this is safe to call
-        /// reentrantly during evaluation.
+        /// Cleans up the storage from workstation references and the reverse index.
         fn removeStorage(ptr: *anyopaque, id: GameId) void {
             const self: *EngineType = @ptrCast(@alignCast(ptr));
             _ = self.storages.remove(id);
-            // Clean up reverse index entry for this storage
+            // Remove storage ID from workstation storage lists to prevent dangling references
             if (self.storage_to_workstations.fetchRemove(id)) |kv| {
                 var list = kv.value;
+                for (list.items) |ws_id| {
+                    if (self.workstations.getPtr(ws_id)) |ws| {
+                        const storage_lists = [_]*std.ArrayListUnmanaged(GameId){ &ws.eis, &ws.iis, &ws.ios, &ws.eos };
+                        for (storage_lists) |storage_list| {
+                            for (storage_list.items, 0..) |item, i| {
+                                if (item == id) {
+                                    _ = storage_list.swapRemove(i);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
                 list.deinit(self.allocator);
             }
         }

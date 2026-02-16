@@ -323,7 +323,11 @@ pub fn Engine(
                 // is freed by a reentrant removeStorage call during evaluation
                 var snapshot: std.ArrayListUnmanaged(GameId) = .{};
                 defer snapshot.deinit(self.allocator);
-                snapshot.appendSlice(self.allocator, ws_ids.items) catch return;
+                snapshot.appendSlice(self.allocator, ws_ids.items) catch {
+                    // On OOM, skip evaluation but still try to assign workers below
+                    self.tryAssignWorkers();
+                    return;
+                };
                 for (snapshot.items) |ws_id| {
                     self.evaluateWorkstationStatus(ws_id);
                 }
