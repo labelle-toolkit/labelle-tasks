@@ -90,9 +90,11 @@ Storages and workstations support priority levels: `.Low`, `.Normal`, `.High`, `
 ### Main Files
 
 - `src/root.zig` - Public API exports + `createEngineHooks`
-- `src/engine.zig` - Core Engine (storages, workers, workstations, dangling items)
+- `src/engine.zig` - Core Engine struct, registration API, `handle()`, query/introspection API, status tracking sets, reverse index
 - `src/handlers.zig` - Event handlers (game → engine), return `anyerror!void`
 - `src/helpers.zig` - Internal helpers (evaluation, assignment, priority-based selection)
+- `src/dangling.zig` - Dangling item management (evaluation, worker assignment, EIS lookup)
+- `src/bridge.zig` - ECS bridge vtable implementations (type-erased function wrappers)
 - `src/hooks.zig` - Hook payloads, dispatcher, `RecordingHooks` for testing
 - `src/state.zig` - Internal state structs (StorageState, WorkerData, WorkstationData)
 - `src/types.zig` - Core enums (WorkerState, WorkstationStatus, StepType, Priority)
