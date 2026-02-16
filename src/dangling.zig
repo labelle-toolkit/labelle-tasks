@@ -61,7 +61,7 @@ pub fn DanglingManager(
 
         /// Get list of idle workers (allocated, caller must free)
         pub fn getIdleWorkers(engine: *EngineType) ![]GameId {
-            var list = std.ArrayListUnmanaged(GameId){};
+            var list: std.ArrayListUnmanaged(GameId) = .{};
             errdefer list.deinit(engine.allocator);
 
             var iter = engine.workers.iterator();
@@ -73,7 +73,9 @@ pub fn DanglingManager(
             return list.toOwnedSlice(engine.allocator);
         }
 
-        /// Evaluate dangling items and try to assign workers
+        /// Evaluate dangling items and try to assign workers.
+        /// Snapshots both idle workers and dangling items before iterating
+        /// to avoid iterator invalidation from reentrant hook dispatch.
         pub fn evaluateDanglingItems(engine: *EngineType) void {
             if (engine.idle_workers_set.count() == 0) return;
 
@@ -87,30 +89,43 @@ pub fn DanglingManager(
             }
             if (idle_buf.items.len == 0) return;
 
+            // Snapshot dangling items to avoid iterator invalidation if hooks
+            // modify dangling_items during dispatch (e.g., addDanglingItem/removeDanglingItem)
+            const DanglingEntry = struct { id: GameId, item_type: Item };
+            var dangling_snapshot: std.ArrayListUnmanaged(DanglingEntry) = .{};
+            defer dangling_snapshot.deinit(engine.allocator);
+            dangling_snapshot.ensureTotalCapacity(engine.allocator, engine.dangling_items.count()) catch return;
+            var snap_iter = engine.dangling_items.iterator();
+            while (snap_iter.next()) |entry| {
+                dangling_snapshot.appendAssumeCapacity(.{ .id = entry.key_ptr.*, .item_type = entry.value_ptr.* });
+            }
+
             log.debug("evaluateDanglingItems: {d} idle workers, {d} dangling items", .{
                 idle_buf.items.len,
-                engine.dangling_items.count(),
+                dangling_snapshot.items.len,
             });
 
             var assigned_items = std.AutoHashMap(GameId, GameId).init(engine.allocator);
             defer assigned_items.deinit();
+            // Track EIS with pending deliveries to prevent assigning multiple items to same EIS
             var reserved_eis = std.AutoHashMap(GameId, void).init(engine.allocator);
             defer reserved_eis.deinit();
             var worker_iter = engine.workers.iterator();
             while (worker_iter.next()) |worker_entry| {
                 if (worker_entry.value_ptr.dangling_task) |task| {
-                    assigned_items.put(task.item_id, worker_entry.key_ptr.*) catch continue;
-                    reserved_eis.put(task.target_eis_id, {}) catch continue;
+                    assigned_items.put(task.item_id, worker_entry.key_ptr.*) catch return;
+                    reserved_eis.put(task.target_eis_id, {}) catch return;
                 }
             }
 
+            // Track workers assigned during this evaluation to prevent double-assignment
             var assigned_workers = std.AutoHashMap(GameId, void).init(engine.allocator);
             defer assigned_workers.deinit();
 
-            var dangling_iter = engine.dangling_items.iterator();
-            while (dangling_iter.next()) |entry| {
-                const item_id = entry.key_ptr.*;
-                const item_type = entry.value_ptr.*;
+            // For each dangling item, try to find a worker and EIS
+            for (dangling_snapshot.items) |dangling_entry| {
+                const item_id = dangling_entry.id;
+                const item_type = dangling_entry.item_type;
 
                 if (assigned_items.get(item_id)) |assigned_worker_id| {
                     log.debug("evaluateDanglingItems: item {d} already assigned to worker {d}, skipping", .{
@@ -144,9 +159,10 @@ pub fn DanglingManager(
                         .target_eis_id = target_eis,
                     };
 
-                    assigned_workers.put(worker_id, {}) catch continue;
-                    assigned_items.put(item_id, worker_id) catch continue;
-                    reserved_eis.put(target_eis, {}) catch continue;
+                    // Track assignments; abort on OOM to prevent inconsistent state
+                    assigned_workers.put(worker_id, {}) catch return;
+                    assigned_items.put(item_id, worker_id) catch return;
+                    reserved_eis.put(target_eis, {}) catch return;
 
                     engine.dispatcher.dispatch(.{ .pickup_dangling_started = .{
                         .worker_id = worker_id,

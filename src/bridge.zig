@@ -36,6 +36,10 @@ pub fn VTableBridge(
             });
         }
 
+        /// Remove a storage from the engine via the ECS bridge.
+        /// Note: callers of reevaluateAffectedWorkstations snapshot the
+        /// workstation list before iterating, so this is safe to call
+        /// reentrantly during evaluation.
         fn removeStorage(ptr: *anyopaque, id: GameId) void {
             const self: *EngineType = @ptrCast(@alignCast(ptr));
             _ = self.storages.remove(id);

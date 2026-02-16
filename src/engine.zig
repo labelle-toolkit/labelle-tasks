@@ -88,6 +88,7 @@ pub fn Engine(
         }
 
         pub fn deinit(self: *Self) void {
+            // Free workstation storage lists
             var ws_iter = self.workstations.valueIterator();
             while (ws_iter.next()) |ws| {
                 ws.deinit(self.allocator);
@@ -98,6 +99,7 @@ pub fn Engine(
             self.dangling_items.deinit();
             self.idle_workers_set.deinit();
             self.queued_workstations_set.deinit();
+            // Free reverse index lists
             var ri_iter = self.storage_to_workstations.valueIterator();
             while (ri_iter.next()) |list| {
                 list.deinit(self.allocator);
@@ -114,12 +116,13 @@ pub fn Engine(
         // Registration API
         // ============================================
 
+        // Re-export StorageRole for convenience
         pub const StorageRole = state_mod.StorageRole;
 
         /// Storage configuration for registration
         pub const StorageConfig = struct {
             role: StorageRole = .eis,
-            accepts: ?Item = null,
+            accepts: ?Item = null, // null = accepts any item type
             initial_item: ?Item = null,
             priority: Priority = .Normal,
         };
@@ -217,6 +220,8 @@ pub fn Engine(
         }
 
         /// Attach a storage to a workstation dynamically.
+        /// This allows storages to register themselves with their parent workstation
+        /// using the parent reference convention (RFC #169).
         pub fn attachStorageToWorkstation(self: *Self, storage_id: GameId, workstation_id: GameId, role: StorageRole) !void {
             const ws = self.workstations.getPtr(workstation_id) orelse {
                 std.log.warn("[tasks] attachStorageToWorkstation: workstation {d} not found", .{workstation_id});
@@ -309,9 +314,17 @@ pub fn Engine(
         }
 
         /// Re-evaluate only workstations affected by a specific storage change.
+        /// Uses the reverse index instead of scanning all workstations.
+        /// Snapshots IDs before iterating to avoid use-after-free if hooks
+        /// modify storage_to_workstations during evaluation.
         pub fn reevaluateAffectedWorkstations(self: *Self, storage_id: GameId) void {
             if (self.storage_to_workstations.get(storage_id)) |ws_ids| {
-                for (ws_ids.items) |ws_id| {
+                // Snapshot workstation IDs to avoid dangling pointer if the list
+                // is freed by a reentrant removeStorage call during evaluation
+                var snapshot: std.ArrayListUnmanaged(GameId) = .{};
+                defer snapshot.deinit(self.allocator);
+                snapshot.appendSlice(self.allocator, ws_ids.items) catch return;
+                for (snapshot.items) |ws_id| {
                     self.evaluateWorkstationStatus(ws_id);
                 }
             }
@@ -372,11 +385,13 @@ pub fn Engine(
         // Status tracking set operations
         // ============================================
 
+        /// Mark a worker as idle in the tracking set
         pub fn markWorkerIdle(self: *Self, worker_id: GameId) void {
             self.idle_workers_set.put(worker_id, {}) catch
                 @panic("markWorkerIdle: allocation failed, engine state is inconsistent");
         }
 
+        /// Mark a worker as non-idle in the tracking set
         pub fn markWorkerBusy(self: *Self, worker_id: GameId) void {
             _ = self.idle_workers_set.remove(worker_id);
         }
@@ -433,6 +448,7 @@ pub fn Engine(
         // Distance API
         // ============================================
 
+        /// Get distance between two entities. Returns 1.0 if no distance_fn is set.
         pub fn getDistance(self: *const Self, from: GameId, to: GameId) ?f32 {
             if (self.distance_fn) |df| {
                 return df(from, to);
@@ -440,6 +456,7 @@ pub fn Engine(
             return 1.0;
         }
 
+        /// Find nearest candidate to target. Returns null if candidates is empty.
         pub fn findNearest(self: *const Self, target: GameId, candidates: []const GameId) ?GameId {
             if (candidates.len == 0) return null;
 
@@ -496,6 +513,8 @@ pub fn Engine(
         const ecs_bridge = @import("ecs_bridge.zig");
         pub const EcsInterface = ecs_bridge.EcsInterface(GameId, Item);
 
+        /// Get the ECS bridge interface for this engine.
+        /// Used by games to connect tasks components to the engine.
         pub fn interface(self: *Self) EcsInterface {
             return .{
                 .ptr = self,
