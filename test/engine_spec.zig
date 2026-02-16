@@ -614,13 +614,13 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
             try std.testing.expectEqual(@as(u32, 1), assign_count);
 
             // Redundant call — should be ignored since worker is already working
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
             try std.testing.expectEqual(@as(u32, 1), assign_count); // no second assignment
@@ -644,14 +644,14 @@ pub const Engine = zspec.describe("Engine", struct {
             defer engine.deinit();
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // Manually set worker to Working but with no assigned workstation
             // This simulates the reentrancy scenario from handlers.zig:425
             engine.workers.getPtr(10).?.state = .Working;
             engine.markWorkerBusy(10);
 
-            _ = engine.storeCompleted(10);
+            try std.testing.expect(engine.storeCompleted(10) == false);
 
             // Worker should recover to idle
             try std.testing.expect(engine.getWorkerState(10).? == .Idle);
@@ -691,9 +691,9 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addWorker(10);
             try engine.addWorker(20);
             try engine.addWorker(30);
-            _ = engine.workerAvailable(10);
-            _ = engine.workerAvailable(20);
-            _ = engine.workerAvailable(30);
+            try std.testing.expect(engine.workerAvailable(10));
+            try std.testing.expect(engine.workerAvailable(20));
+            try std.testing.expect(engine.workerAvailable(30));
 
             // Only one should be assigned
             try std.testing.expectEqual(@as(u32, 1), assign_count);
@@ -741,30 +741,26 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // Complete first cycle
-            _ = engine.pickupCompleted(10);
-            _ = engine.workCompleted(100);
-            _ = engine.storeCompleted(10);
+            try std.testing.expect(engine.pickupCompleted(10));
+            try std.testing.expect(engine.workCompleted(100));
+            try std.testing.expect(engine.storeCompleted(10));
 
-            // After first cycle completes, worker should immediately start second cycle
-            // (EIS 5 still has an item, EOS 4 is full but... actually need another EOS)
-            // Worker should be released since EOS is full
+            // After first cycle, EOS 4 is full so workstation can't restart — worker released
             try std.testing.expect(engine.getWorkerState(10).? == .Idle);
 
-            // Now clear EOS and add another item to EIS 1
-            _ = engine.itemRemoved(4);
-            _ = engine.itemAdded(1, .Flour);
-
-            // Clear events
+            // Clear events before triggering re-evaluation
             engine.dispatcher.hooks.clear();
 
-            // Make worker available again
-            _ = engine.workerAvailable(10);
+            // Clearing EOS triggers reevaluateAffectedWorkstations which immediately
+            // assigns the idle worker since EIS 5 still has an item
+            try std.testing.expect(engine.itemRemoved(4));
 
-            // Should immediately get assigned and start pickup
+            // Worker should already be assigned via reevaluation during itemRemoved
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
+            _ = try engine.dispatcher.hooks.expectNext(.workstation_queued);
             _ = try engine.dispatcher.hooks.expectNext(.worker_assigned);
             _ = try engine.dispatcher.hooks.expectNext(.workstation_activated);
             _ = try engine.dispatcher.hooks.expectNext(.pickup_started);
@@ -802,16 +798,16 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // Complete first cycle
-            _ = engine.pickupCompleted(10);
-            _ = engine.workCompleted(100);
+            try std.testing.expect(engine.pickupCompleted(10));
+            try std.testing.expect(engine.workCompleted(100));
 
             // Before store completes, add item back to EIS so next cycle is possible
-            _ = engine.itemAdded(1, .Flour);
+            try std.testing.expect(engine.itemAdded(1, .Flour));
 
-            _ = engine.storeCompleted(10);
+            try std.testing.expect(engine.storeCompleted(10));
 
             try std.testing.expectEqual(@as(u32, 1), cycle_count);
             // Worker should stay working (immediate restart)
@@ -877,13 +873,13 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
             try std.testing.expect(engine.getWorkstationStatus(100).? == .Active);
 
             // Remove workstation while worker is active
-            _ = engine.handle(.{ .workstation_removed = .{ .workstation_id = 100 } });
+            try std.testing.expect(engine.handle(.{ .workstation_removed = .{ .workstation_id = 100 } }));
 
             try std.testing.expect(engine.getWorkerState(10).? == .Idle);
             try std.testing.expect(engine.getWorkstationStatus(100) == null); // gone
@@ -909,7 +905,7 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // Add dangling item — worker dispatched to pick it up
             try engine.addDanglingItem(50, .Flour);
@@ -919,8 +915,7 @@ pub const Engine = zspec.describe("Engine", struct {
             engine.removeDanglingItem(50);
 
             // pickup_completed should handle the missing item and recover
-            const result = engine.pickupCompleted(10);
-            try std.testing.expect(result == false); // error returned
+            try std.testing.expect(engine.pickupCompleted(10) == false); // error returned
 
             // Worker should recover to idle
             try std.testing.expect(engine.getWorkerState(10).? == .Idle);
@@ -945,20 +940,19 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             try engine.addDanglingItem(50, .Flour);
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
 
             // Complete pickup
-            _ = engine.pickupCompleted(10);
+            try std.testing.expect(engine.pickupCompleted(10));
 
             // Now remove the dangling item before store completes
             engine.removeDanglingItem(50);
 
             // store_completed should recover
-            const result = engine.storeCompleted(10);
-            try std.testing.expect(result == false);
+            try std.testing.expect(engine.storeCompleted(10) == false);
 
             // Worker should recover to idle
             try std.testing.expect(engine.getWorkerState(10).? == .Idle);
@@ -987,8 +981,8 @@ pub const Engine = zspec.describe("Engine", struct {
             // Two workers, two dangling items
             try engine.addWorker(10);
             try engine.addWorker(20);
-            _ = engine.workerAvailable(10);
-            _ = engine.workerAvailable(20);
+            try std.testing.expect(engine.workerAvailable(10));
+            try std.testing.expect(engine.workerAvailable(20));
 
             try engine.addDanglingItem(50, .Flour);
             try engine.addDanglingItem(51, .Flour);
@@ -1018,15 +1012,15 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // First pickup — fills IIS 2, but IIS 6 still empty → needs another pickup
-            _ = engine.pickupCompleted(10);
+            try std.testing.expect(engine.pickupCompleted(10));
             try std.testing.expect(engine.getStorageHasItem(2).? == true);
             try std.testing.expect(engine.getStorageHasItem(6).? == false);
 
             // Second pickup — fills IIS 6, both IIS full → process starts
-            _ = engine.pickupCompleted(10);
+            try std.testing.expect(engine.pickupCompleted(10));
             try std.testing.expect(engine.getStorageHasItem(2).? == true);
             try std.testing.expect(engine.getStorageHasItem(6).? == true);
         }
@@ -1061,16 +1055,16 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
             try std.testing.expectEqual(@as(u32, 1), assign_count);
 
             // Worker goes unavailable (eating/sleeping)
-            _ = engine.handle(.{ .worker_unavailable = .{ .worker_id = 10 } });
+            try std.testing.expect(engine.handle(.{ .worker_unavailable = .{ .worker_id = 10 } }));
             try std.testing.expect(engine.getWorkerState(10).? == .Unavailable);
             try std.testing.expect(engine.getWorkstationStatus(100).? == .Queued);
 
             // Worker comes back
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
             try std.testing.expectEqual(@as(u32, 2), assign_count);
         }
@@ -1106,19 +1100,19 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // Work completed fills both IOS
-            _ = engine.workCompleted(100);
+            try std.testing.expect(engine.workCompleted(100));
             try std.testing.expect(engine.getStorageHasItem(3).? == true);
             try std.testing.expect(engine.getStorageHasItem(7).? == true);
 
             // First store — moves one IOS to EOS
-            _ = engine.storeCompleted(10);
+            try std.testing.expect(engine.storeCompleted(10));
             try std.testing.expectEqual(@as(u32, 0), cycle_count); // not done yet
 
             // Second store — moves remaining IOS to EOS, cycle completes
-            _ = engine.storeCompleted(10);
+            try std.testing.expect(engine.storeCompleted(10));
             try std.testing.expectEqual(@as(u32, 1), cycle_count);
         }
 
@@ -1130,7 +1124,7 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
             try std.testing.expect(engine.getStorageHasItem(1).? == true);
 
-            _ = engine.handle(.{ .storage_cleared = .{ .storage_id = 1 } });
+            try std.testing.expect(engine.handle(.{ .storage_cleared = .{ .storage_id = 1 } }));
 
             // Storage should be completely gone
             try std.testing.expect(engine.getStorageHasItem(1) == null);
@@ -1143,13 +1137,13 @@ pub const Engine = zspec.describe("Engine", struct {
 
             try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             try engine.addDanglingItem(50, .Flour);
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
 
             // Remove worker while delivering
-            _ = engine.handle(.{ .worker_removed = .{ .worker_id = 10 } });
+            try std.testing.expect(engine.handle(.{ .worker_removed = .{ .worker_id = 10 } }));
             try std.testing.expect(engine.getWorkerState(10) == null); // gone
 
             // Dangling item is still tracked (no worker to deliver it)
@@ -1186,19 +1180,19 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // First cycle
-            _ = engine.workCompleted(100);
-            _ = engine.storeCompleted(10);
+            try std.testing.expect(engine.workCompleted(100));
+            try std.testing.expect(engine.storeCompleted(10));
             try std.testing.expectEqual(@as(u32, 1), cycle_count);
 
             // Worker should immediately start second cycle (EOS 8 still empty)
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
 
             // Second cycle
-            _ = engine.workCompleted(100);
-            _ = engine.storeCompleted(10);
+            try std.testing.expect(engine.workCompleted(100));
+            try std.testing.expect(engine.storeCompleted(10));
             try std.testing.expectEqual(@as(u32, 2), cycle_count);
 
             // No more EOS space — worker should be released
@@ -1223,10 +1217,10 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // Complete pickup → now in Process step
-            _ = engine.pickupCompleted(10);
+            try std.testing.expect(engine.pickupCompleted(10));
 
             // Calling pickup_completed again on a worker not in the pickup step should fail
             try std.testing.expect(engine.handle(.{ .pickup_completed = .{ .worker_id = 10 } }) == false);
@@ -1250,7 +1244,7 @@ pub const Engine = zspec.describe("Engine", struct {
             });
 
             try engine.addWorker(10);
-            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.workerAvailable(10));
 
             // Workstation is in Pickup step, not Process
             try std.testing.expect(engine.handle(.{ .work_completed = .{ .workstation_id = 100 } }) == false);
