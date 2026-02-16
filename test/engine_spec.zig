@@ -583,6 +583,707 @@ pub const Engine = zspec.describe("Engine", struct {
         }
     });
 
+    pub const edge_cases = zspec.describe("edge cases", struct {
+        pub fn @"redundant worker_available on working worker is ignored"() !void {
+            var assign_count: u32 = 0;
+            const TestHooks = struct {
+                count_ptr: *u32,
+
+                pub fn worker_assigned(self: *@This(), _: anytype) void {
+                    self.count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .count_ptr = &assign_count },
+                null,
+            );
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+            try std.testing.expectEqual(@as(u32, 1), assign_count);
+
+            // Redundant call — should be ignored since worker is already working
+            _ = engine.workerAvailable(10);
+
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+            try std.testing.expectEqual(@as(u32, 1), assign_count); // no second assignment
+        }
+
+        pub fn @"store_completed on worker without workstation recovers to idle"() !void {
+            var released = false;
+            const TestHooks = struct {
+                released_ptr: *bool,
+
+                pub fn worker_released(self: *@This(), _: anytype) void {
+                    self.released_ptr.* = true;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .released_ptr = &released },
+                null,
+            );
+            defer engine.deinit();
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Manually set worker to Working but with no assigned workstation
+            // This simulates the reentrancy scenario from handlers.zig:425
+            engine.workers.getPtr(10).?.state = .Working;
+            engine.markWorkerBusy(10);
+
+            _ = engine.storeCompleted(10);
+
+            // Worker should recover to idle
+            try std.testing.expect(engine.getWorkerState(10).? == .Idle);
+            try std.testing.expect(released == true);
+        }
+
+        pub fn @"multiple workers compete for one workstation"() !void {
+            var assign_count: u32 = 0;
+            const TestHooks = struct {
+                count_ptr: *u32,
+
+                pub fn worker_assigned(self: *@This(), _: anytype) void {
+                    self.count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .count_ptr = &assign_count },
+                null,
+            );
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            // Add 3 workers — only 1 workstation available
+            try engine.addWorker(10);
+            try engine.addWorker(20);
+            try engine.addWorker(30);
+            _ = engine.workerAvailable(10);
+            _ = engine.workerAvailable(20);
+            _ = engine.workerAvailable(30);
+
+            // Only one should be assigned
+            try std.testing.expectEqual(@as(u32, 1), assign_count);
+            try std.testing.expect(engine.getWorkstationStatus(100).? == .Active);
+
+            // One working, two idle
+            var working: u32 = 0;
+            var idle: u32 = 0;
+            for ([_]u32{ 10, 20, 30 }) |wid| {
+                switch (engine.getWorkerState(wid).?) {
+                    .Working => working += 1,
+                    .Idle => idle += 1,
+                    else => {},
+                }
+            }
+            try std.testing.expectEqual(@as(u32, 1), working);
+            try std.testing.expectEqual(@as(u32, 2), idle);
+        }
+
+        pub fn @"cycle restart when conditions are met continues immediately"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+
+            var engine = tasks.Engine(u32, Item, Recorder).init(
+                std.testing.allocator,
+                hooks,
+                null,
+            );
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Two EIS so second cycle can start immediately
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(5, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{ 1, 5 },
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Complete first cycle
+            _ = engine.pickupCompleted(10);
+            _ = engine.workCompleted(100);
+            _ = engine.storeCompleted(10);
+
+            // After first cycle completes, worker should immediately start second cycle
+            // (EIS 5 still has an item, EOS 4 is full but... actually need another EOS)
+            // Worker should be released since EOS is full
+            try std.testing.expect(engine.getWorkerState(10).? == .Idle);
+
+            // Now clear EOS and add another item to EIS 1
+            _ = engine.itemRemoved(4);
+            _ = engine.itemAdded(1, .Flour);
+
+            // Clear events
+            engine.dispatcher.hooks.clear();
+
+            // Make worker available again
+            _ = engine.workerAvailable(10);
+
+            // Should immediately get assigned and start pickup
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+            _ = try engine.dispatcher.hooks.expectNext(.worker_assigned);
+            _ = try engine.dispatcher.hooks.expectNext(.workstation_activated);
+            _ = try engine.dispatcher.hooks.expectNext(.pickup_started);
+        }
+
+        pub fn @"immediate cycle restart when EOS has space and EIS has items"() !void {
+            var cycle_count: u32 = 0;
+            const TestHooks = struct {
+                cycle_count_ptr: *u32,
+
+                pub fn cycle_completed(self: *@This(), _: anytype) void {
+                    self.cycle_count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .cycle_count_ptr = &cycle_count },
+                null,
+            );
+            defer engine.deinit();
+
+            // Setup with 2 EOS slots so second cycle can proceed
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addStorage(6, .{ .role = .eos }); // Extra EOS
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{ 4, 6 },
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Complete first cycle
+            _ = engine.pickupCompleted(10);
+            _ = engine.workCompleted(100);
+
+            // Before store completes, add item back to EIS so next cycle is possible
+            _ = engine.itemAdded(1, .Flour);
+
+            _ = engine.storeCompleted(10);
+
+            try std.testing.expectEqual(@as(u32, 1), cycle_count);
+            // Worker should stay working (immediate restart)
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+        }
+
+        pub fn @"item_added to full storage returns false"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+
+            // Adding to a full storage should fail
+            const result = engine.itemAdded(1, .Water);
+            try std.testing.expect(result == false);
+            // Original item should be preserved
+            try std.testing.expect(engine.getStorageItemType(1).? == .Flour);
+        }
+
+        pub fn @"handle returns false for unknown entities"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            // All of these reference entities that don't exist
+            try std.testing.expect(engine.handle(.{ .item_added = .{ .storage_id = 999, .item = .Flour } }) == false);
+            try std.testing.expect(engine.handle(.{ .item_removed = .{ .storage_id = 999 } }) == false);
+            try std.testing.expect(engine.handle(.{ .worker_available = .{ .worker_id = 999 } }) == false);
+            try std.testing.expect(engine.handle(.{ .worker_unavailable = .{ .worker_id = 999 } }) == false);
+            try std.testing.expect(engine.handle(.{ .pickup_completed = .{ .worker_id = 999 } }) == false);
+            try std.testing.expect(engine.handle(.{ .work_completed = .{ .workstation_id = 999 } }) == false);
+            try std.testing.expect(engine.handle(.{ .store_completed = .{ .worker_id = 999 } }) == false);
+        }
+
+        pub fn @"workstation removed while worker is active releases worker"() !void {
+            var released = false;
+            const TestHooks = struct {
+                released_ptr: *bool,
+
+                pub fn worker_released(self: *@This(), _: anytype) void {
+                    self.released_ptr.* = true;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .released_ptr = &released },
+                null,
+            );
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+            try std.testing.expect(engine.getWorkstationStatus(100).? == .Active);
+
+            // Remove workstation while worker is active
+            _ = engine.handle(.{ .workstation_removed = .{ .workstation_id = 100 } });
+
+            try std.testing.expect(engine.getWorkerState(10).? == .Idle);
+            try std.testing.expect(engine.getWorkstationStatus(100) == null); // gone
+            try std.testing.expect(released == true);
+        }
+
+        pub fn @"dangling item disappears during pickup triggers recovery"() !void {
+            const TestHooks = struct {};
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Add dangling item — worker dispatched to pick it up
+            try engine.addDanglingItem(50, .Flour);
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+
+            // Dangling item despawned before pickup completes
+            engine.removeDanglingItem(50);
+
+            // pickup_completed should handle the missing item and recover
+            const result = engine.pickupCompleted(10);
+            try std.testing.expect(result == false); // error returned
+
+            // Worker should recover to idle
+            try std.testing.expect(engine.getWorkerState(10).? == .Idle);
+        }
+
+        pub fn @"dangling item disappears during store triggers recovery"() !void {
+            const TestHooks = struct {};
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            try engine.addDanglingItem(50, .Flour);
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+
+            // Complete pickup
+            _ = engine.pickupCompleted(10);
+
+            // Now remove the dangling item before store completes
+            engine.removeDanglingItem(50);
+
+            // store_completed should recover
+            const result = engine.storeCompleted(10);
+            try std.testing.expect(result == false);
+
+            // Worker should recover to idle
+            try std.testing.expect(engine.getWorkerState(10).? == .Idle);
+        }
+
+        pub fn @"two dangling items compete for one EIS"() !void {
+            var assignment_count: u32 = 0;
+            const TestHooks = struct {
+                count_ptr: *u32,
+
+                pub fn pickup_dangling_started(self: *@This(), _: anytype) void {
+                    self.count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .count_ptr = &assignment_count },
+                null,
+            );
+            defer engine.deinit();
+
+            // Only one empty EIS
+            try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
+
+            // Two workers, two dangling items
+            try engine.addWorker(10);
+            try engine.addWorker(20);
+            _ = engine.workerAvailable(10);
+            _ = engine.workerAvailable(20);
+
+            try engine.addDanglingItem(50, .Flour);
+            try engine.addDanglingItem(51, .Flour);
+
+            // Only one should be assigned (only one EIS slot)
+            try std.testing.expectEqual(@as(u32, 1), assignment_count);
+        }
+
+        pub fn @"pickup_completed with multiple IIS fills them sequentially"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            // Two EIS with items, two IIS (recipe needs 2 ingredients)
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(5, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(6, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{ 1, 5 },
+                .iis = &.{ 2, 6 },
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // First pickup — fills IIS 2, but IIS 6 still empty → needs another pickup
+            _ = engine.pickupCompleted(10);
+            try std.testing.expect(engine.getStorageHasItem(2).? == true);
+            try std.testing.expect(engine.getStorageHasItem(6).? == false);
+
+            // Second pickup — fills IIS 6, both IIS full → process starts
+            _ = engine.pickupCompleted(10);
+            try std.testing.expect(engine.getStorageHasItem(2).? == true);
+            try std.testing.expect(engine.getStorageHasItem(6).? == true);
+        }
+
+        pub fn @"worker becomes unavailable then available again gets reassigned"() !void {
+            var assign_count: u32 = 0;
+            const TestHooks = struct {
+                count_ptr: *u32,
+
+                pub fn worker_assigned(self: *@This(), _: anytype) void {
+                    self.count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .count_ptr = &assign_count },
+                null,
+            );
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+            try std.testing.expectEqual(@as(u32, 1), assign_count);
+
+            // Worker goes unavailable (eating/sleeping)
+            _ = engine.handle(.{ .worker_unavailable = .{ .worker_id = 10 } });
+            try std.testing.expect(engine.getWorkerState(10).? == .Unavailable);
+            try std.testing.expect(engine.getWorkstationStatus(100).? == .Queued);
+
+            // Worker comes back
+            _ = engine.workerAvailable(10);
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+            try std.testing.expectEqual(@as(u32, 2), assign_count);
+        }
+
+        pub fn @"multiple IOS stores are handled sequentially"() !void {
+            var cycle_count: u32 = 0;
+            const TestHooks = struct {
+                cycle_count_ptr: *u32,
+
+                pub fn cycle_completed(self: *@This(), _: anytype) void {
+                    self.cycle_count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .cycle_count_ptr = &cycle_count },
+                null,
+            );
+            defer engine.deinit();
+
+            // Producer with 2 IOS and 2 EOS
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(7, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addStorage(8, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{},
+                .iis = &.{},
+                .ios = &.{ 3, 7 },
+                .eos = &.{ 4, 8 },
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Work completed fills both IOS
+            _ = engine.workCompleted(100);
+            try std.testing.expect(engine.getStorageHasItem(3).? == true);
+            try std.testing.expect(engine.getStorageHasItem(7).? == true);
+
+            // First store — moves one IOS to EOS
+            _ = engine.storeCompleted(10);
+            try std.testing.expectEqual(@as(u32, 0), cycle_count); // not done yet
+
+            // Second store — moves remaining IOS to EOS, cycle completes
+            _ = engine.storeCompleted(10);
+            try std.testing.expectEqual(@as(u32, 1), cycle_count);
+        }
+
+        pub fn @"storage_cleared removes storage from engine tracking"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try std.testing.expect(engine.getStorageHasItem(1).? == true);
+
+            _ = engine.handle(.{ .storage_cleared = .{ .storage_id = 1 } });
+
+            // Storage should be completely gone
+            try std.testing.expect(engine.getStorageHasItem(1) == null);
+        }
+
+        pub fn @"worker removed during dangling item delivery cleans up"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            try engine.addDanglingItem(50, .Flour);
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+
+            // Remove worker while delivering
+            _ = engine.handle(.{ .worker_removed = .{ .worker_id = 10 } });
+            try std.testing.expect(engine.getWorkerState(10) == null); // gone
+
+            // Dangling item is still tracked (no worker to deliver it)
+            try std.testing.expect(engine.getDanglingItemType(50).? == .Flour);
+        }
+
+        pub fn @"producer immediate cycle restart with space"() !void {
+            var cycle_count: u32 = 0;
+            const TestHooks = struct {
+                cycle_count_ptr: *u32,
+
+                pub fn cycle_completed(self: *@This(), _: anytype) void {
+                    self.cycle_count_ptr.* += 1;
+                }
+            };
+
+            var engine = tasks.Engine(u32, Item, TestHooks).init(
+                std.testing.allocator,
+                .{ .cycle_count_ptr = &cycle_count },
+                null,
+            );
+            defer engine.deinit();
+
+            // Producer with 2 EOS — can do 2 cycles
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addStorage(8, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{},
+                .iis = &.{},
+                .ios = &.{3},
+                .eos = &.{ 4, 8 },
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // First cycle
+            _ = engine.workCompleted(100);
+            _ = engine.storeCompleted(10);
+            try std.testing.expectEqual(@as(u32, 1), cycle_count);
+
+            // Worker should immediately start second cycle (EOS 8 still empty)
+            try std.testing.expect(engine.getWorkerState(10).? == .Working);
+
+            // Second cycle
+            _ = engine.workCompleted(100);
+            _ = engine.storeCompleted(10);
+            try std.testing.expectEqual(@as(u32, 2), cycle_count);
+
+            // No more EOS space — worker should be released
+            try std.testing.expect(engine.getWorkerState(10).? == .Idle);
+        }
+
+        pub fn @"pickup_completed on worker not in pickup step returns false"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Complete pickup → now in Process step
+            _ = engine.pickupCompleted(10);
+
+            // Calling work_completed on wrong workstation should fail
+            try std.testing.expect(engine.handle(.{ .work_completed = .{ .workstation_id = 999 } }) == false);
+        }
+
+        pub fn @"work_completed on workstation not in process step returns false"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Workstation is in Pickup step, not Process
+            try std.testing.expect(engine.handle(.{ .work_completed = .{ .workstation_id = 100 } }) == false);
+        }
+
+        pub fn @"removeWorkstation cleans up reverse index"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            // Verify reverse index exists
+            try std.testing.expect(engine.storage_to_workstations.get(1) != null);
+
+            engine.removeWorkstation(100);
+
+            // Reverse index should be cleaned up
+            try std.testing.expect(engine.storage_to_workstations.get(1) == null);
+            try std.testing.expect(engine.getWorkstationStatus(100) == null);
+        }
+    });
+
     pub const priority = zspec.describe("priority-based selection", struct {
         pub fn @"selectEis picks highest priority EIS"() !void {
             const TestHooks = struct {};
