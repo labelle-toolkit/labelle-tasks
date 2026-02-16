@@ -152,17 +152,18 @@ pub fn DanglingManager(
                         item_id,
                     });
 
+                    // Track assignments first; abort on OOM before mutating worker
+                    // state to prevent permanently stuck workers
+                    assigned_workers.put(worker_id, {}) catch return;
+                    assigned_items.put(item_id, worker_id) catch return;
+                    reserved_eis.put(target_eis, {}) catch return;
+
                     worker.state = .Working;
                     engine.markWorkerBusy(worker_id);
                     worker.dangling_task = .{
                         .item_id = item_id,
                         .target_eis_id = target_eis,
                     };
-
-                    // Track assignments; abort on OOM to prevent inconsistent state
-                    assigned_workers.put(worker_id, {}) catch return;
-                    assigned_items.put(item_id, worker_id) catch return;
-                    reserved_eis.put(target_eis, {}) catch return;
 
                     engine.dispatcher.dispatch(.{ .pickup_dangling_started = .{
                         .worker_id = worker_id,

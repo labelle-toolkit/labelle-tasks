@@ -456,7 +456,7 @@ pub fn Engine(
             return 1.0;
         }
 
-        /// Find nearest candidate to target. Returns null if candidates is empty.
+        /// Find nearest candidate to target. Returns null if candidates is empty or all candidates are unreachable.
         pub fn findNearest(self: *const Self, target: GameId, candidates: []const GameId) ?GameId {
             if (candidates.len == 0) return null;
 
@@ -478,30 +478,37 @@ pub fn Engine(
         // Dangling Items API (delegated to dangling.zig)
         // ============================================
 
+        /// Register a dangling item (item not in any storage) and try to assign a worker.
         pub fn addDanglingItem(self: *Self, item_id: GameId, item_type: Item) !void {
             return DanglingMgr.addDanglingItem(self, item_id, item_type);
         }
 
+        /// Remove a dangling item (picked up or despawned).
         pub fn removeDanglingItem(self: *Self, item_id: GameId) void {
             DanglingMgr.removeDanglingItem(self, item_id);
         }
 
+        /// Get the item type of a dangling item, or null if not found.
         pub fn getDanglingItemType(self: *const Self, item_id: GameId) ?Item {
             return DanglingMgr.getDanglingItemType(self, item_id);
         }
 
+        /// Find an empty EIS that accepts the given item type. Returns null if none found.
         pub fn findEmptyEisForItem(self: *const Self, item_type: Item) ?GameId {
             return DanglingMgr.findEmptyEisForItem(self, item_type);
         }
 
+        /// Find an empty EIS that accepts the given item type, excluding reserved ones. Returns null if none found.
         pub fn findEmptyEisForItemExcluding(self: *const Self, item_type: Item, excluded: *const std.AutoHashMap(GameId, void)) ?GameId {
             return DanglingMgr.findEmptyEisForItemExcluding(self, item_type, excluded);
         }
 
+        /// Get list of idle workers. Caller owns the returned slice and must free it.
         pub fn getIdleWorkers(self: *Self) ![]GameId {
             return DanglingMgr.getIdleWorkers(self);
         }
 
+        /// Evaluate dangling items and try to assign idle workers to pick them up.
         pub fn evaluateDanglingItems(self: *Self) void {
             DanglingMgr.evaluateDanglingItems(self);
         }
