@@ -1228,8 +1228,8 @@ pub const Engine = zspec.describe("Engine", struct {
             // Complete pickup → now in Process step
             _ = engine.pickupCompleted(10);
 
-            // Calling work_completed on wrong workstation should fail
-            try std.testing.expect(engine.handle(.{ .work_completed = .{ .workstation_id = 999 } }) == false);
+            // Calling pickup_completed again on a worker not in the pickup step should fail
+            try std.testing.expect(engine.handle(.{ .pickup_completed = .{ .worker_id = 10 } }) == false);
         }
 
         pub fn @"work_completed on workstation not in process step returns false"() !void {
