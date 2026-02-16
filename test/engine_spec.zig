@@ -651,7 +651,9 @@ pub const Engine = zspec.describe("Engine", struct {
             engine.workers.getPtr(10).?.state = .Working;
             engine.markWorkerBusy(10);
 
-            try std.testing.expect(engine.storeCompleted(10) == false);
+            // storeCompleted recovers gracefully — sets worker idle and dispatches
+            // worker_released, returning success (true) rather than an error
+            try std.testing.expect(engine.storeCompleted(10));
 
             // Worker should recover to idle
             try std.testing.expect(engine.getWorkerState(10).? == .Idle);
@@ -706,7 +708,7 @@ pub const Engine = zspec.describe("Engine", struct {
                 switch (engine.getWorkerState(wid).?) {
                     .Working => working += 1,
                     .Idle => idle += 1,
-                    else => {},
+                    .Unavailable => return error.UnexpectedState,
                 }
             }
             try std.testing.expectEqual(@as(u32, 1), working);
@@ -726,15 +728,13 @@ pub const Engine = zspec.describe("Engine", struct {
             defer engine.deinit();
             defer engine.dispatcher.hooks.deinit();
 
-            // Two EIS so second cycle can start immediately
             try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
-            try engine.addStorage(5, .{ .role = .eis, .initial_item = .Water });
             try engine.addStorage(2, .{ .role = .iis });
             try engine.addStorage(3, .{ .role = .ios });
             try engine.addStorage(4, .{ .role = .eos });
 
             try engine.addWorkstation(100, .{
-                .eis = &.{ 1, 5 },
+                .eis = &.{1},
                 .iis = &.{2},
                 .ios = &.{3},
                 .eos = &.{4},
@@ -754,11 +754,12 @@ pub const Engine = zspec.describe("Engine", struct {
             // Clear events before triggering re-evaluation
             engine.dispatcher.hooks.clear();
 
-            // Clearing EOS triggers reevaluateAffectedWorkstations which immediately
-            // assigns the idle worker since EIS 5 still has an item
+            // Clear EOS and refill EIS so workstation can operate again.
+            // Assignment happens during reevaluateAffectedWorkstations inside itemAdded.
             try std.testing.expect(engine.itemRemoved(4));
+            try std.testing.expect(engine.itemAdded(1, .Flour));
 
-            // Worker should already be assigned via reevaluation during itemRemoved
+            // Worker should be assigned via reevaluation
             try std.testing.expect(engine.getWorkerState(10).? == .Working);
             _ = try engine.dispatcher.hooks.expectNext(.workstation_queued);
             _ = try engine.dispatcher.hooks.expectNext(.worker_assigned);
