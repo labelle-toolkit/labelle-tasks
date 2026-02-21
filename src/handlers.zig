@@ -86,6 +86,18 @@ pub fn Handlers(
         }
 
         pub fn handleStorageCleared(engine: *EngineType, storage_id: GameId) anyerror!void {
+            // Cancel any transport sourcing from this storage
+            cancelTransportFromStorage(engine, storage_id);
+
+            // Cancel any transport delivering to this storage
+            cancelTransportToStorage(engine, storage_id);
+
+            // Cancel any dangling delivery targeting this storage
+            cancelDanglingToStorage(engine, storage_id);
+
+            // Release any reservation on this storage
+            engine.releaseReservation(storage_id);
+
             _ = engine.storages.remove(storage_id);
             // Clean up reverse index entry for this storage
             if (engine.storage_to_workstations.fetchRemove(storage_id)) |kv| {
@@ -141,7 +153,8 @@ pub fn Handlers(
                 cancelWorkerTransport(engine, worker, worker_id, task);
             }
 
-            // Cancel dangling task if active
+            // Cancel dangling task if active (item needs reassignment)
+            const had_dangling = worker.dangling_task != null;
             if (worker.dangling_task) |_| {
                 engine.releaseWorkerReservations(worker_id);
                 worker.dangling_task = null;
@@ -161,7 +174,10 @@ pub fn Handlers(
             worker.assigned_workstation = null;
             engine.markWorkerBusy(worker_id);
 
-            // If a transport was cancelled, try to reassign the EOS item to another worker
+            // Re-evaluate orphaned tasks so other workers can pick them up
+            if (had_dangling) {
+                engine.evaluateDanglingItems();
+            }
             if (had_transport) {
                 engine.evaluateTransports();
             }
@@ -169,6 +185,7 @@ pub fn Handlers(
 
         pub fn handleWorkerRemoved(engine: *EngineType, worker_id: GameId) anyerror!void {
             var had_transport = false;
+            var had_dangling = false;
             if (engine.workers.getPtr(worker_id)) |worker| {
                 // Cancel transport task if active (EOS item may need a new worker)
                 had_transport = worker.transport_task != null;
@@ -176,7 +193,8 @@ pub fn Handlers(
                     cancelWorkerTransport(engine, worker, worker_id, task);
                 }
 
-                // Cancel dangling task if active
+                // Cancel dangling task if active (item needs reassignment)
+                had_dangling = worker.dangling_task != null;
                 if (worker.dangling_task) |_| {
                     engine.releaseWorkerReservations(worker_id);
                     worker.dangling_task = null;
@@ -195,7 +213,10 @@ pub fn Handlers(
             engine.removeWorkerTracking(worker_id);
             _ = engine.workers.remove(worker_id);
 
-            // If a transport was cancelled, try to reassign the EOS item to another worker
+            // Re-evaluate orphaned tasks so other workers can pick them up
+            if (had_dangling) {
+                engine.evaluateDanglingItems();
+            }
             if (had_transport) {
                 engine.evaluateTransports();
             }
@@ -264,22 +285,23 @@ pub fn Handlers(
             // Read item_type from source storage before clearing it
             const from_storage = engine.storages.getPtr(task.from_storage_id) orelse {
                 log.err("transport_pickup_completed: source storage {} not found", .{task.from_storage_id});
+                // Recover: cancel transport so worker doesn't get stuck
+                cancelAndReleaseTransport(engine, worker, worker_id, task, null);
                 return error.UnknownStorage;
             };
 
             const item_type = from_storage.item_type orelse {
                 log.err("transport_pickup_completed: source storage {} has no item type", .{task.from_storage_id});
+                // Recover: cancel transport so worker doesn't get stuck
+                cancelAndReleaseTransport(engine, worker, worker_id, task, null);
                 return error.NoItemType;
             };
 
             // Store the item type for delivery phase
             engine.transport_items.put(worker_id, item_type) catch {
                 log.err("transport_pickup_completed: failed to track item for worker {}", .{worker_id});
-                // Roll back: release worker so it doesn't get stuck
-                engine.releaseReservation(task.to_storage_id);
-                worker.transport_task = null;
-                worker.state = .Idle;
-                engine.markWorkerIdle(worker_id);
+                // Recover: cancel transport so worker doesn't get stuck
+                cancelAndReleaseTransport(engine, worker, worker_id, task, null);
                 return error.OutOfMemory;
             };
 
@@ -304,11 +326,15 @@ pub fn Handlers(
 
             const item_type = engine.transport_items.get(worker_id) orelse {
                 log.err("transport_delivery_completed: no tracked item for worker {}", .{worker_id});
+                // Recover: cancel transport so worker doesn't get stuck
+                cancelAndReleaseTransport(engine, worker, worker_id, task, null);
                 return error.NoItemType;
             };
 
             const dest_storage = engine.storages.getPtr(task.to_storage_id) orelse {
                 log.err("transport_delivery_completed: destination storage {} not found", .{task.to_storage_id});
+                // Recover: cancel transport so worker doesn't get stuck
+                cancelAndReleaseTransport(engine, worker, worker_id, task, item_type);
                 return error.UnknownStorage;
             };
 
@@ -321,15 +347,14 @@ pub fn Handlers(
 
                 // Try to find a new destination
                 if (engine.findDestinationForItem(item_type)) |new_dest| {
-                    // Re-route: worker is at the full destination, redirect to new one
+                    // Re-route: worker already has the item, redirect directly to new destination
                     worker.transport_task = .{
                         .from_storage_id = task.to_storage_id,
                         .to_storage_id = new_dest,
                     };
                     engine.reserveStorage(new_dest, worker_id);
-                    engine.dispatcher.dispatch(.{ .transport_started = .{
+                    engine.dispatcher.dispatch(.{ .transport_rerouted = .{
                         .worker_id = worker_id,
-                        .from_storage_id = task.to_storage_id,
                         .to_storage_id = new_dest,
                         .item = item_type,
                     } });
@@ -388,6 +413,21 @@ pub fn Handlers(
         // Transport cancellation helpers
         // ============================================
 
+        /// Cancel a transport, dispatch transport_cancelled, and release the worker to Idle.
+        /// Used for error recovery in transport handlers.
+        fn cancelAndReleaseTransport(engine: *EngineType, worker: *WorkerData, worker_id: GameId, task: @TypeOf(worker.transport_task.?), item_type: ?Item) void {
+            engine.releaseReservation(task.to_storage_id);
+
+            engine.dispatcher.dispatch(.{ .transport_cancelled = .{
+                .worker_id = worker_id,
+                .from_storage_id = task.from_storage_id,
+                .to_storage_id = task.to_storage_id,
+                .item = item_type,
+            } });
+
+            releaseTransportWorker(engine, worker, worker_id);
+        }
+
         /// Cancel a worker's transport task and dispatch transport_cancelled hook.
         fn cancelWorkerTransport(engine: *EngineType, worker: *WorkerData, worker_id: GameId, task: @TypeOf(worker.transport_task.?)) void {
             const item_type = engine.transport_items.get(worker_id);
@@ -403,6 +443,59 @@ pub fn Handlers(
             } });
 
             worker.transport_task = null;
+        }
+
+        /// Cancel any transport delivering to a given storage.
+        /// Re-evaluates the freed worker for other tasks.
+        fn cancelTransportToStorage(engine: *EngineType, storage_id: GameId) void {
+            var found_worker: ?GameId = null;
+            var iter = engine.workers.iterator();
+            while (iter.next()) |entry| {
+                const wid = entry.key_ptr.*;
+                const worker = entry.value_ptr;
+                if (worker.transport_task) |task| {
+                    if (task.to_storage_id == storage_id) {
+                        cancelWorkerTransport(engine, worker, wid, task);
+                        worker.state = .Idle;
+                        engine.markWorkerIdle(wid);
+                        found_worker = wid;
+                        break;
+                    }
+                }
+            }
+
+            if (found_worker != null) {
+                engine.evaluateDanglingItems();
+                engine.tryAssignWorkers();
+                engine.evaluateTransports();
+            }
+        }
+
+        /// Cancel any dangling delivery targeting a given storage.
+        /// Re-evaluates the freed worker for other tasks.
+        fn cancelDanglingToStorage(engine: *EngineType, storage_id: GameId) void {
+            var found_worker: ?GameId = null;
+            var iter = engine.workers.iterator();
+            while (iter.next()) |entry| {
+                const wid = entry.key_ptr.*;
+                const worker = entry.value_ptr;
+                if (worker.dangling_task) |task| {
+                    if (task.target_storage_id == storage_id) {
+                        engine.releaseReservation(storage_id);
+                        worker.dangling_task = null;
+                        worker.state = .Idle;
+                        engine.markWorkerIdle(wid);
+                        found_worker = wid;
+                        break;
+                    }
+                }
+            }
+
+            if (found_worker != null) {
+                engine.evaluateDanglingItems();
+                engine.tryAssignWorkers();
+                engine.evaluateTransports();
+            }
         }
 
         /// Cancel any transport that uses a given storage as its source.

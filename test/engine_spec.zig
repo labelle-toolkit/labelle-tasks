@@ -2001,13 +2001,12 @@ pub const Engine = zspec.describe("Engine", struct {
             // Worker should still be working (re-routed, not cancelled)
             try std.testing.expectEqual(tasks.WorkerState.Working, engine.getWorkerState(10).?);
 
-            // Should have a new transport_started event for the re-route
-            var transport_started_count: usize = 0;
+            // Should have a transport_rerouted event (not transport_started)
+            var rerouted_count: usize = 0;
             for (engine.dispatcher.hooks.events.items) |event| {
-                if (event == .transport_started) transport_started_count += 1;
+                if (event == .transport_rerouted) rerouted_count += 1;
             }
-            // Two transport_started events: original + re-route
-            try std.testing.expectEqual(@as(usize, 2), transport_started_count);
+            try std.testing.expectEqual(@as(usize, 1), rerouted_count);
 
             // The new transport_task should point to the other destination
             const new_task = engine.workers.get(10).?.transport_task.?;

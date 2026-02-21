@@ -95,6 +95,14 @@ pub fn TaskHookPayload(comptime GameId: type, comptime Item: type) type {
             storage_id: GameId,
         },
 
+        // Transport re-routed (destination was full, worker redirected to new destination)
+        // Worker already has the item — game should skip pickup and go directly to new destination
+        transport_rerouted: struct {
+            worker_id: GameId,
+            to_storage_id: GameId,
+            item: Item,
+        },
+
         // Transport cancelled (worker died, source emptied, or destination full with no re-route)
         transport_cancelled: struct {
             worker_id: GameId,
@@ -195,6 +203,7 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
                 .input_consumed => |p| self.call("input_consumed", p),
                 .standalone_item_added => |p| self.call("standalone_item_added", p),
                 .standalone_item_removed => |p| self.call("standalone_item_removed", p),
+                .transport_rerouted => |p| self.call("transport_rerouted", p),
                 .transport_cancelled => |p| self.call("transport_cancelled", p),
             }
         }
@@ -326,6 +335,7 @@ pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
         pub fn input_consumed(self: *Self, payload: anytype) void { self.record(.{ .input_consumed = payload }); }
         pub fn standalone_item_added(self: *Self, payload: anytype) void { self.record(.{ .standalone_item_added = payload }); }
         pub fn standalone_item_removed(self: *Self, payload: anytype) void { self.record(.{ .standalone_item_removed = payload }); }
+        pub fn transport_rerouted(self: *Self, payload: anytype) void { self.record(.{ .transport_rerouted = payload }); }
         pub fn transport_cancelled(self: *Self, payload: anytype) void { self.record(.{ .transport_cancelled = payload }); }
     };
 }

@@ -209,8 +209,20 @@ If a destination is full when `transport_delivery_completed` arrives (race condi
 
 1. Release reservation on full destination
 2. Call `findDestinationForItem` for a new destination
-3. If found: update `transport_task`, reserve new destination, dispatch `transport_started` with new destination
+3. If found: update `transport_task`, reserve new destination, dispatch `transport_rerouted` (worker already has item — game should skip pickup and go directly to new destination)
 4. If not found: release worker to idle, item is "dangling" in the worker's hands — dispatch `transport_cancelled` so game can handle it (drop item, return to EOS, etc.)
+
+New hook (engine → game):
+
+```zig
+transport_rerouted: struct {
+    worker_id: GameId,
+    to_storage_id: GameId,
+    item: Item,
+},
+```
+
+Game uses this to redirect the worker directly to the new destination without going through a pickup phase.
 
 #### New game → engine events
 
@@ -247,7 +259,7 @@ transport_completed: struct {
 },
 ```
 
-No mid-point hook needed — `transport_started` gives the game both source and destination upfront. After `transport_pickup_completed`, the game already knows where to send the worker.
+`transport_started` gives the game both source and destination upfront. After `transport_pickup_completed`, the game already knows where to send the worker. If the destination is full on delivery, `transport_rerouted` redirects the worker to a new destination without a pickup phase.
 
 #### Trigger: when does transport evaluation happen?
 
@@ -260,15 +272,14 @@ The engine evaluates EOS transport when:
 
 #### Destination selection: `findDestinationForItem`
 
-New internal function, shared by dangling delivery and EOS transport:
+New public function, shared by dangling delivery and EOS transport:
 
 ```zig
-fn findDestinationForItem(engine: *EngineType, item_type: Item, excluded: ...) ?GameId {
-    // Pass 1: empty EIS that accepts item_type (highest priority wins)
-    // Pass 2: empty standalone that accepts item_type (highest priority wins)
-    // Returns null if nothing found
-}
+pub fn findDestinationForItem(self: *const Self, item_type: Item) ?GameId
+pub fn findDestinationForItemExcluding(self: *const Self, item_type: Item, excluded: *const std.AutoHashMap(GameId, void)) ?GameId
 ```
+
+Single-pass over all storages. Skips full, reserved, and excluded storages. EIS wins over standalone; within each tier, highest priority wins.
 
 This replaces `findEmptyEisForItem` and becomes the single routing function for all item delivery.
 
@@ -384,7 +395,7 @@ The `Storage` component's `onAdd` callback already calls `engine.addStorage()`. 
 | `src/engine.zig` | Add `reserved_storages` map, `findDestinationForItem`, transport evaluation trigger points, reservation helpers, query methods |
 | `src/dangling.zig` | Use `findDestinationForItem` instead of `findEmptyEisForItem`, use persistent reservations instead of ephemeral `reserved_eis` set |
 | `src/handlers.zig` | Add `handleTransportPickupCompleted` / `handleTransportDeliveryCompleted`, transport cancellation on `worker_unavailable`/`worker_removed`/`item_removed`, emit standalone hooks, trigger transport eval in `handleStoreCompleted` / `handleItemAdded` / `handleWorkerAvailable` |
-| `src/hooks.zig` | Add `standalone_item_added`, `standalone_item_removed`, `transport_pickup_completed`, `transport_delivery_completed`, `transport_cancelled` to payloads + dispatcher + recording hooks |
+| `src/hooks.zig` | Add `standalone_item_added`, `standalone_item_removed`, `transport_rerouted`, `transport_pickup_completed`, `transport_delivery_completed`, `transport_cancelled` to payloads + dispatcher + recording hooks |
 | `test/` | Add standalone storage specs, EOS transport specs |
 
 ## Out of scope

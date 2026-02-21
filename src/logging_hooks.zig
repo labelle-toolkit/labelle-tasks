@@ -143,6 +143,14 @@ pub const LoggingHooks = struct {
         });
     }
 
+    pub fn transport_rerouted(payload: anytype) void {
+        std.log.info("[TaskEngine] transport_rerouted: worker={d}, to={d}, item={}", .{
+            payload.worker_id,
+            payload.to_storage_id,
+            payload.item,
+        });
+    }
+
     pub fn transport_cancelled(payload: anytype) void {
         std.log.info("[TaskEngine] transport_cancelled: worker={d}, from={d}, to={d}, item={?}", .{
             payload.worker_id,
@@ -184,6 +192,7 @@ pub fn MergeHooks(comptime Primary: type, comptime Fallback: type) type {
         pub fn input_consumed(payload: anytype) void { dispatch("input_consumed", payload); }
         pub fn standalone_item_added(payload: anytype) void { dispatch("standalone_item_added", payload); }
         pub fn standalone_item_removed(payload: anytype) void { dispatch("standalone_item_removed", payload); }
+        pub fn transport_rerouted(payload: anytype) void { dispatch("transport_rerouted", payload); }
         pub fn transport_cancelled(payload: anytype) void { dispatch("transport_cancelled", payload); }
     };
 }
