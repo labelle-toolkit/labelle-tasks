@@ -128,12 +128,8 @@ Store completed → EOS has item
             Game calls: handle(.transport_pickup_completed)
                     │
                     ▼
-            Engine updates: EOS cleared, worker carrying item
-            Dispatch: transport_carrying
-            (worker_id, to=destination, item)
-                    │
-                    ▼
-            Game moves worker to destination
+            Engine updates: EOS cleared
+            Game moves worker to destination (already known from transport_started)
             Game calls: handle(.transport_delivery_completed)
                     │
                     ▼
@@ -173,20 +169,13 @@ transport_delivery_completed: struct {
 
 #### New engine → game hooks
 
-The existing `transport_started` and `transport_completed` hooks are already defined but never dispatched. Now they will be. Adding `transport_carrying` for the mid-point:
+The existing `transport_started` and `transport_completed` hooks are already defined but never dispatched. Now they will be:
 
 ```zig
 // Already exists — now dispatched by engine
 transport_started: struct {
     worker_id: GameId,
     from_storage_id: GameId,
-    to_storage_id: GameId,
-    item: Item,
-},
-
-// New — dispatched after pickup, worker heading to destination
-transport_carrying: struct {
-    worker_id: GameId,
     to_storage_id: GameId,
     item: Item,
 },
@@ -198,6 +187,8 @@ transport_completed: struct {
     item: Item,
 },
 ```
+
+No mid-point hook needed — `transport_started` gives the game both source and destination upfront. After `transport_pickup_completed`, the game already knows where to send the worker.
 
 #### Trigger: when does transport evaluation happen?
 
@@ -333,7 +324,7 @@ The `Storage` component's `onAdd` callback already calls `engine.addStorage()`. 
 | `src/engine.zig` | Add `findDestinationForItem`, transport evaluation trigger points, query methods |
 | `src/dangling.zig` | Use `findDestinationForItem` instead of `findEmptyEisForItem` |
 | `src/handlers.zig` | Add `handleTransportPickupCompleted` / `handleTransportDeliveryCompleted`, emit standalone hooks, trigger transport eval in `handleStoreCompleted` / `handleItemAdded` / `handleWorkerAvailable` |
-| `src/hooks.zig` | Add `transport_carrying`, `standalone_item_added`, `standalone_item_removed`, `transport_pickup_completed`, `transport_delivery_completed` to payloads + dispatcher + recording hooks |
+| `src/hooks.zig` | Add `standalone_item_added`, `standalone_item_removed`, `transport_pickup_completed`, `transport_delivery_completed` to payloads + dispatcher + recording hooks |
 | `test/` | Add standalone storage specs, EOS transport specs |
 
 ## Out of scope
