@@ -73,19 +73,22 @@ This is the base behavior — it works today with a minor change (allowing `addS
 
 When a dangling item appears, the engine currently calls `findEmptyEisForItem()` which only looks at `.eis` storages. Standalone storages should also be valid delivery targets for dangling items.
 
-Change `findEmptyEisForItem` (and `findEmptyEisForItemExcluding`) to also consider `.standalone` storages that accept the item type:
+Change `findEmptyEisForItem` (and `findEmptyEisForItemExcluding`) to also consider `.standalone` storages that accept the item type — but only as a fallback when no EIS is available.
+
+**Delivery priority rule**: Workstation storages (EIS) always take precedence over standalone storages. The engine first looks for an empty EIS that accepts the item. Only when no EIS is available does it fall back to standalone storages.
 
 ```zig
-// Before
+// Two-pass search:
+// Pass 1: EIS only (current behavior)
 if (storage.role == .eis and !storage.has_item) { ... }
 
-// After
-if ((storage.role == .eis or storage.role == .standalone) and !storage.has_item) { ... }
+// Pass 2: standalone fallback (only if pass 1 found nothing)
+if (storage.role == .standalone and !storage.has_item) { ... }
 ```
 
-This means a standalone shelf accepting `.Bread` could receive a dangling Bread item via worker delivery, using the existing `pickup_dangling_started` / `store_started` / `item_delivered` hook flow.
+This means a standalone shelf accepting `.Bread` could receive a dangling Bread item via worker delivery, but only when no workstation EIS wants that Bread. The existing `pickup_dangling_started` / `store_started` / `item_delivered` hook flow is reused.
 
-**Priority interaction**: Standalone storages use the same `priority` field as EIS. The engine picks the highest-priority empty storage that accepts the item, whether EIS or standalone.
+**Within the same tier** (EIS-to-EIS or standalone-to-standalone), the `priority` field breaks ties as usual — highest priority wins.
 
 ### Behavior 3: Supply source
 
@@ -96,6 +99,17 @@ This already works mechanically: `addWorkstation` accepts any storage ID in its 
 The only gap: `selectEis` currently picks the highest-priority EIS with an item. It already works on arbitrary storage IDs (it reads from `ws.eis.items`), so a standalone storage listed in a workstation's EIS list will be selected if it has the highest priority and contains an item. No change needed.
 
 **Cycle**: Worker picks up from standalone storage (clearing it) → item flows through IIS → processing → IOS → EOS. The standalone storage is now empty and can receive new items (from dangling delivery, game events, or another worker).
+
+### Delivery priority rule (summary)
+
+The same principle applies everywhere items are routed:
+
+| Scenario | Priority order |
+|----------|---------------|
+| Dangling item needs a destination | EIS first, then standalone |
+| EOS item needs onward transport | EIS first, then standalone |
+
+Workstation storages always win. Standalone storages are the fallback — they absorb overflow when all workstation inputs are full.
 
 ### Hook changes
 
