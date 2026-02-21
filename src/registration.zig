@@ -130,6 +130,10 @@ pub fn Registration(
                 .iis => &ws.iis,
                 .ios => &ws.ios,
                 .eos => &ws.eos,
+                .standalone => {
+                    std.log.warn("[tasks] attachStorageToWorkstation: cannot attach standalone storage to workstation", .{});
+                    return error.InvalidStorageRole;
+                },
             };
             try list.append(engine.allocator, storage_id);
 

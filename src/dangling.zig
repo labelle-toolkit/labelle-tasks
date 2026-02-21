@@ -1,5 +1,6 @@
 //! Dangling item management for the task engine.
-//! Handles items that are not in any storage and need to be delivered to an EIS.
+//! Handles items that are not in any storage and need to be delivered to a destination
+//! (EIS first, standalone fallback).
 
 const std = @import("std");
 const log = std.log.scoped(.tasks);
@@ -30,6 +31,7 @@ pub fn DanglingManager(
 
         /// Find an empty EIS that accepts the given item type.
         /// Returns null if no suitable EIS found.
+        /// Note: Does not check reservations — use findDestinationForItem for reservation-aware routing.
         pub fn findEmptyEisForItem(engine: *const EngineType, item_type: Item) ?GameId {
             var iter = engine.storages.iterator();
             while (iter.next()) |entry| {
@@ -43,8 +45,9 @@ pub fn DanglingManager(
             return null;
         }
 
-        /// Find an empty EIS that accepts the given item type, excluding reserved ones.
+        /// Find an empty EIS that accepts the given item type, excluding specific storages.
         /// Returns null if no suitable EIS found.
+        /// Note: Does not check reservations — use findDestinationForItem for reservation-aware routing.
         pub fn findEmptyEisForItemExcluding(engine: *const EngineType, item_type: Item, excluded: *const std.AutoHashMap(GameId, void)) ?GameId {
             var iter = engine.storages.iterator();
             while (iter.next()) |entry| {
@@ -74,6 +77,7 @@ pub fn DanglingManager(
         }
 
         /// Evaluate dangling items and try to assign workers.
+        /// Uses persistent reserved_storages for reservation tracking.
         /// Snapshots both idle workers and dangling items before iterating
         /// to avoid iterator invalidation from reentrant hook dispatch.
         pub fn evaluateDanglingItems(engine: *EngineType) void {
@@ -105,16 +109,13 @@ pub fn DanglingManager(
                 dangling_snapshot.items.len,
             });
 
+            // Track items already assigned to workers (from prior evaluations or in-flight deliveries)
             var assigned_items = std.AutoHashMap(GameId, GameId).init(engine.allocator);
             defer assigned_items.deinit();
-            // Track EIS with pending deliveries to prevent assigning multiple items to same EIS
-            var reserved_eis = std.AutoHashMap(GameId, void).init(engine.allocator);
-            defer reserved_eis.deinit();
-            var worker_iter = engine.workers.iterator();
-            while (worker_iter.next()) |worker_entry| {
+            var worker_scan = engine.workers.iterator();
+            while (worker_scan.next()) |worker_entry| {
                 if (worker_entry.value_ptr.dangling_task) |task| {
                     assigned_items.put(task.item_id, worker_entry.key_ptr.*) catch return;
-                    reserved_eis.put(task.target_eis_id, {}) catch return;
                 }
             }
 
@@ -122,7 +123,7 @@ pub fn DanglingManager(
             var assigned_workers = std.AutoHashMap(GameId, void).init(engine.allocator);
             defer assigned_workers.deinit();
 
-            // For each dangling item, try to find a worker and EIS
+            // For each dangling item, try to find a worker and destination
             for (dangling_snapshot.items) |dangling_entry| {
                 const item_id = dangling_entry.id;
                 const item_type = dangling_entry.item_type;
@@ -135,7 +136,8 @@ pub fn DanglingManager(
                     continue;
                 }
 
-                const target_eis = findEmptyEisForItemExcluding(engine, item_type, &reserved_eis) orelse continue;
+                // Use findDestinationForItem which checks reservations and prefers EIS over standalone
+                const target = engine.findDestinationForItem(item_type) orelse continue;
                 const worker_id = engine.findNearest(item_id, idle_buf.items) orelse continue;
 
                 if (assigned_workers.contains(worker_id)) {
@@ -156,20 +158,22 @@ pub fn DanglingManager(
                     // state to prevent permanently stuck workers
                     assigned_workers.put(worker_id, {}) catch return;
                     assigned_items.put(item_id, worker_id) catch return;
-                    reserved_eis.put(target_eis, {}) catch return;
 
                     worker.state = .Working;
                     engine.markWorkerBusy(worker_id);
                     worker.dangling_task = .{
                         .item_id = item_id,
-                        .target_eis_id = target_eis,
+                        .target_storage_id = target,
                     };
+
+                    // Reserve the destination storage
+                    engine.reserveStorage(target, worker_id);
 
                     engine.dispatcher.dispatch(.{ .pickup_dangling_started = .{
                         .worker_id = worker_id,
                         .item_id = item_id,
                         .item_type = item_type,
-                        .target_eis_id = target_eis,
+                        .target_storage_id = target,
                     } });
 
                     for (idle_buf.items, 0..) |id, i| {
