@@ -14,6 +14,7 @@ pub const StorageRole = enum {
     iis, // Internal Input Storage (workstation input buffer)
     ios, // Internal Output Storage (workstation output buffer)
     eos, // External Output Storage (final products)
+    standalone, // Not part of any workstation
 };
 
 /// Abstract storage state (no entity references)
@@ -37,6 +38,12 @@ pub fn WorkerData(comptime GameId: type) type {
         dangling_task: ?struct {
             item_id: GameId,
             target_eis_id: GameId,
+        } = null,
+
+        /// Transport task (if worker is transporting an item between storages)
+        transport_task: ?struct {
+            from_storage_id: GameId,
+            to_storage_id: GameId,
         } = null,
     };
 }

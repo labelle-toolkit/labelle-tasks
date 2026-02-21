@@ -236,6 +236,9 @@ pub fn StepHandlers(
                 // Remove from dangling items tracking
                 engine.removeDanglingItem(task.item_id);
 
+                // Release storage reservation
+                engine.releaseReservation(task.target_eis_id);
+
                 // Clear worker task and set to idle
                 worker.dangling_task = null;
                 worker.state = .Idle;
@@ -359,8 +362,13 @@ pub fn StepHandlers(
                     // Re-evaluate workstation status
                     engine.evaluateWorkstationStatus(ws_id);
 
-                    // Try to assign workers
+                    // Try to assign workers to workstations first
                     engine.tryAssignWorkers();
+
+                    // If worker is still idle, try EOS transport
+                    if (worker.state == .Idle) {
+                        engine.evaluateTransports();
+                    }
                 }
             } else {
                 // More items to store

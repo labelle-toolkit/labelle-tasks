@@ -129,6 +129,27 @@ pub const LoggingHooks = struct {
             payload.item,
         });
     }
+
+    pub fn standalone_item_added(payload: anytype) void {
+        std.log.info("[TaskEngine] standalone_item_added: storage={d}, item={}", .{
+            payload.storage_id,
+            payload.item,
+        });
+    }
+
+    pub fn standalone_item_removed(payload: anytype) void {
+        std.log.info("[TaskEngine] standalone_item_removed: storage={d}", .{
+            payload.storage_id,
+        });
+    }
+
+    pub fn transport_cancelled(payload: anytype) void {
+        std.log.info("[TaskEngine] transport_cancelled: worker={d}, from={d}, to={d}", .{
+            payload.worker_id,
+            payload.from_storage_id,
+            payload.to_storage_id,
+        });
+    }
 };
 
 /// Merges two hook structs, with Primary taking precedence over Fallback.
@@ -160,5 +181,8 @@ pub fn MergeHooks(comptime Primary: type, comptime Fallback: type) type {
         pub fn pickup_dangling_started(payload: anytype) void { dispatch("pickup_dangling_started", payload); }
         pub fn item_delivered(payload: anytype) void { dispatch("item_delivered", payload); }
         pub fn input_consumed(payload: anytype) void { dispatch("input_consumed", payload); }
+        pub fn standalone_item_added(payload: anytype) void { dispatch("standalone_item_added", payload); }
+        pub fn standalone_item_removed(payload: anytype) void { dispatch("standalone_item_removed", payload); }
+        pub fn transport_cancelled(payload: anytype) void { dispatch("transport_cancelled", payload); }
     };
 }

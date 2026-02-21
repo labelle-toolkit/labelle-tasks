@@ -1620,4 +1620,347 @@ pub const Engine = zspec.describe("Engine", struct {
             try std.testing.expectEqual(@as(u32, 1), engine.getWorkstationInfo(100).?.cycles_completed);
         }
     });
+
+    pub const standalone_storages = zspec.describe("standalone storages", struct {
+        pub fn @"registers standalone storage"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try engine.addStorage(1, .{ .role = .standalone, .accepts = .Bread });
+
+            try std.testing.expect(engine.isStandalone(1));
+            try std.testing.expectEqual(false, engine.getStorageHasItem(1).?);
+        }
+
+        pub fn @"item_added on standalone dispatches standalone_item_added"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try engine.addStorage(1, .{ .role = .standalone, .accepts = .Bread });
+            _ = engine.itemAdded(1, .Bread);
+
+            const evt = try engine.dispatcher.hooks.expectNext(.standalone_item_added);
+            try std.testing.expectEqual(@as(u32, 1), evt.storage_id);
+            try std.testing.expectEqual(Item.Bread, evt.item);
+        }
+
+        pub fn @"item_removed on standalone dispatches standalone_item_removed"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try engine.addStorage(1, .{ .role = .standalone, .accepts = .Bread, .initial_item = .Bread });
+            _ = engine.itemRemoved(1);
+
+            const evt = try engine.dispatcher.hooks.expectNext(.standalone_item_removed);
+            try std.testing.expectEqual(@as(u32, 1), evt.storage_id);
+        }
+
+        pub fn @"dangling item prefers EIS over standalone"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Register both EIS and standalone that accept Flour
+            try engine.addStorage(10, .{ .role = .eis, .accepts = .Flour });
+            try engine.addStorage(20, .{ .role = .standalone, .accepts = .Flour });
+            try engine.addWorker(1);
+            _ = engine.workerAvailable(1);
+
+            // Add dangling item — should go to EIS (10), not standalone (20)
+            try engine.addDanglingItem(100, .Flour);
+
+            const evt = try engine.dispatcher.hooks.expectNext(.pickup_dangling_started);
+            try std.testing.expectEqual(@as(u32, 10), evt.target_eis_id);
+        }
+
+        pub fn @"dangling item falls back to standalone when no EIS"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Only standalone storage, no EIS
+            try engine.addStorage(20, .{ .role = .standalone, .accepts = .Flour });
+            try engine.addWorker(1);
+            _ = engine.workerAvailable(1);
+
+            // Add dangling item — should go to standalone (20)
+            try engine.addDanglingItem(100, .Flour);
+
+            const evt = try engine.dispatcher.hooks.expectNext(.pickup_dangling_started);
+            try std.testing.expectEqual(@as(u32, 20), evt.target_eis_id);
+        }
+
+        pub fn @"standalone in workstation EIS list enables workstation"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Standalone storage as workstation input
+            try engine.addStorage(10, .{ .role = .standalone, .accepts = .Flour });
+            try engine.addStorage(20, .{ .role = .iis });
+            try engine.addStorage(30, .{ .role = .ios });
+            try engine.addStorage(40, .{ .role = .eos });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{10},
+                .iis = &.{20},
+                .ios = &.{30},
+                .eos = &.{40},
+            });
+
+            // Workstation should be Blocked (no item in standalone)
+            try std.testing.expectEqual(tasks.WorkstationStatus.Blocked, engine.getWorkstationStatus(100).?);
+
+            // Add item to standalone — workstation should become Queued
+            _ = engine.itemAdded(10, .Flour);
+            try std.testing.expectEqual(tasks.WorkstationStatus.Queued, engine.getWorkstationStatus(100).?);
+        }
+    });
+
+    pub const eos_transport = zspec.describe("EOS transport", struct {
+        pub fn @"EOS item triggers transport to empty EIS"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Setup: EOS with Bread, empty EIS that accepts Bread, idle worker
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread });
+            try engine.addWorker(10);
+
+            // Worker becomes available — should trigger transport
+            _ = engine.workerAvailable(10);
+
+            // Should see transport_started
+            const evt = try engine.dispatcher.hooks.expectNext(.transport_started);
+            try std.testing.expectEqual(@as(u32, 10), evt.worker_id);
+            try std.testing.expectEqual(@as(u32, 1), evt.from_storage_id);
+            try std.testing.expectEqual(@as(u32, 2), evt.to_storage_id);
+            try std.testing.expectEqual(Item.Bread, evt.item);
+
+            // Worker should be Working
+            try std.testing.expectEqual(tasks.WorkerState.Working, engine.getWorkerState(10).?);
+
+            // Destination should be reserved
+            try std.testing.expect(engine.isStorageReserved(2));
+        }
+
+        pub fn @"full transport cycle"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // transport_started already dispatched
+            _ = try engine.dispatcher.hooks.expectNext(.transport_started);
+
+            // Pickup completed — EOS should be cleared
+            _ = engine.transportPickupCompleted(10);
+            try std.testing.expectEqual(false, engine.getStorageHasItem(1).?);
+
+            // Delivery completed — destination should have item
+            _ = engine.transportDeliveryCompleted(10);
+            try std.testing.expectEqual(true, engine.getStorageHasItem(2).?);
+            try std.testing.expectEqual(Item.Bread, engine.getStorageItemType(2).?);
+
+            // Worker should be idle
+            try std.testing.expectEqual(tasks.WorkerState.Idle, engine.getWorkerState(10).?);
+
+            // Reservation should be released
+            try std.testing.expect(!engine.isStorageReserved(2));
+
+            // transport_completed hook should have fired
+            const evt = try engine.dispatcher.hooks.expectNext(.transport_completed);
+            try std.testing.expectEqual(@as(u32, 10), evt.worker_id);
+            try std.testing.expectEqual(@as(u32, 2), evt.to_storage_id);
+        }
+
+        pub fn @"transport prefers EIS over standalone"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread });
+            try engine.addStorage(3, .{ .role = .standalone, .accepts = .Bread });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Should target EIS (2), not standalone (3)
+            const evt = try engine.dispatcher.hooks.expectNext(.transport_started);
+            try std.testing.expectEqual(@as(u32, 2), evt.to_storage_id);
+        }
+
+        pub fn @"transport falls back to standalone when no EIS"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(3, .{ .role = .standalone, .accepts = .Bread });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Should target standalone (3)
+            const evt = try engine.dispatcher.hooks.expectNext(.transport_started);
+            try std.testing.expectEqual(@as(u32, 3), evt.to_storage_id);
+        }
+
+        pub fn @"reservation prevents double assignment"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Two EOS with items, only one EIS
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(3, .{ .role = .eis, .accepts = .Bread });
+            try engine.addWorker(10);
+            try engine.addWorker(11);
+            _ = engine.workerAvailable(10);
+            _ = engine.workerAvailable(11);
+
+            // Only one transport should be assigned (EIS 3 is reserved after first)
+            var transport_count: usize = 0;
+            for (engine.dispatcher.hooks.events.items) |event| {
+                if (event == .transport_started) transport_count += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), transport_count);
+        }
+
+        pub fn @"transport cancelled on worker unavailable"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Transport started
+            _ = try engine.dispatcher.hooks.expectNext(.transport_started);
+
+            // Worker becomes unavailable
+            _ = engine.handle(.{ .worker_unavailable = .{ .worker_id = 10 } });
+
+            // transport_cancelled should fire
+            const evt = try engine.dispatcher.hooks.expectNext(.transport_cancelled);
+            try std.testing.expectEqual(@as(u32, 10), evt.worker_id);
+
+            // Reservation should be released
+            try std.testing.expect(!engine.isStorageReserved(2));
+        }
+
+        pub fn @"no transport when no destination available"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // EOS with Bread but no matching destination
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Water }); // Wrong type
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Worker should stay idle — no transport
+            try std.testing.expectEqual(tasks.WorkerState.Idle, engine.getWorkerState(10).?);
+
+            // No transport_started events
+            var transport_count: usize = 0;
+            for (engine.dispatcher.hooks.events.items) |event| {
+                if (event == .transport_started) transport_count += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 0), transport_count);
+        }
+
+        pub fn @"transport triggered after workstation store_completed"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Workstation setup: EIS(Flour filled) → IIS → IOS → EOS
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+
+            // Second EIS to receive the transported Bread
+            try engine.addStorage(5, .{ .role = .eis, .accepts = .Bread });
+
+            try engine.addWorkstation(100, .{
+                .eis = &.{1},
+                .iis = &.{2},
+                .ios = &.{3},
+                .eos = &.{4},
+            });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Complete workstation cycle
+            _ = engine.pickupCompleted(10);
+            // Set IOS item type (game does this via process_completed hook)
+            _ = engine.itemAdded(3, .Bread);
+            _ = engine.workCompleted(100);
+            _ = engine.storeCompleted(10);
+
+            // After store_completed, worker is released and EOS has Bread
+            // Worker should be assigned transport to move Bread from EOS(4) to EIS(5)
+            var transport_count: usize = 0;
+            for (engine.dispatcher.hooks.events.items) |event| {
+                if (event == .transport_started) transport_count += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), transport_count);
+        }
+    });
 });

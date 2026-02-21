@@ -85,6 +85,23 @@ pub fn TaskHookPayload(comptime GameId: type, comptime Item: type) type {
             storage_id: GameId,
             item: Item,
         },
+
+        // Standalone storage lifecycle
+        standalone_item_added: struct {
+            storage_id: GameId,
+            item: Item,
+        },
+        standalone_item_removed: struct {
+            storage_id: GameId,
+        },
+
+        // Transport cancelled (worker died, source emptied, or destination full with no re-route)
+        transport_cancelled: struct {
+            worker_id: GameId,
+            from_storage_id: GameId,
+            to_storage_id: GameId,
+            item: ?Item,
+        },
     };
 }
 
@@ -136,6 +153,14 @@ pub fn GameHookPayload(comptime GameId: type, comptime Item: type) type {
         store_completed: struct {
             worker_id: GameId,
         },
+
+        // Transport completion (game notifies when worker arrives)
+        transport_pickup_completed: struct {
+            worker_id: GameId,
+        },
+        transport_delivery_completed: struct {
+            worker_id: GameId,
+        },
     };
 }
 
@@ -168,6 +193,9 @@ pub fn HookDispatcher(comptime GameId: type, comptime Item: type, comptime Hooks
                 .pickup_dangling_started => |p| self.call("pickup_dangling_started", p),
                 .item_delivered => |p| self.call("item_delivered", p),
                 .input_consumed => |p| self.call("input_consumed", p),
+                .standalone_item_added => |p| self.call("standalone_item_added", p),
+                .standalone_item_removed => |p| self.call("standalone_item_removed", p),
+                .transport_cancelled => |p| self.call("transport_cancelled", p),
             }
         }
 
@@ -296,5 +324,8 @@ pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
         pub fn pickup_dangling_started(self: *Self, payload: anytype) void { self.record(.{ .pickup_dangling_started = payload }); }
         pub fn item_delivered(self: *Self, payload: anytype) void { self.record(.{ .item_delivered = payload }); }
         pub fn input_consumed(self: *Self, payload: anytype) void { self.record(.{ .input_consumed = payload }); }
+        pub fn standalone_item_added(self: *Self, payload: anytype) void { self.record(.{ .standalone_item_added = payload }); }
+        pub fn standalone_item_removed(self: *Self, payload: anytype) void { self.record(.{ .standalone_item_removed = payload }); }
+        pub fn transport_cancelled(self: *Self, payload: anytype) void { self.record(.{ .transport_cancelled = payload }); }
     };
 }

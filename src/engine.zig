@@ -69,6 +69,12 @@ pub fn Engine(
         // Reverse index: storage_id → workstation_ids that reference it
         storage_to_workstations: std.AutoHashMap(GameId, std.ArrayListUnmanaged(GameId)),
 
+        // Storage reservations: storage_id → worker_id (destination spoken for)
+        reserved_storages: std.AutoHashMap(GameId, GameId),
+
+        // Transport item tracking: worker_id → Item (set on pickup, cleared on delivery)
+        transport_items: std.AutoHashMap(GameId, Item),
+
         // Hook dispatcher
         dispatcher: Dispatcher,
 
@@ -88,6 +94,8 @@ pub fn Engine(
                 .idle_workers_set = std.AutoHashMap(GameId, void).init(allocator),
                 .queued_workstations_set = std.AutoHashMap(GameId, void).init(allocator),
                 .storage_to_workstations = std.AutoHashMap(GameId, std.ArrayListUnmanaged(GameId)).init(allocator),
+                .reserved_storages = std.AutoHashMap(GameId, GameId).init(allocator),
+                .transport_items = std.AutoHashMap(GameId, Item).init(allocator),
                 .dispatcher = Dispatcher.init(task_hooks),
                 .distance_fn = distance_fn,
             };
@@ -105,6 +113,8 @@ pub fn Engine(
             self.dangling_items.deinit();
             self.idle_workers_set.deinit();
             self.queued_workstations_set.deinit();
+            self.reserved_storages.deinit();
+            self.transport_items.deinit();
             // Free reverse index lists
             var ri_iter = self.storage_to_workstations.valueIterator();
             while (ri_iter.next()) |list| {
@@ -169,6 +179,8 @@ pub fn Engine(
                 .pickup_completed => |p| StepHandlers.handlePickupCompleted(self, p.worker_id),
                 .work_completed => |p| StepHandlers.handleWorkCompleted(self, p.workstation_id),
                 .store_completed => |p| StepHandlers.handleStoreCompleted(self, p.worker_id),
+                .transport_pickup_completed => |p| EventHandlers.handleTransportPickupCompleted(self, p.worker_id),
+                .transport_delivery_completed => |p| EventHandlers.handleTransportDeliveryCompleted(self, p.worker_id),
             };
 
             result catch |err| {
@@ -204,6 +216,14 @@ pub fn Engine(
 
         pub fn storeCompleted(self: *Self, worker_id: GameId) bool {
             return self.handle(.{ .store_completed = .{ .worker_id = worker_id } });
+        }
+
+        pub fn transportPickupCompleted(self: *Self, worker_id: GameId) bool {
+            return self.handle(.{ .transport_pickup_completed = .{ .worker_id = worker_id } });
+        }
+
+        pub fn transportDeliveryCompleted(self: *Self, worker_id: GameId) bool {
+            return self.handle(.{ .transport_delivery_completed = .{ .worker_id = worker_id } });
         }
 
         // ============================================
@@ -437,6 +457,194 @@ pub fn Engine(
 
         pub fn evaluateDanglingItems(self: *Self) void {
             DanglingMgr.evaluateDanglingItems(self);
+        }
+
+        // ============================================
+        // Storage Reservations
+        // ============================================
+
+        /// Reserve a storage as a delivery destination for a worker.
+        pub fn reserveStorage(self: *Self, storage_id: GameId, worker_id: GameId) void {
+            self.reserved_storages.put(storage_id, worker_id) catch {
+                log.err("reserveStorage: failed to reserve storage {} for worker {}", .{ storage_id, worker_id });
+            };
+        }
+
+        /// Release a reservation on a storage.
+        pub fn releaseReservation(self: *Self, storage_id: GameId) void {
+            _ = self.reserved_storages.remove(storage_id);
+        }
+
+        /// Release all reservations held by a worker.
+        pub fn releaseWorkerReservations(self: *Self, worker_id: GameId) void {
+            // Collect keys to remove (can't remove during iteration)
+            var to_remove: std.ArrayListUnmanaged(GameId) = .{};
+            defer to_remove.deinit(self.allocator);
+            var iter = self.reserved_storages.iterator();
+            while (iter.next()) |entry| {
+                if (entry.value_ptr.* == worker_id) {
+                    to_remove.append(self.allocator, entry.key_ptr.*) catch return;
+                }
+            }
+            for (to_remove.items) |sid| {
+                _ = self.reserved_storages.remove(sid);
+            }
+        }
+
+        /// Check if a storage is reserved.
+        pub fn isStorageReserved(self: *const Self, storage_id: GameId) bool {
+            return self.reserved_storages.contains(storage_id);
+        }
+
+        // ============================================
+        // Destination Routing
+        // ============================================
+
+        /// Find the best destination for an item: EIS first, standalone fallback.
+        /// Skips full and reserved storages.
+        pub fn findDestinationForItem(self: *const Self, item_type: Item) ?GameId {
+            return self.findDestinationForItemImpl(item_type, null);
+        }
+
+        /// Find the best destination for an item, excluding specific storages.
+        pub fn findDestinationForItemExcluding(self: *const Self, item_type: Item, excluded: *const std.AutoHashMap(GameId, void)) ?GameId {
+            return self.findDestinationForItemImpl(item_type, excluded);
+        }
+
+        fn findDestinationForItemImpl(self: *const Self, item_type: Item, excluded: ?*const std.AutoHashMap(GameId, void)) ?GameId {
+            // Pass 1: EIS (highest priority wins)
+            var best_eis: ?GameId = null;
+            var best_eis_priority: i16 = -1;
+
+            // Pass 2: standalone (highest priority wins)
+            var best_standalone: ?GameId = null;
+            var best_standalone_priority: i16 = -1;
+
+            var iter = self.storages.iterator();
+            while (iter.next()) |entry| {
+                const storage_id = entry.key_ptr.*;
+                const storage = entry.value_ptr.*;
+
+                // Skip full, reserved, or excluded storages
+                if (storage.has_item) continue;
+                if (self.reserved_storages.contains(storage_id)) continue;
+                if (excluded) |ex| {
+                    if (ex.contains(storage_id)) continue;
+                }
+
+                // Check item type compatibility
+                if (storage.accepts != null and storage.accepts.? != item_type) continue;
+
+                const priority: i16 = @intFromEnum(storage.priority);
+
+                if (storage.role == .eis) {
+                    if (priority > best_eis_priority) {
+                        best_eis = storage_id;
+                        best_eis_priority = priority;
+                    }
+                } else if (storage.role == .standalone) {
+                    if (priority > best_standalone_priority) {
+                        best_standalone = storage_id;
+                        best_standalone_priority = priority;
+                    }
+                }
+            }
+
+            // EIS takes priority over standalone
+            return best_eis orelse best_standalone;
+        }
+
+        // ============================================
+        // Transport Evaluation
+        // ============================================
+
+        /// Evaluate EOS storages with items and try to assign idle workers
+        /// to transport them to a destination (EIS first, standalone fallback).
+        pub fn evaluateTransports(self: *Self) void {
+            if (self.idle_workers_set.count() == 0) return;
+
+            // Snapshot idle workers (reentrancy-safe)
+            var idle_buf: std.ArrayListUnmanaged(GameId) = .{};
+            defer idle_buf.deinit(self.allocator);
+            idle_buf.ensureTotalCapacity(self.allocator, self.idle_workers_set.count()) catch return;
+            var idle_iter = self.idle_workers_set.keyIterator();
+            while (idle_iter.next()) |wid| {
+                idle_buf.appendAssumeCapacity(wid.*);
+            }
+            if (idle_buf.items.len == 0) return;
+
+            // Snapshot EOS storages with items
+            const EosEntry = struct { id: GameId, item_type: Item };
+            var eos_snapshot: std.ArrayListUnmanaged(EosEntry) = .{};
+            defer eos_snapshot.deinit(self.allocator);
+
+            var storage_iter = self.storages.iterator();
+            while (storage_iter.next()) |entry| {
+                const storage = entry.value_ptr.*;
+                if (storage.role == .eos and storage.has_item) {
+                    if (storage.item_type) |item_type| {
+                        // Skip if already being transported (a worker has this as from_storage_id)
+                        var already_assigned = false;
+                        var w_iter = self.workers.iterator();
+                        while (w_iter.next()) |w_entry| {
+                            if (w_entry.value_ptr.transport_task) |task| {
+                                if (task.from_storage_id == entry.key_ptr.*) {
+                                    already_assigned = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!already_assigned) {
+                            eos_snapshot.append(self.allocator, .{ .id = entry.key_ptr.*, .item_type = item_type }) catch return;
+                        }
+                    }
+                }
+            }
+
+            // For each EOS with item, try to find a destination and assign a worker
+            for (eos_snapshot.items) |eos_entry| {
+                if (idle_buf.items.len == 0) break;
+
+                const destination = self.findDestinationForItem(eos_entry.item_type) orelse continue;
+                const worker_id = self.findNearest(eos_entry.id, idle_buf.items) orelse continue;
+
+                if (self.workers.getPtr(worker_id)) |worker| {
+                    // Assign transport
+                    worker.state = .Working;
+                    self.markWorkerBusy(worker_id);
+                    worker.transport_task = .{
+                        .from_storage_id = eos_entry.id,
+                        .to_storage_id = destination,
+                    };
+
+                    self.reserveStorage(destination, worker_id);
+
+                    self.dispatcher.dispatch(.{ .transport_started = .{
+                        .worker_id = worker_id,
+                        .from_storage_id = eos_entry.id,
+                        .to_storage_id = destination,
+                        .item = eos_entry.item_type,
+                    } });
+
+                    // Remove worker from idle snapshot
+                    for (idle_buf.items, 0..) |id, i| {
+                        if (id == worker_id) {
+                            _ = idle_buf.swapRemove(i);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ============================================
+        // Standalone Query API
+        // ============================================
+
+        /// Check if a storage is standalone.
+        pub fn isStandalone(self: *const Self, storage_id: GameId) bool {
+            const storage = self.storages.get(storage_id) orelse return false;
+            return storage.role == .standalone;
         }
 
         // ============================================
