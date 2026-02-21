@@ -312,7 +312,7 @@ pub fn createEngineHooks(
                 item: if (@hasField(Original, "item")) @FieldType(Original, "item") else void = if (@hasField(Original, "item")) undefined else {},
                 item_id: if (@hasField(Original, "item_id")) @FieldType(Original, "item_id") else void = if (@hasField(Original, "item_id")) undefined else {},
                 item_type: if (@hasField(Original, "item_type")) @FieldType(Original, "item_type") else void = if (@hasField(Original, "item_type")) undefined else {},
-                target_eis_id: if (@hasField(Original, "target_eis_id")) @FieldType(Original, "target_eis_id") else void = if (@hasField(Original, "target_eis_id")) undefined else {},
+                target_storage_id: if (@hasField(Original, "target_storage_id")) @FieldType(Original, "target_storage_id") else void = if (@hasField(Original, "target_storage_id")) undefined else {},
                 from_storage_id: if (@hasField(Original, "from_storage_id")) @FieldType(Original, "from_storage_id") else void = if (@hasField(Original, "from_storage_id")) undefined else {},
                 to_storage_id: if (@hasField(Original, "to_storage_id")) @FieldType(Original, "to_storage_id") else void = if (@hasField(Original, "to_storage_id")) undefined else {},
                 cycles_completed: if (@hasField(Original, "cycles_completed")) @FieldType(Original, "cycles_completed") else void = if (@hasField(Original, "cycles_completed")) undefined else {},

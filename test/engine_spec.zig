@@ -1685,7 +1685,7 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addDanglingItem(100, .Flour);
 
             const evt = try engine.dispatcher.hooks.expectNext(.pickup_dangling_started);
-            try std.testing.expectEqual(@as(u32, 10), evt.target_eis_id);
+            try std.testing.expectEqual(@as(u32, 10), evt.target_storage_id);
         }
 
         pub fn @"dangling item falls back to standalone when no EIS"() !void {
@@ -1705,7 +1705,7 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addDanglingItem(100, .Flour);
 
             const evt = try engine.dispatcher.hooks.expectNext(.pickup_dangling_started);
-            try std.testing.expectEqual(@as(u32, 20), evt.target_eis_id);
+            try std.testing.expectEqual(@as(u32, 20), evt.target_storage_id);
         }
 
         pub fn @"standalone in workstation EIS list enables workstation"() !void {
@@ -1961,6 +1961,101 @@ pub const Engine = zspec.describe("Engine", struct {
                 if (event == .transport_started) transport_count += 1;
             }
             try std.testing.expectEqual(@as(usize, 1), transport_count);
+        }
+
+        pub fn @"transport re-routes when destination is full on delivery"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // EOS with Bread, two possible destinations
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread }); // destination 1
+            try engine.addStorage(3, .{ .role = .eis, .accepts = .Bread }); // destination 2
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Worker should be assigned transport
+            try std.testing.expectEqual(tasks.WorkerState.Working, engine.getWorkerState(10).?);
+
+            // Complete pickup — clears EOS
+            _ = engine.transportPickupCompleted(10);
+            try std.testing.expect(!engine.isStorageFull(1));
+
+            // Simulate destination becoming full before delivery (race condition)
+            // Find which destination was chosen and fill it
+            const w_data = engine.workers.get(10).?;
+            const dest = w_data.transport_task.?.to_storage_id;
+            if (engine.storages.getPtr(dest)) |s| {
+                s.has_item = true;
+                s.item_type = .Bread;
+            }
+
+            // Deliver — should re-route to the other destination
+            _ = engine.transportDeliveryCompleted(10);
+
+            // Worker should still be working (re-routed, not cancelled)
+            try std.testing.expectEqual(tasks.WorkerState.Working, engine.getWorkerState(10).?);
+
+            // Should have a new transport_started event for the re-route
+            var transport_started_count: usize = 0;
+            for (engine.dispatcher.hooks.events.items) |event| {
+                if (event == .transport_started) transport_started_count += 1;
+            }
+            // Two transport_started events: original + re-route
+            try std.testing.expectEqual(@as(usize, 2), transport_started_count);
+
+            // The new transport_task should point to the other destination
+            const new_task = engine.workers.get(10).?.transport_task.?;
+            const other_dest: u32 = if (dest == 2) 3 else 2;
+            try std.testing.expectEqual(other_dest, new_task.to_storage_id);
+            // from_storage_id should be the full destination (worker's current position)
+            try std.testing.expectEqual(dest, new_task.from_storage_id);
+        }
+
+        pub fn @"transport cancelled when destination full and no re-route available"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // EOS with Bread, only one destination
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread });
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Complete pickup
+            _ = engine.transportPickupCompleted(10);
+
+            // Fill the destination before delivery
+            if (engine.storages.getPtr(2)) |s| {
+                s.has_item = true;
+                s.item_type = .Bread;
+            }
+
+            // Deliver — no re-route available, should cancel
+            _ = engine.transportDeliveryCompleted(10);
+
+            // Worker should be idle (transport cancelled)
+            try std.testing.expectEqual(tasks.WorkerState.Idle, engine.getWorkerState(10).?);
+
+            // transport_cancelled should fire
+            var cancelled_count: usize = 0;
+            for (engine.dispatcher.hooks.events.items) |event| {
+                if (event == .transport_cancelled) cancelled_count += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 1), cancelled_count);
+
+            // Reservation should be released
+            try std.testing.expect(!engine.isStorageReserved(2));
         }
     });
 });

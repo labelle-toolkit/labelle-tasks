@@ -476,18 +476,15 @@ pub fn Engine(
         }
 
         /// Release all reservations held by a worker.
+        /// Uses the worker's task data directly (no allocation needed).
         pub fn releaseWorkerReservations(self: *Self, worker_id: GameId) void {
-            // Collect keys to remove (can't remove during iteration)
-            var to_remove: std.ArrayListUnmanaged(GameId) = .{};
-            defer to_remove.deinit(self.allocator);
-            var iter = self.reserved_storages.iterator();
-            while (iter.next()) |entry| {
-                if (entry.value_ptr.* == worker_id) {
-                    to_remove.append(self.allocator, entry.key_ptr.*) catch return;
+            if (self.workers.get(worker_id)) |worker| {
+                if (worker.dangling_task) |task| {
+                    self.releaseReservation(task.target_storage_id);
                 }
-            }
-            for (to_remove.items) |sid| {
-                _ = self.reserved_storages.remove(sid);
+                if (worker.transport_task) |task| {
+                    self.releaseReservation(task.to_storage_id);
+                }
             }
         }
 
@@ -573,7 +570,17 @@ pub fn Engine(
             }
             if (idle_buf.items.len == 0) return;
 
-            // Snapshot EOS storages with items
+            // Pre-build set of storages already being transported (O(W) single pass)
+            var active_sources = std.AutoHashMap(GameId, void).init(self.allocator);
+            defer active_sources.deinit();
+            var w_scan = self.workers.iterator();
+            while (w_scan.next()) |w_entry| {
+                if (w_entry.value_ptr.transport_task) |task| {
+                    active_sources.put(task.from_storage_id, {}) catch return;
+                }
+            }
+
+            // Snapshot EOS storages with items (O(S) single pass)
             const EosEntry = struct { id: GameId, item_type: Item };
             var eos_snapshot: std.ArrayListUnmanaged(EosEntry) = .{};
             defer eos_snapshot.deinit(self.allocator);
@@ -583,18 +590,7 @@ pub fn Engine(
                 const storage = entry.value_ptr.*;
                 if (storage.role == .eos and storage.has_item) {
                     if (storage.item_type) |item_type| {
-                        // Skip if already being transported (a worker has this as from_storage_id)
-                        var already_assigned = false;
-                        var w_iter = self.workers.iterator();
-                        while (w_iter.next()) |w_entry| {
-                            if (w_entry.value_ptr.transport_task) |task| {
-                                if (task.from_storage_id == entry.key_ptr.*) {
-                                    already_assigned = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!already_assigned) {
+                        if (!active_sources.contains(entry.key_ptr.*)) {
                             eos_snapshot.append(self.allocator, .{ .id = entry.key_ptr.*, .item_type = item_type }) catch return;
                         }
                     }

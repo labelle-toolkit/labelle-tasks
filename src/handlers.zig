@@ -72,12 +72,17 @@ pub fn Handlers(
                 } });
             }
 
-            // Cancel any transport from this EOS
+            // Cancel any transport from this EOS and re-evaluate freed worker
             if (role == .eos) {
                 cancelTransportFromStorage(engine, storage_id);
             }
 
             engine.reevaluateAffectedWorkstations(storage_id);
+
+            // If an EIS or standalone just became empty, EOS items may now have a destination
+            if (role == .eis or role == .standalone) {
+                engine.evaluateTransports();
+            }
         }
 
         pub fn handleStorageCleared(engine: *EngineType, storage_id: GameId) anyerror!void {
@@ -130,7 +135,8 @@ pub fn Handlers(
                 return error.UnknownWorker;
             };
 
-            // Cancel transport task if active
+            // Cancel transport task if active (EOS item may need a new worker)
+            const had_transport = worker.transport_task != null;
             if (worker.transport_task) |task| {
                 cancelWorkerTransport(engine, worker, worker_id, task);
             }
@@ -154,11 +160,18 @@ pub fn Handlers(
             worker.state = .Unavailable;
             worker.assigned_workstation = null;
             engine.markWorkerBusy(worker_id);
+
+            // If a transport was cancelled, try to reassign the EOS item to another worker
+            if (had_transport) {
+                engine.evaluateTransports();
+            }
         }
 
         pub fn handleWorkerRemoved(engine: *EngineType, worker_id: GameId) anyerror!void {
+            var had_transport = false;
             if (engine.workers.getPtr(worker_id)) |worker| {
-                // Cancel transport task if active
+                // Cancel transport task if active (EOS item may need a new worker)
+                had_transport = worker.transport_task != null;
                 if (worker.transport_task) |task| {
                     cancelWorkerTransport(engine, worker, worker_id, task);
                 }
@@ -181,6 +194,11 @@ pub fn Handlers(
             _ = engine.transport_items.remove(worker_id);
             engine.removeWorkerTracking(worker_id);
             _ = engine.workers.remove(worker_id);
+
+            // If a transport was cancelled, try to reassign the EOS item to another worker
+            if (had_transport) {
+                engine.evaluateTransports();
+            }
         }
 
         // ============================================
@@ -257,6 +275,11 @@ pub fn Handlers(
             // Store the item type for delivery phase
             engine.transport_items.put(worker_id, item_type) catch {
                 log.err("transport_pickup_completed: failed to track item for worker {}", .{worker_id});
+                // Roll back: release worker so it doesn't get stuck
+                engine.releaseReservation(task.to_storage_id);
+                worker.transport_task = null;
+                worker.state = .Idle;
+                engine.markWorkerIdle(worker_id);
                 return error.OutOfMemory;
             };
 
@@ -298,15 +321,15 @@ pub fn Handlers(
 
                 // Try to find a new destination
                 if (engine.findDestinationForItem(item_type)) |new_dest| {
-                    // Re-route: update task, reserve new destination, dispatch new transport_started
+                    // Re-route: worker is at the full destination, redirect to new one
                     worker.transport_task = .{
-                        .from_storage_id = task.from_storage_id,
+                        .from_storage_id = task.to_storage_id,
                         .to_storage_id = new_dest,
                     };
                     engine.reserveStorage(new_dest, worker_id);
                     engine.dispatcher.dispatch(.{ .transport_started = .{
                         .worker_id = worker_id,
-                        .from_storage_id = task.from_storage_id,
+                        .from_storage_id = task.to_storage_id,
                         .to_storage_id = new_dest,
                         .item = item_type,
                     } });
@@ -321,13 +344,7 @@ pub fn Handlers(
                     .item = item_type,
                 } });
 
-                worker.transport_task = null;
-                _ = engine.transport_items.remove(worker_id);
-                worker.state = .Idle;
-                engine.markWorkerIdle(worker_id);
-                engine.evaluateDanglingItems();
-                if (worker.state == .Idle) engine.tryAssignWorkers();
-                if (worker.state == .Idle) engine.evaluateTransports();
+                releaseTransportWorker(engine, worker, worker_id);
                 return;
             }
 
@@ -345,16 +362,23 @@ pub fn Handlers(
                 .item = item_type,
             } });
 
-            // Clean up worker
+            // Re-evaluate: destination may enable a workstation
+            engine.reevaluateAffectedWorkstations(task.to_storage_id);
+
+            // Clean up worker and re-evaluate for new tasks
+            releaseTransportWorker(engine, worker, worker_id);
+        }
+
+        // ============================================
+        // Transport worker helpers
+        // ============================================
+
+        /// Clear transport state from a worker and re-evaluate for new tasks.
+        fn releaseTransportWorker(engine: *EngineType, worker: *WorkerData, worker_id: GameId) void {
             worker.transport_task = null;
             _ = engine.transport_items.remove(worker_id);
             worker.state = .Idle;
             engine.markWorkerIdle(worker_id);
-
-            // Re-evaluate: destination may enable a workstation
-            engine.reevaluateAffectedWorkstations(task.to_storage_id);
-
-            // Try to assign worker to new tasks
             engine.evaluateDanglingItems();
             if (worker.state == .Idle) engine.tryAssignWorkers();
             if (worker.state == .Idle) engine.evaluateTransports();
@@ -382,8 +406,10 @@ pub fn Handlers(
         }
 
         /// Cancel any transport that uses a given storage as its source.
+        /// Re-evaluates the freed worker for other tasks.
         fn cancelTransportFromStorage(engine: *EngineType, storage_id: GameId) void {
             // Find worker with transport_task.from_storage_id == storage_id
+            var found_worker: ?GameId = null;
             var iter = engine.workers.iterator();
             while (iter.next()) |entry| {
                 const wid = entry.key_ptr.*;
@@ -393,10 +419,17 @@ pub fn Handlers(
                         cancelWorkerTransport(engine, worker, wid, task);
                         worker.state = .Idle;
                         engine.markWorkerIdle(wid);
-                        // Don't re-evaluate here — caller handles it
+                        found_worker = wid;
                         break; // Only one worker per EOS transport
                     }
                 }
+            }
+
+            // Re-evaluate freed worker for other tasks
+            if (found_worker != null) {
+                engine.evaluateDanglingItems();
+                engine.tryAssignWorkers();
+                engine.evaluateTransports();
             }
         }
     };

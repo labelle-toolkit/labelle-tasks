@@ -45,7 +45,7 @@ pub fn StepHandlers(
                 // Dispatch store_started to move worker to EIS
                 engine.dispatcher.dispatch(.{ .store_started = .{
                     .worker_id = worker_id,
-                    .storage_id = task.target_eis_id,
+                    .storage_id = task.target_storage_id,
                     .item = item_type,
                 } });
                 return;
@@ -220,7 +220,7 @@ pub fn StepHandlers(
                 };
 
                 // Update EIS state - now has the item
-                if (engine.storages.getPtr(task.target_eis_id)) |storage| {
+                if (engine.storages.getPtr(task.target_storage_id)) |storage| {
                     storage.has_item = true;
                     storage.item_type = item_type;
                 }
@@ -230,14 +230,14 @@ pub fn StepHandlers(
                     .worker_id = worker_id,
                     .item_id = task.item_id,
                     .item_type = item_type,
-                    .storage_id = task.target_eis_id,
+                    .storage_id = task.target_storage_id,
                 } });
 
                 // Remove from dangling items tracking
                 engine.removeDanglingItem(task.item_id);
 
                 // Release storage reservation
-                engine.releaseReservation(task.target_eis_id);
+                engine.releaseReservation(task.target_storage_id);
 
                 // Clear worker task and set to idle
                 worker.dangling_task = null;
@@ -351,6 +351,9 @@ pub fn StepHandlers(
                             } });
                         }
                     }
+
+                    // EOS just got an item — other idle workers may transport it
+                    engine.evaluateTransports();
                 } else {
                     // Can't continue — release worker normally
                     ws.assigned_worker = null;
@@ -365,10 +368,8 @@ pub fn StepHandlers(
                     // Try to assign workers to workstations first
                     engine.tryAssignWorkers();
 
-                    // If worker is still idle, try EOS transport
-                    if (worker.state == .Idle) {
-                        engine.evaluateTransports();
-                    }
+                    // EOS just got an item — try transport (all idle workers, not just this one)
+                    engine.evaluateTransports();
                 }
             } else {
                 // More items to store
@@ -392,6 +393,9 @@ pub fn StepHandlers(
                         } });
                     }
                 }
+
+                // Previous EOS just got an item — other idle workers may transport it
+                engine.evaluateTransports();
             }
         }
     };

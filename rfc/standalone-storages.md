@@ -145,11 +145,12 @@ New field on `WorkerData`, similar to `dangling_task`:
 
 ```zig
 transport_task: ?struct {
-    from_storage_id: GameId,   // EOS being picked from
+    from_storage_id: GameId,   // EOS being picked from (or current position on re-route)
     to_storage_id: GameId,     // destination (EIS or standalone)
-    item_type: Item,
 } = null,
 ```
+
+The transported item type is tracked separately in `transport_items: AutoHashMap(GameId, Item)` (keyed by worker_id), set on pickup and cleared on delivery. This avoids making `WorkerData` generic over `Item`.
 
 A worker with a `transport_task` is in `.Working` state and won't be assigned to workstations or dangling pickups.
 
@@ -196,7 +197,7 @@ transport_cancelled: struct {
     worker_id: GameId,
     from_storage_id: GameId,
     to_storage_id: GameId,
-    item: Item,
+    item: ?Item,  // null if item type unknown at cancellation time
 },
 ```
 

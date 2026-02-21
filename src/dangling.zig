@@ -45,7 +45,7 @@ pub fn DanglingManager(
             return null;
         }
 
-        /// Find an empty EIS that accepts the given item type, excluding reserved ones.
+        /// Find an empty EIS that accepts the given item type, excluding specific storages.
         /// Returns null if no suitable EIS found.
         /// Note: Does not check reservations — use findDestinationForItem for reservation-aware routing.
         pub fn findEmptyEisForItemExcluding(engine: *const EngineType, item_type: Item, excluded: *const std.AutoHashMap(GameId, void)) ?GameId {
@@ -163,7 +163,7 @@ pub fn DanglingManager(
                     engine.markWorkerBusy(worker_id);
                     worker.dangling_task = .{
                         .item_id = item_id,
-                        .target_eis_id = target,
+                        .target_storage_id = target,
                     };
 
                     // Reserve the destination storage
@@ -173,7 +173,7 @@ pub fn DanglingManager(
                         .worker_id = worker_id,
                         .item_id = item_id,
                         .item_type = item_type,
-                        .target_eis_id = target,
+                        .target_storage_id = target,
                     } });
 
                     for (idle_buf.items, 0..) |id, i| {

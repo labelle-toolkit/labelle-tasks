@@ -37,7 +37,7 @@ pub fn WorkerData(comptime GameId: type) type {
         /// Dangling item delivery task (if worker is delivering a dangling item)
         dangling_task: ?struct {
             item_id: GameId,
-            target_eis_id: GameId,
+            target_storage_id: GameId,
         } = null,
 
         /// Transport task (if worker is transporting an item between storages)

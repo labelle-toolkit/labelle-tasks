@@ -68,7 +68,7 @@ pub fn TaskHookPayload(comptime GameId: type, comptime Item: type) type {
             worker_id: GameId,
             item_id: GameId,
             item_type: Item,
-            target_eis_id: GameId,
+            target_storage_id: GameId,
         },
 
         // Item delivery (when any item is placed in storage)

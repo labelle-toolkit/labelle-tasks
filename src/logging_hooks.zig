@@ -89,11 +89,11 @@ pub const LoggingHooks = struct {
     }
 
     pub fn pickup_dangling_started(payload: anytype) void {
-        std.log.info("[TaskEngine] pickup_dangling_started: worker={d}, item={d}, item_type={}, target_eis={d}", .{
+        std.log.info("[TaskEngine] pickup_dangling_started: worker={d}, item={d}, item_type={}, target_storage={d}", .{
             payload.worker_id,
             payload.item_id,
             payload.item_type,
-            payload.target_eis_id,
+            payload.target_storage_id,
         });
     }
 
@@ -144,10 +144,11 @@ pub const LoggingHooks = struct {
     }
 
     pub fn transport_cancelled(payload: anytype) void {
-        std.log.info("[TaskEngine] transport_cancelled: worker={d}, from={d}, to={d}", .{
+        std.log.info("[TaskEngine] transport_cancelled: worker={d}, from={d}, to={d}, item={?}", .{
             payload.worker_id,
             payload.from_storage_id,
             payload.to_storage_id,
+            payload.item,
         });
     }
 };
