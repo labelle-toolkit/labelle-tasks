@@ -357,6 +357,10 @@ pub fn createEngineHooks(
         pub fn cycle_completed(payload: anytype) void { dispatch("cycle_completed", payload); }
         pub fn transport_started(payload: anytype) void { dispatch("transport_started", payload); }
         pub fn transport_completed(payload: anytype) void { dispatch("transport_completed", payload); }
+        pub fn standalone_item_added(payload: anytype) void { dispatch("standalone_item_added", payload); }
+        pub fn standalone_item_removed(payload: anytype) void { dispatch("standalone_item_removed", payload); }
+        pub fn transport_rerouted(payload: anytype) void { dispatch("transport_rerouted", payload); }
+        pub fn transport_cancelled(payload: anytype) void { dispatch("transport_cancelled", payload); }
         pub fn input_consumed(payload: anytype) void { dispatch("input_consumed", payload); }
     };
 
