@@ -1,4 +1,4 @@
-# RFC: Standalone Storages
+# RFC: Standalone Storages & Engine-Driven Transport
 
 **Status**: Draft
 **Issue**: [#78](https://github.com/labelle-toolkit/labelle-tasks/issues/78)
@@ -6,40 +6,51 @@
 
 ## Problem
 
-Every storage in labelle-tasks must belong to a workstation. Storages are registered with `addStorage()` but only participate in the workflow when linked to a workstation via `addWorkstation()` or `attachStorageToWorkstation()`. This forces the game to create dummy workstations for common game patterns where items need a place to rest without being processed.
+Two problems that are closely related:
 
-Real examples from the bakery game:
+### 1. Storages must belong to a workstation
 
-1. **Shelf / display case** — Bread sits on a shelf for customers to buy. There's no workstation involved; the shelf is just a place to hold items. Today we use EOS attached to a workstation, but the shelf has nothing to do with the oven workflow.
+Every storage in labelle-tasks must be linked to a workstation. This forces the game to create dummy workstations for common patterns where items just need a place to rest.
 
-2. **Dangling item delivery** — When a dangling Flour appears in the world, the engine looks for an empty EIS to deliver it to (`findEmptyEisForItem`). But what if we want workers to deliver items to a shelf that isn't part of any workstation? Currently impossible — `findEmptyEisForItem` only searches storages with `role == .eis`.
+Examples from the bakery game:
 
-3. **Supply depot** — A pantry or warehouse that feeds multiple workstations. Today you'd register separate EIS per workstation. But a shared pantry that any workstation can pull from doesn't exist as a concept.
+- **Shelf / display case** — Bread sits on a shelf for customers. No workstation involved.
+- **Dangling item delivery** — `findEmptyEisForItem` only searches EIS storages. A standalone shelf can't receive dangling items.
+- **Supply depot** — A shared pantry feeding multiple workstations doesn't exist as a concept.
+
+### 2. EOS transport is game-side logic
+
+When an item lands on an EOS, the engine doesn't know what to do with it. The bakery game's `eos_transport.zig` script polls every frame for idle workers and EOS items, then manually pairs them with matching EIS storages. This means:
+
+- The engine decides **everything** about the workstation workflow (Pickup → Process → Store) but then drops the item on the EOS and walks away.
+- The game must reimplement worker assignment, distance-based selection, and storage matching — logic the engine already has.
+- The engine can't enforce routing priorities (e.g., EIS over standalone) because it doesn't drive the transport.
 
 ## Goal
 
-Introduce **standalone storages** — storages that are not attached to any workstation but still participate in the task engine's item tracking, dangling item delivery, and optionally feed workstations as supply sources.
+1. Introduce **standalone storages** — storages not attached to any workstation.
+2. Move **EOS transport into the engine** — the engine decides where items go after landing on an EOS, assigns workers, and tells the game where to send them.
 
 ## Current Architecture
 
 ```
-Storage ──(role: eis/iis/ios/eos)──> Workstation
-                                      │
-                                      ├── eis[] (input sources)
-                                      ├── iis[] (input buffers)
-                                      ├── ios[] (output buffers)
-                                      └── eos[] (output destinations)
+Workstation workflow (engine-driven):
+  EIS ──Pickup──> IIS ──Process──> IOS ──Store──> EOS
+                                                    │
+                                                    ▼
+                                              Game takes over
+                                              (eos_transport.zig)
+                                                    │
+                                                    ▼
+                                                   EIS
 
-Dangling items ──findEmptyEisForItem──> only EIS storages
+Dangling items (engine-driven):
+  World item ──pickup_dangling_started──> EIS
 ```
-
-All storages have a `StorageRole` (eis/iis/ios/eos). The reverse index `storage_to_workstations` maps each storage to its parent workstation(s). A storage with no entry in the reverse index is effectively inert — it holds state but nothing in the engine reads or writes it beyond `item_added`/`item_removed` events.
 
 ## Proposed Design
 
 ### New storage role: `.standalone`
-
-Add a new variant to `StorageRole`:
 
 ```zig
 pub const StorageRole = enum {
@@ -61,21 +72,19 @@ try engine.addStorage(shelf_id, .{
 });
 ```
 
-No workstation attachment needed. The storage appears in `engine.storages` and responds to `item_added`/`item_removed` events like any other storage.
+No workstation attachment needed.
+
+---
 
 ### Behavior 1: Passive shelf
 
-A standalone storage holds one item. The game manages all transfers via `handle(.item_added)` and `handle(.item_removed)`. The engine tracks `has_item` and `item_type` as usual.
+A standalone storage holds one item. The game manages transfers via `handle(.item_added)` / `handle(.item_removed)`. The engine tracks `has_item` and `item_type` as usual.
 
-This is the base behavior — it works today with a minor change (allowing `addStorage` without linking to a workstation and using the `.standalone` role).
+This is the base behavior — works today with the new `.standalone` role.
 
 ### Behavior 2: Dangling item sink
 
-When a dangling item appears, the engine currently calls `findEmptyEisForItem()` which only looks at `.eis` storages. Standalone storages should also be valid delivery targets for dangling items.
-
-Change `findEmptyEisForItem` (and `findEmptyEisForItemExcluding`) to also consider `.standalone` storages that accept the item type — but only as a fallback when no EIS is available.
-
-**Delivery priority rule**: Workstation storages (EIS) always take precedence over standalone storages. The engine first looks for an empty EIS that accepts the item. Only when no EIS is available does it fall back to standalone storages.
+`findEmptyEisForItem` (and `findEmptyEisForItemExcluding`) expanded to consider `.standalone` storages — but only as a fallback when no EIS is available.
 
 ```zig
 // Two-pass search:
@@ -86,32 +95,159 @@ if (storage.role == .eis and !storage.has_item) { ... }
 if (storage.role == .standalone and !storage.has_item) { ... }
 ```
 
-This means a standalone shelf accepting `.Bread` could receive a dangling Bread item via worker delivery, but only when no workstation EIS wants that Bread. The existing `pickup_dangling_started` / `store_started` / `item_delivered` hook flow is reused.
-
-**Within the same tier** (EIS-to-EIS or standalone-to-standalone), the `priority` field breaks ties as usual — highest priority wins.
+Reuses the existing `pickup_dangling_started` / `store_started` / `item_delivered` hook flow.
 
 ### Behavior 3: Supply source
 
-Workstations can reference standalone storages as external input sources. A standalone storage acts like a shared pantry — multiple workstations can list the same standalone storage in their `.eis` list.
+Workstations can reference standalone storages in their `.eis` list. Already works mechanically — `addWorkstation` accepts any storage ID, the reverse index maps it, and `reevaluateAffectedWorkstations` fires when the standalone storage gets an item.
 
-This already works mechanically: `addWorkstation` accepts any storage ID in its `.eis` list regardless of role. The reverse index maps the standalone storage to all workstations that reference it. When the standalone storage receives an item (`item_added`), `reevaluateAffectedWorkstations` fires and those workstations may transition to Queued.
+### Behavior 4: Engine-driven EOS transport
 
-The only gap: `selectEis` currently picks the highest-priority EIS with an item. It already works on arbitrary storage IDs (it reads from `ws.eis.items`), so a standalone storage listed in a workstation's EIS list will be selected if it has the highest priority and contains an item. No change needed.
+**This is the new major behavior.** When an item lands on an EOS, the engine takes responsibility for routing it to a destination and assigning a worker.
 
-**Cycle**: Worker picks up from standalone storage (clearing it) → item flows through IIS → processing → IOS → EOS. The standalone storage is now empty and can receive new items (from dangling delivery, game events, or another worker).
+#### Flow
 
-### Delivery priority rule (summary)
+```
+Store completed → EOS has item
+                    │
+                    ▼
+            Engine finds destination:
+              1. Empty EIS that accepts item type (highest priority)
+              2. Empty standalone that accepts item type (fallback)
+              3. No destination → item stays on EOS (no transport)
+                    │
+                    ▼
+            Engine finds idle worker (nearest to EOS)
+                    │
+                    ▼
+            Dispatch: transport_started
+            (worker_id, from=EOS, to=destination, item)
+                    │
+                    ▼
+            Game moves worker to EOS
+            Game calls: handle(.transport_pickup_completed)
+                    │
+                    ▼
+            Engine updates: EOS cleared, worker carrying item
+            Dispatch: transport_carrying
+            (worker_id, to=destination, item)
+                    │
+                    ▼
+            Game moves worker to destination
+            Game calls: handle(.transport_delivery_completed)
+                    │
+                    ▼
+            Engine updates: destination has item, worker idle
+            Dispatch: transport_completed
+            Re-evaluate workstations (destination may now enable a workstation)
+            Re-evaluate EOS (more items may need transport)
+```
 
-The same principle applies everywhere items are routed:
+#### Worker state
+
+New field on `WorkerData`, similar to `dangling_task`:
+
+```zig
+transport_task: ?struct {
+    from_storage_id: GameId,   // EOS being picked from
+    to_storage_id: GameId,     // destination (EIS or standalone)
+    item_type: Item,
+} = null,
+```
+
+A worker with a `transport_task` is in `.Working` state and won't be assigned to workstations or dangling pickups.
+
+#### New game → engine events
+
+```zig
+// Game notifies engine when worker arrives at EOS and picks up item
+transport_pickup_completed: struct {
+    worker_id: GameId,
+},
+
+// Game notifies engine when worker arrives at destination and drops off item
+transport_delivery_completed: struct {
+    worker_id: GameId,
+},
+```
+
+#### New engine → game hooks
+
+The existing `transport_started` and `transport_completed` hooks are already defined but never dispatched. Now they will be. Adding `transport_carrying` for the mid-point:
+
+```zig
+// Already exists — now dispatched by engine
+transport_started: struct {
+    worker_id: GameId,
+    from_storage_id: GameId,
+    to_storage_id: GameId,
+    item: Item,
+},
+
+// New — dispatched after pickup, worker heading to destination
+transport_carrying: struct {
+    worker_id: GameId,
+    to_storage_id: GameId,
+    item: Item,
+},
+
+// Already exists — now dispatched by engine
+transport_completed: struct {
+    worker_id: GameId,
+    to_storage_id: GameId,
+    item: Item,
+},
+```
+
+#### Trigger: when does transport evaluation happen?
+
+The engine evaluates EOS transport when:
+
+1. **`store_completed`** — workstation cycle ends, item just landed on EOS
+2. **`item_added` on an EOS** — game manually places item on EOS
+3. **`worker_available`** — idle worker appears, check if any EOS items need transport
+4. **`transport_delivery_completed`** — worker just finished a transport, check for more
+
+#### Destination selection: `findDestinationForItem`
+
+New internal function, shared by dangling delivery and EOS transport:
+
+```zig
+fn findDestinationForItem(engine: *EngineType, item_type: Item, excluded: ...) ?GameId {
+    // Pass 1: empty EIS that accepts item_type (highest priority wins)
+    // Pass 2: empty standalone that accepts item_type (highest priority wins)
+    // Returns null if nothing found
+}
+```
+
+This replaces `findEmptyEisForItem` and becomes the single routing function for all item delivery.
+
+#### What happens when no destination is found?
+
+The item stays on the EOS. The engine re-evaluates when:
+- A new storage is registered (`addStorage`)
+- A storage becomes empty (`item_removed`)
+- A worker becomes available (`worker_available`)
+
+No polling needed — the engine is event-driven.
+
+---
+
+### Delivery priority rule
+
+The same rule applies everywhere the engine routes items:
 
 | Scenario | Priority order |
 |----------|---------------|
 | Dangling item needs a destination | EIS first, then standalone |
 | EOS item needs onward transport | EIS first, then standalone |
+| Worker available, items waiting | EIS first, then standalone |
 
-Workstation storages always win. Standalone storages are the fallback — they absorb overflow when all workstation inputs are full.
+**Within the same tier** (EIS-to-EIS or standalone-to-standalone), the `priority` field breaks ties — highest priority wins. If tied, nearest to worker wins (via `findNearest`).
 
-### Hook changes
+---
+
+### Hook changes (standalone-specific)
 
 **New hook**: `standalone_item_added`
 
@@ -122,8 +258,6 @@ standalone_item_added: struct {
 },
 ```
 
-Emitted when an item is placed in a standalone storage via `item_added` (after updating state). This lets the game react specifically to standalone storage fills — e.g., showing a visual indicator on the shelf.
-
 **New hook**: `standalone_item_removed`
 
 ```zig
@@ -132,26 +266,17 @@ standalone_item_removed: struct {
 },
 ```
 
-Emitted when an item is removed from a standalone storage. Lets the game clear visuals or trigger restock logic.
-
-These hooks only fire for `.standalone` role storages. Existing EIS/IIS/IOS/EOS storages are unaffected.
+Only fire for `.standalone` role storages.
 
 ### Query API additions
 
 ```zig
-/// Get all standalone storages that accept a given item type
 pub fn getStandaloneStoragesForItem(self: *const Self, item_type: Item) []GameId
-
-/// Get all standalone storages (allocated, caller frees)
 pub fn getStandaloneStorages(self: *const Self) []GameId
-
-/// Check if a storage is standalone
 pub fn isStandalone(self: *const Self, storage_id: GameId) bool
 ```
 
 ## .zon format
-
-In scenario files:
 
 ```zig
 .storages = .{
@@ -160,19 +285,19 @@ In scenario files:
 },
 ```
 
-In workstation configs, standalone storages can be referenced as EIS:
+Standalone storages can also be referenced in workstation `.eis` lists:
 
 ```zig
 .workstations = .{
     .{ .id = 100, .eis = .{ 10 }, .iis = .{ 20 }, .ios = .{ 30 }, .eos = .{ 40 } },
     .{ .id = 101, .eis = .{ 10 }, .iis = .{ 21 }, .ios = .{ 31 }, .eos = .{ 41 } },
-    // Both workstations share standalone storage 10 as input source
+    // Both share standalone storage 10 as input source
 },
 ```
 
 ## labelle-engine integration
 
-In the bakery game, a standalone storage is represented by a prefab with a `Storage` component:
+Standalone storage prefab:
 
 ```zig
 // prefabs/shelf.zon
@@ -185,30 +310,34 @@ In the bakery game, a standalone storage is represented by a prefab with a `Stor
 }
 ```
 
-The `Storage` component's `onAdd` callback already calls `engine.addStorage()`. The new `.standalone` role flows through the same path.
+The `Storage` component's `onAdd` callback already calls `engine.addStorage()`. The `.standalone` role flows through the same path.
 
-## State ownership (unchanged principle)
+**Bakery game migration**: The `eos_transport.zig` script can be deleted. The engine handles EOS→EIS/standalone routing natively. The game just needs to handle the transport hooks (move worker to source, then to destination).
+
+## State ownership
 
 | State | Owner |
 |-------|-------|
 | `has_item`, `item_type`, `role`, `accepts`, `priority` | Task Engine |
+| Transport routing (which EOS → which destination) | Task Engine |
+| Worker assignment for transport | Task Engine |
 | Entity references, positions, sprites | Game |
-| When to add/remove items from standalone storage | Game (via `handle()`) |
-| Dangling delivery to standalone | Task Engine (automatic) |
+| Moving worker to source/destination | Game (via transport hooks) |
+| When to manually add/remove items from standalone | Game (via `handle()`) |
 
 ## Files to modify
 
 | File | Change |
 |------|--------|
-| `src/state.zig` | Add `.standalone` to `StorageRole` enum |
-| `src/dangling.zig` | Include `.standalone` in `findEmptyEisForItem` and `findEmptyEisForItemExcluding` |
-| `src/handlers.zig` | Emit `standalone_item_added` / `standalone_item_removed` hooks in `handleItemAdded` / `handleItemRemoved` |
-| `src/hooks.zig` | Add `standalone_item_added` and `standalone_item_removed` to `TaskHookPayload` and `HookDispatcher` and `RecordingHooks` |
-| `src/engine.zig` | Add query methods (`getStandaloneStorages`, `isStandalone`, etc.) |
-| `test/` | Add standalone storage specs |
+| `src/state.zig` | Add `.standalone` to `StorageRole`, add `transport_task` to `WorkerData` |
+| `src/engine.zig` | Add `findDestinationForItem`, transport evaluation trigger points, query methods |
+| `src/dangling.zig` | Use `findDestinationForItem` instead of `findEmptyEisForItem` |
+| `src/handlers.zig` | Add `handleTransportPickupCompleted` / `handleTransportDeliveryCompleted`, emit standalone hooks, trigger transport eval in `handleStoreCompleted` / `handleItemAdded` / `handleWorkerAvailable` |
+| `src/hooks.zig` | Add `transport_carrying`, `standalone_item_added`, `standalone_item_removed`, `transport_pickup_completed`, `transport_delivery_completed` to payloads + dispatcher + recording hooks |
+| `test/` | Add standalone storage specs, EOS transport specs |
 
 ## Out of scope
 
-- **Multi-item standalone storage** (capacity > 1) — keep the one-item-per-storage invariant for now. Use multiple standalone storages for higher capacity.
-- **Automatic restocking** (engine pulls from external source into standalone) — the game controls when items enter standalone storages.
-- **Standalone-to-standalone transfers** — workers only transport between storages when the engine assigns the task (dangling delivery or workstation workflow). Direct standalone-to-standalone is game logic.
+- **Multi-item standalone storage** (capacity > 1) — keep the one-item-per-storage invariant. Use multiple standalone storages for higher capacity.
+- **Standalone-to-standalone transfers** — engine only routes from EOS or dangling items. Direct standalone-to-standalone is game logic.
+- **Chained transport** (EOS → standalone → EIS) — items delivered to standalone stay there until the game or a workstation EIS reference pulls them. No automatic forwarding.
