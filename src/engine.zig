@@ -13,6 +13,9 @@ const handlers_mod = @import("handlers.zig");
 const helpers_mod = @import("helpers.zig");
 const dangling_mod = @import("dangling.zig");
 const bridge_mod = @import("bridge.zig");
+const registration_mod = @import("registration.zig");
+const query_mod = @import("query.zig");
+const step_handlers_mod = @import("step_handlers.zig");
 
 // Re-export types for convenience
 pub const WorkerState = types.WorkerState;
@@ -48,6 +51,9 @@ pub fn Engine(
         const EngineHelpers = helpers_mod.Helpers(GameId, Item, Self);
         const DanglingMgr = dangling_mod.DanglingManager(GameId, Item, Self);
         const BridgeFns = bridge_mod.VTableBridge(GameId, Item, Self);
+        const Reg = registration_mod.Registration(GameId, Item, Self);
+        const QueryAPI = query_mod.Query(GameId, Item, Self);
+        const StepHandlers = step_handlers_mod.StepHandlers(GameId, Item, Self);
 
         // State maps
         allocator: Allocator,
@@ -113,136 +119,35 @@ pub fn Engine(
         }
 
         // ============================================
-        // Registration API
+        // Registration API (delegated to registration.zig)
         // ============================================
 
-        // Re-export StorageRole for convenience
-        pub const StorageRole = state_mod.StorageRole;
+        pub const StorageRole = Reg.StorageRole;
+        pub const StorageConfig = Reg.StorageConfig;
+        pub const WorkstationConfig = Reg.WorkstationConfig;
 
-        /// Storage configuration for registration
-        pub const StorageConfig = struct {
-            role: StorageRole = .eis,
-            accepts: ?Item = null, // null = accepts any item type
-            initial_item: ?Item = null,
-            priority: Priority = .Normal,
-        };
-
-        /// Register a storage with the engine
         pub fn addStorage(self: *Self, storage_id: GameId, config: StorageConfig) !void {
-            try self.storages.put(storage_id, .{
-                .has_item = config.initial_item != null,
-                .item_type = config.initial_item,
-                .role = config.role,
-                .accepts = config.accepts,
-                .priority = config.priority,
-            });
-
-            if (config.role == .eis and config.initial_item == null) {
-                self.evaluateDanglingItems();
-            }
+            return Reg.addStorage(self, storage_id, config);
         }
 
-        /// Register a worker with the engine
         pub fn addWorker(self: *Self, worker_id: GameId) !void {
-            try self.workers.put(worker_id, .{});
-            errdefer _ = self.workers.remove(worker_id);
-            try self.idle_workers_set.put(worker_id, {});
+            return Reg.addWorker(self, worker_id);
         }
 
-        /// Workstation configuration for registration
-        pub const WorkstationConfig = struct {
-            eis: []const GameId = &.{},
-            iis: []const GameId = &.{},
-            ios: []const GameId = &.{},
-            eos: []const GameId = &.{},
-            priority: Priority = .Normal,
-        };
-
-        /// Register a workstation with the engine
         pub fn addWorkstation(self: *Self, workstation_id: GameId, config: WorkstationConfig) !void {
-            var eis = std.ArrayListUnmanaged(GameId){};
-            errdefer eis.deinit(self.allocator);
-            try eis.appendSlice(self.allocator, config.eis);
-
-            var iis = std.ArrayListUnmanaged(GameId){};
-            errdefer iis.deinit(self.allocator);
-            try iis.appendSlice(self.allocator, config.iis);
-
-            var ios = std.ArrayListUnmanaged(GameId){};
-            errdefer ios.deinit(self.allocator);
-            try ios.appendSlice(self.allocator, config.ios);
-
-            var eos = std.ArrayListUnmanaged(GameId){};
-            errdefer eos.deinit(self.allocator);
-            try eos.appendSlice(self.allocator, config.eos);
-
-            try self.workstations.put(workstation_id, .{
-                .eis = eis,
-                .iis = iis,
-                .ios = ios,
-                .eos = eos,
-                .priority = config.priority,
-            });
-
-            const all_storages = [_][]const GameId{ config.eis, config.iis, config.ios, config.eos };
-            for (all_storages) |storage_ids| {
-                for (storage_ids) |sid| {
-                    self.addReverseIndexEntry(sid, workstation_id);
-                }
-            }
-
-            self.evaluateWorkstationStatus(workstation_id);
+            return Reg.addWorkstation(self, workstation_id, config);
         }
 
-        /// Remove a workstation from the engine
         pub fn removeWorkstation(self: *Self, workstation_id: GameId) void {
-            if (self.workstations.getPtr(workstation_id)) |ws| {
-                if (ws.assigned_worker) |worker_id| {
-                    if (self.workers.getPtr(worker_id)) |worker| {
-                        worker.state = .Idle;
-                        worker.assigned_workstation = null;
-                        self.markWorkerIdle(worker_id);
-                        self.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
-                    }
-                }
-            }
-            self.removeWorkstationTracking(workstation_id);
-            if (self.workstations.fetchRemove(workstation_id)) |kv| {
-                const all_storages = [_][]const GameId{ kv.value.eis.items, kv.value.iis.items, kv.value.ios.items, kv.value.eos.items };
-                for (all_storages) |storage_ids| {
-                    for (storage_ids) |sid| {
-                        self.removeReverseIndexEntry(sid, workstation_id);
-                    }
-                }
-                var ws = kv.value;
-                ws.deinit(self.allocator);
-            }
+            Reg.removeWorkstation(self, workstation_id);
         }
 
-        /// Attach a storage to a workstation dynamically.
-        /// This allows storages to register themselves with their parent workstation
-        /// using the parent reference convention (RFC #169).
         pub fn attachStorageToWorkstation(self: *Self, storage_id: GameId, workstation_id: GameId, role: StorageRole) !void {
-            const ws = self.workstations.getPtr(workstation_id) orelse {
-                std.log.warn("[tasks] attachStorageToWorkstation: workstation {d} not found", .{workstation_id});
-                return error.WorkstationNotFound;
-            };
-
-            const list = switch (role) {
-                .eis => &ws.eis,
-                .iis => &ws.iis,
-                .ios => &ws.ios,
-                .eos => &ws.eos,
-            };
-            try list.append(self.allocator, storage_id);
-
-            self.addReverseIndexEntry(storage_id, workstation_id);
-            self.evaluateWorkstationStatus(workstation_id);
+            return Reg.attachStorageToWorkstation(self, storage_id, workstation_id, role);
         }
 
-        /// Set the callback for worker selection
         pub fn setFindBestWorker(self: *Self, callback: *const fn (workstation_id: ?GameId, available_workers: []const GameId) ?GameId) void {
-            self.find_best_worker_fn = callback;
+            Reg.setFindBestWorker(self, callback);
         }
 
         // ============================================
@@ -261,9 +166,9 @@ pub fn Engine(
                 .workstation_enabled => |p| EventHandlers.handleWorkstationEnabled(self, p.workstation_id),
                 .workstation_disabled => |p| EventHandlers.handleWorkstationDisabled(self, p.workstation_id),
                 .workstation_removed => |p| EventHandlers.handleWorkstationRemoved(self, p.workstation_id),
-                .pickup_completed => |p| EventHandlers.handlePickupCompleted(self, p.worker_id),
-                .work_completed => |p| EventHandlers.handleWorkCompleted(self, p.workstation_id),
-                .store_completed => |p| EventHandlers.handleStoreCompleted(self, p.worker_id),
+                .pickup_completed => |p| StepHandlers.handlePickupCompleted(self, p.worker_id),
+                .work_completed => |p| StepHandlers.handleWorkCompleted(self, p.workstation_id),
+                .store_completed => |p| StepHandlers.handleStoreCompleted(self, p.worker_id),
             };
 
             result catch |err| {
@@ -302,7 +207,7 @@ pub fn Engine(
         }
 
         // ============================================
-        // Internal helpers (delegated)
+        // Internal helpers (delegated to helpers.zig)
         // ============================================
 
         pub fn evaluateWorkstationStatus(self: *Self, workstation_id: GameId) void {
@@ -355,7 +260,7 @@ pub fn Engine(
         // Reverse Index helpers
         // ============================================
 
-        fn addReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
+        pub fn addReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
             const gop = self.storage_to_workstations.getOrPut(storage_id) catch {
                 std.log.err("[tasks] addReverseIndexEntry: failed to allocate for storage {}", .{storage_id});
                 return;
@@ -371,7 +276,7 @@ pub fn Engine(
             };
         }
 
-        fn removeReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
+        pub fn removeReverseIndexEntry(self: *Self, storage_id: GameId, workstation_id: GameId) void {
             const list = self.storage_to_workstations.getPtr(storage_id) orelse return;
             for (list.items, 0..) |id, i| {
                 if (id == workstation_id) {
@@ -389,13 +294,11 @@ pub fn Engine(
         // Status tracking set operations
         // ============================================
 
-        /// Mark a worker as idle in the tracking set
         pub fn markWorkerIdle(self: *Self, worker_id: GameId) void {
             self.idle_workers_set.put(worker_id, {}) catch
                 @panic("markWorkerIdle: allocation failed, engine state is inconsistent");
         }
 
-        /// Mark a worker as non-idle in the tracking set
         pub fn markWorkerBusy(self: *Self, worker_id: GameId) void {
             _ = self.idle_workers_set.remove(worker_id);
         }
@@ -418,217 +321,60 @@ pub fn Engine(
         }
 
         // ============================================
-        // Query API
+        // Query API (delegated to query.zig)
         // ============================================
 
+        pub const StorageInfo = QueryAPI.StorageInfo;
+        pub const WorkerInfo = QueryAPI.WorkerInfo;
+        pub const WorkstationInfo = QueryAPI.WorkstationInfo;
+        pub const EngineCounts = QueryAPI.EngineCounts;
+
         pub fn getWorkerState(self: *const Self, worker_id: GameId) ?WorkerState {
-            const worker = self.workers.get(worker_id) orelse return null;
-            return worker.state;
+            return QueryAPI.getWorkerState(self, worker_id);
         }
 
         pub fn getWorkerCurrentStep(self: *const Self, worker_id: GameId) ?StepType {
-            const worker = self.workers.get(worker_id) orelse return null;
-            const ws_id = worker.assigned_workstation orelse return null;
-            const ws = self.workstations.get(ws_id) orelse return null;
-            return ws.current_step;
+            return QueryAPI.getWorkerCurrentStep(self, worker_id);
         }
 
         pub fn getWorkstationStatus(self: *const Self, workstation_id: GameId) ?WorkstationStatus {
-            const ws = self.workstations.get(workstation_id) orelse return null;
-            return ws.status;
+            return QueryAPI.getWorkstationStatus(self, workstation_id);
         }
 
         pub fn getStorageHasItem(self: *const Self, storage_id: GameId) ?bool {
-            const storage = self.storages.get(storage_id) orelse return null;
-            return storage.has_item;
+            return QueryAPI.getStorageHasItem(self, storage_id);
         }
 
         pub fn getStorageItemType(self: *const Self, storage_id: GameId) ?Item {
-            const storage = self.storages.get(storage_id) orelse return null;
-            return storage.item_type;
+            return QueryAPI.getStorageItemType(self, storage_id);
         }
 
-        // ============================================
-        // Introspection API
-        // ============================================
-
-        /// Full storage state snapshot for diagnostics
         pub fn getStorageInfo(self: *const Self, storage_id: GameId) ?StorageInfo {
-            const s = self.storages.get(storage_id) orelse return null;
-            return .{
-                .has_item = s.has_item,
-                .item_type = s.item_type,
-                .role = s.role,
-                .accepts = s.accepts,
-                .priority = s.priority,
-            };
+            return QueryAPI.getStorageInfo(self, storage_id);
         }
 
-        pub const StorageInfo = struct {
-            has_item: bool,
-            item_type: ?Item,
-            role: StorageRole,
-            accepts: ?Item,
-            priority: Priority,
-        };
-
-        /// Full worker state snapshot for diagnostics
         pub fn getWorkerInfo(self: *const Self, worker_id: GameId) ?WorkerInfo {
-            const w = self.workers.get(worker_id) orelse return null;
-            return .{
-                .state = w.state,
-                .assigned_workstation = w.assigned_workstation,
-                .has_dangling_task = w.dangling_task != null,
-            };
+            return QueryAPI.getWorkerInfo(self, worker_id);
         }
 
-        pub const WorkerInfo = struct {
-            state: WorkerState,
-            assigned_workstation: ?GameId,
-            has_dangling_task: bool,
-        };
-
-        /// Full workstation state snapshot for diagnostics
         pub fn getWorkstationInfo(self: *const Self, workstation_id: GameId) ?WorkstationInfo {
-            const ws = self.workstations.get(workstation_id) orelse return null;
-            return .{
-                .status = ws.status,
-                .assigned_worker = ws.assigned_worker,
-                .current_step = ws.current_step,
-                .cycles_completed = ws.cycles_completed,
-                .priority = ws.priority,
-                .eis_count = ws.eis.items.len,
-                .iis_count = ws.iis.items.len,
-                .ios_count = ws.ios.items.len,
-                .eos_count = ws.eos.items.len,
-            };
+            return QueryAPI.getWorkstationInfo(self, workstation_id);
         }
 
-        pub const WorkstationInfo = struct {
-            status: WorkstationStatus,
-            assigned_worker: ?GameId,
-            current_step: StepType,
-            cycles_completed: u32,
-            priority: Priority,
-            eis_count: usize,
-            iis_count: usize,
-            ios_count: usize,
-            eos_count: usize,
-        };
-
-        /// Check if a storage is full (has an item)
         pub fn isStorageFull(self: *const Self, storage_id: GameId) bool {
-            const storage = self.storages.get(storage_id) orelse return false;
-            return storage.has_item;
+            return QueryAPI.isStorageFull(self, storage_id);
         }
 
-        /// Get the workstation a worker is assigned to (if any)
         pub fn getWorkerAssignment(self: *const Self, worker_id: GameId) ?GameId {
-            const worker = self.workers.get(worker_id) orelse return null;
-            return worker.assigned_workstation;
+            return QueryAPI.getWorkerAssignment(self, worker_id);
         }
 
-        /// Entity counts for quick overview
-        pub const EngineCounts = struct {
-            storages: usize,
-            workers: usize,
-            workstations: usize,
-            dangling_items: usize,
-            idle_workers: usize,
-            queued_workstations: usize,
-        };
-
-        /// Get entity counts for quick diagnostics
         pub fn getCounts(self: *const Self) EngineCounts {
-            return .{
-                .storages = self.storages.count(),
-                .workers = self.workers.count(),
-                .workstations = self.workstations.count(),
-                .dangling_items = self.dangling_items.count(),
-                .idle_workers = self.idle_workers_set.count(),
-                .queued_workstations = self.queued_workstations_set.count(),
-            };
+            return QueryAPI.getCounts(self);
         }
 
-        /// Dump engine state to a writer for diagnostics.
-        /// Output is sorted by entity ID for deterministic results.
         pub fn dumpState(self: *const Self, writer: anytype) !void {
-            const counts = self.getCounts();
-            try writer.print("=== Task Engine State ===\n", .{});
-            try writer.print("Storages: {d}  Workers: {d}  Workstations: {d}  Dangling: {d}\n", .{
-                counts.storages, counts.workers, counts.workstations, counts.dangling_items,
-            });
-            try writer.print("Idle workers: {d}  Queued workstations: {d}\n\n", .{
-                counts.idle_workers, counts.queued_workstations,
-            });
-
-            // Storages (sorted by ID for deterministic output)
-            var s_keys: std.ArrayListUnmanaged(GameId) = .{};
-            defer s_keys.deinit(self.allocator);
-            var s_iter = self.storages.keyIterator();
-            while (s_iter.next()) |key| try s_keys.append(self.allocator, key.*);
-            std.mem.sort(GameId, s_keys.items, {}, std.sort.asc(GameId));
-            for (s_keys.items) |id| {
-                const s = self.storages.get(id).?;
-                try writer.print("  Storage {d}: role={s} has_item={} item={s} accepts={s} priority={s}\n", .{
-                    id,
-                    @tagName(s.role),
-                    s.has_item,
-                    if (s.item_type) |it| @tagName(it) else "none",
-                    if (s.accepts) |a| @tagName(a) else "any",
-                    @tagName(s.priority),
-                });
-            }
-
-            // Workers (sorted by ID)
-            var w_keys: std.ArrayListUnmanaged(GameId) = .{};
-            defer w_keys.deinit(self.allocator);
-            var w_iter = self.workers.keyIterator();
-            while (w_iter.next()) |key| try w_keys.append(self.allocator, key.*);
-            std.mem.sort(GameId, w_keys.items, {}, std.sort.asc(GameId));
-            for (w_keys.items) |id| {
-                const w = self.workers.get(id).?;
-                try writer.print("  Worker {d}: state={s} ws={?d} dangling={}\n", .{
-                    id,
-                    @tagName(w.state),
-                    w.assigned_workstation,
-                    w.dangling_task != null,
-                });
-            }
-
-            // Workstations (sorted by ID)
-            var ws_keys: std.ArrayListUnmanaged(GameId) = .{};
-            defer ws_keys.deinit(self.allocator);
-            var ws_iter = self.workstations.keyIterator();
-            while (ws_iter.next()) |key| try ws_keys.append(self.allocator, key.*);
-            std.mem.sort(GameId, ws_keys.items, {}, std.sort.asc(GameId));
-            for (ws_keys.items) |id| {
-                const ws = self.workstations.get(id).?;
-                try writer.print("  Workstation {d}: status={s} worker={?d} step={s} cycles={d} priority={s}\n", .{
-                    id,
-                    @tagName(ws.status),
-                    ws.assigned_worker,
-                    @tagName(ws.current_step),
-                    ws.cycles_completed,
-                    @tagName(ws.priority),
-                });
-                try writer.print("    EIS({d}) IIS({d}) IOS({d}) EOS({d})\n", .{
-                    ws.eis.items.len, ws.iis.items.len, ws.ios.items.len, ws.eos.items.len,
-                });
-            }
-
-            // Dangling items (sorted by ID)
-            if (self.dangling_items.count() > 0) {
-                var d_keys: std.ArrayListUnmanaged(GameId) = .{};
-                defer d_keys.deinit(self.allocator);
-                var d_iter = self.dangling_items.keyIterator();
-                while (d_iter.next()) |key| try d_keys.append(self.allocator, key.*);
-                std.mem.sort(GameId, d_keys.items, {}, std.sort.asc(GameId));
-                for (d_keys.items) |id| {
-                    const item_type = self.dangling_items.get(id).?;
-                    try writer.print("  Dangling {d}: type={s}\n", .{ id, @tagName(item_type) });
-                }
-            }
+            return QueryAPI.dumpState(self, writer);
         }
 
         // ============================================
@@ -665,37 +411,30 @@ pub fn Engine(
         // Dangling Items API (delegated to dangling.zig)
         // ============================================
 
-        /// Register a dangling item (item not in any storage) and try to assign a worker.
         pub fn addDanglingItem(self: *Self, item_id: GameId, item_type: Item) !void {
             return DanglingMgr.addDanglingItem(self, item_id, item_type);
         }
 
-        /// Remove a dangling item (picked up or despawned).
         pub fn removeDanglingItem(self: *Self, item_id: GameId) void {
             DanglingMgr.removeDanglingItem(self, item_id);
         }
 
-        /// Get the item type of a dangling item, or null if not found.
         pub fn getDanglingItemType(self: *const Self, item_id: GameId) ?Item {
             return DanglingMgr.getDanglingItemType(self, item_id);
         }
 
-        /// Find an empty EIS that accepts the given item type. Returns null if none found.
         pub fn findEmptyEisForItem(self: *const Self, item_type: Item) ?GameId {
             return DanglingMgr.findEmptyEisForItem(self, item_type);
         }
 
-        /// Find an empty EIS that accepts the given item type, excluding reserved ones. Returns null if none found.
         pub fn findEmptyEisForItemExcluding(self: *const Self, item_type: Item, excluded: *const std.AutoHashMap(GameId, void)) ?GameId {
             return DanglingMgr.findEmptyEisForItemExcluding(self, item_type, excluded);
         }
 
-        /// Get list of idle workers. Caller owns the returned slice and must free it.
         pub fn getIdleWorkers(self: *Self) ![]GameId {
             return DanglingMgr.getIdleWorkers(self);
         }
 
-        /// Evaluate dangling items and try to assign idle workers to pick them up.
         pub fn evaluateDanglingItems(self: *Self) void {
             DanglingMgr.evaluateDanglingItems(self);
         }
@@ -707,8 +446,6 @@ pub fn Engine(
         const ecs_bridge = @import("ecs_bridge.zig");
         pub const EcsInterface = ecs_bridge.EcsInterface(GameId, Item);
 
-        /// Get the ECS bridge interface for this engine.
-        /// Used by games to connect tasks components to the engine.
         pub fn interface(self: *Self) EcsInterface {
             return .{
                 .ptr = self,
