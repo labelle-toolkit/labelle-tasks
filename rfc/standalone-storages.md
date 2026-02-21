@@ -95,7 +95,7 @@ if (storage.role == .eis and !storage.has_item) { ... }
 if (storage.role == .standalone and !storage.has_item) { ... }
 ```
 
-Reuses the existing `pickup_dangling_started` / `store_started` / `item_delivered` hook flow.
+Reuses the existing `pickup_dangling_started` / `store_started` / `item_delivered` hook flow. The destination is reserved (see Storage Reservations) to prevent double-assignment.
 
 ### Behavior 3: Supply source
 
@@ -152,6 +152,64 @@ transport_task: ?struct {
 ```
 
 A worker with a `transport_task` is in `.Working` state and won't be assigned to workstations or dangling pickups.
+
+#### Storage reservations
+
+When the engine assigns a transport (or dangling delivery) to a destination storage, that storage is **reserved** — no other worker will target it. This prevents two workers from delivering to the same slot.
+
+New engine state:
+
+```zig
+/// Storages reserved as delivery destinations.
+/// Key: storage_id, Value: worker_id that holds the reservation.
+reserved_storages: std.AutoHashMap(GameId, GameId),
+```
+
+**Reserve** when:
+- Transport assigned: destination storage reserved for the transport worker
+- Dangling delivery assigned: target EIS/standalone reserved for the dangling worker (replaces the ephemeral `reserved_eis` set in `evaluateDanglingItems`)
+
+**Release** when:
+- `transport_delivery_completed` — delivery succeeded, storage now has item
+- `transport_pickup_completed` with re-route — if original destination is full, old reservation released, new one created
+- Worker released/removed — reservation cleared (worker died, became unavailable, etc.)
+- `transport_cancelled` — explicit cancellation (see below)
+
+**Effect on routing**: `findDestinationForItem` skips reserved storages, same as it skips full ones. A reserved storage is "spoken for" even though `has_item` is still false.
+
+#### Transport cancellation
+
+A transport can fail if:
+- The worker becomes unavailable (`worker_unavailable` / `worker_removed`)
+- The source EOS is emptied by the game before pickup (`item_removed` on the EOS)
+
+On cancellation:
+1. Reservation on destination released
+2. Worker's `transport_task` cleared
+3. If worker is still alive, set to Idle and re-evaluate
+4. If EOS still has item, re-evaluate for new transport assignment
+
+New hook (engine → game):
+
+```zig
+transport_cancelled: struct {
+    worker_id: GameId,
+    from_storage_id: GameId,
+    to_storage_id: GameId,
+    item: Item,
+},
+```
+
+Game uses this to stop the worker's movement and clean up any visual state (carried item sprite, etc.).
+
+#### Delivery to full destination (re-route)
+
+If a destination is full when `transport_delivery_completed` arrives (race condition — e.g., game manually placed an item via `item_added`):
+
+1. Release reservation on full destination
+2. Call `findDestinationForItem` for a new destination
+3. If found: update `transport_task`, reserve new destination, dispatch `transport_started` with new destination
+4. If not found: release worker to idle, item is "dangling" in the worker's hands — dispatch `transport_cancelled` so game can handle it (drop item, return to EOS, etc.)
 
 #### New game → engine events
 
@@ -312,6 +370,7 @@ The `Storage` component's `onAdd` callback already calls `engine.addStorage()`. 
 | `has_item`, `item_type`, `role`, `accepts`, `priority` | Task Engine |
 | Transport routing (which EOS → which destination) | Task Engine |
 | Worker assignment for transport | Task Engine |
+| Storage reservations (which storage is spoken for) | Task Engine |
 | Entity references, positions, sprites | Game |
 | Moving worker to source/destination | Game (via transport hooks) |
 | When to manually add/remove items from standalone | Game (via `handle()`) |
@@ -321,10 +380,10 @@ The `Storage` component's `onAdd` callback already calls `engine.addStorage()`. 
 | File | Change |
 |------|--------|
 | `src/state.zig` | Add `.standalone` to `StorageRole`, add `transport_task` to `WorkerData` |
-| `src/engine.zig` | Add `findDestinationForItem`, transport evaluation trigger points, query methods |
-| `src/dangling.zig` | Use `findDestinationForItem` instead of `findEmptyEisForItem` |
-| `src/handlers.zig` | Add `handleTransportPickupCompleted` / `handleTransportDeliveryCompleted`, emit standalone hooks, trigger transport eval in `handleStoreCompleted` / `handleItemAdded` / `handleWorkerAvailable` |
-| `src/hooks.zig` | Add `standalone_item_added`, `standalone_item_removed`, `transport_pickup_completed`, `transport_delivery_completed` to payloads + dispatcher + recording hooks |
+| `src/engine.zig` | Add `reserved_storages` map, `findDestinationForItem`, transport evaluation trigger points, reservation helpers, query methods |
+| `src/dangling.zig` | Use `findDestinationForItem` instead of `findEmptyEisForItem`, use persistent reservations instead of ephemeral `reserved_eis` set |
+| `src/handlers.zig` | Add `handleTransportPickupCompleted` / `handleTransportDeliveryCompleted`, transport cancellation on `worker_unavailable`/`worker_removed`/`item_removed`, emit standalone hooks, trigger transport eval in `handleStoreCompleted` / `handleItemAdded` / `handleWorkerAvailable` |
+| `src/hooks.zig` | Add `standalone_item_added`, `standalone_item_removed`, `transport_pickup_completed`, `transport_delivery_completed`, `transport_cancelled` to payloads + dispatcher + recording hooks |
 | `test/` | Add standalone storage specs, EOS transport specs |
 
 ## Out of scope
