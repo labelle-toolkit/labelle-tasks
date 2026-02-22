@@ -177,20 +177,23 @@ pub fn TransportHandlers(
             releaseTransportWorker(engine, worker, worker_id);
         }
 
-        /// Cancel a worker's transport task and dispatch transport_cancelled hook.
-        pub fn cancelWorkerTransport(engine: *EngineType, worker: *WorkerData, worker_id: GameId, task: @TypeOf(worker.transport_task.?)) void {
-            const item_type = engine.transport_items.get(worker_id);
-
+        /// Cancel a worker's transport task and optionally dispatch transport_cancelled hook.
+        /// When `skip_hooks` is true the dispatch is suppressed (e.g. the owning
+        /// entity is being destroyed and listeners should not react to it).
+        pub fn cancelWorkerTransport(engine: *EngineType, worker: *WorkerData, worker_id: GameId, task: @TypeOf(worker.transport_task.?), skip_hooks: bool) void {
             engine.releaseReservation(task.to_storage_id);
+
+            if (!skip_hooks) {
+                const item_type = engine.transport_items.get(worker_id);
+                engine.dispatcher.dispatch(.{ .transport_cancelled = .{
+                    .worker_id = worker_id,
+                    .from_storage_id = task.from_storage_id,
+                    .to_storage_id = task.to_storage_id,
+                    .item = item_type,
+                } });
+            }
+
             _ = engine.transport_items.remove(worker_id);
-
-            engine.dispatcher.dispatch(.{ .transport_cancelled = .{
-                .worker_id = worker_id,
-                .from_storage_id = task.from_storage_id,
-                .to_storage_id = task.to_storage_id,
-                .item = item_type,
-            } });
-
             worker.transport_task = null;
         }
 
@@ -204,7 +207,7 @@ pub fn TransportHandlers(
                 const worker = entry.value_ptr;
                 if (worker.transport_task) |task| {
                     if (task.to_storage_id == storage_id) {
-                        cancelWorkerTransport(engine, worker, wid, task);
+                        cancelWorkerTransport(engine, worker, wid, task, false);
                         worker.state = .Idle;
                         engine.markWorkerIdle(wid);
                         found_worker = wid;
@@ -258,7 +261,7 @@ pub fn TransportHandlers(
                 const worker = entry.value_ptr;
                 if (worker.transport_task) |task| {
                     if (task.from_storage_id == storage_id) {
-                        cancelWorkerTransport(engine, worker, wid, task);
+                        cancelWorkerTransport(engine, worker, wid, task, false);
                         worker.state = .Idle;
                         engine.markWorkerIdle(wid);
                         found_worker = wid;

@@ -163,7 +163,7 @@ pub fn Handlers(
             // Cancel transport task if active (EOS item may need a new worker)
             const had_transport = worker.transport_task != null;
             if (worker.transport_task) |task| {
-                cancelWorkerTransport(engine, worker, worker_id, task);
+                cancelWorkerTransport(engine, worker, worker_id, task, false);
             }
 
             // Cancel dangling task if active (item needs reassignment)
@@ -201,9 +201,10 @@ pub fn Handlers(
             var had_dangling = false;
             if (engine.workers.getPtr(worker_id)) |worker| {
                 // Cancel transport task if active (EOS item may need a new worker)
+                // skip_hooks=true: worker entity is being destroyed, suppress transport_cancelled
                 had_transport = worker.transport_task != null;
                 if (worker.transport_task) |task| {
-                    cancelWorkerTransport(engine, worker, worker_id, task);
+                    cancelWorkerTransport(engine, worker, worker_id, task, true);
                 }
 
                 // Cancel dangling task if active (item needs reassignment)
