@@ -304,6 +304,18 @@ pub fn TaskEngineContextWith(
             return pickupCompleted(worker_id);
         }
 
+        /// Notify that a transport pickup was completed (worker picked up item from EOS).
+        pub fn transportPickupCompleted(worker_id: GameId) bool {
+            const self = active orelse return false;
+            return self.engine.transportPickupCompleted(worker_id);
+        }
+
+        /// Notify that a transport delivery was completed (worker delivered item to destination).
+        pub fn transportDeliveryCompleted(worker_id: GameId) bool {
+            const self = active orelse return false;
+            return self.engine.transportDeliveryCompleted(worker_id);
+        }
+
         /// Re-evaluate dangling items (call after scene load).
         pub fn evaluateDanglingItems() void {
             const self = active orelse return;
