@@ -84,6 +84,11 @@ pub fn Engine(
         // Callback for worker selection
         find_best_worker_fn: ?*const fn (workstation_id: ?GameId, available_workers: []const GameId) ?GameId = null,
 
+        // Deferred evaluation dirty flags (set by handlers, processed at end of handle())
+        needs_dangling_eval: bool = false,
+        needs_worker_eval: bool = false,
+        needs_transport_eval: bool = false,
+
         pub fn init(allocator: Allocator, task_hooks: TaskHooks, distance_fn: ?DistanceFn) Self {
             return .{
                 .allocator = allocator,
@@ -185,9 +190,36 @@ pub fn Engine(
 
             result catch |err| {
                 log.warn("handle: event failed with {}", .{err});
+                self.processDeferredEvaluations();
                 return false;
             };
+            self.processDeferredEvaluations();
             return true;
+        }
+
+        // ============================================
+        // Deferred evaluation processing
+        // ============================================
+
+        /// Process all deferred evaluations in priority order.
+        /// Loops until no dirty flags remain (max 10 iterations to prevent infinite loops).
+        /// Priority order: dangling items > worker assignment > transports.
+        pub fn processDeferredEvaluations(self: *Self) void {
+            var iterations: u32 = 0;
+            while (iterations < 10) : (iterations += 1) {
+                if (self.needs_dangling_eval) {
+                    self.needs_dangling_eval = false;
+                    self.evaluateDanglingItems();
+                } else if (self.needs_worker_eval) {
+                    self.needs_worker_eval = false;
+                    self.tryAssignWorkers();
+                } else if (self.needs_transport_eval) {
+                    self.needs_transport_eval = false;
+                    self.evaluateTransports();
+                } else {
+                    break;
+                }
+            }
         }
 
         // ============================================
@@ -249,15 +281,15 @@ pub fn Engine(
                 var snapshot: std.ArrayListUnmanaged(GameId) = .{};
                 defer snapshot.deinit(self.allocator);
                 snapshot.appendSlice(self.allocator, ws_ids.items) catch {
-                    // On OOM, skip evaluation but still try to assign workers below
-                    self.tryAssignWorkers();
+                    // On OOM, skip evaluation but still set dirty flag
+                    self.needs_worker_eval = true;
                     return;
                 };
                 for (snapshot.items) |ws_id| {
                     self.evaluateWorkstationStatus(ws_id);
                 }
             }
-            self.tryAssignWorkers();
+            self.needs_worker_eval = true;
         }
 
         pub fn tryAssignWorkers(self: *Self) void {

@@ -44,7 +44,7 @@ pub fn Registration(
             });
 
             if (config.role == .eis and config.initial_item == null) {
-                engine.evaluateDanglingItems();
+                engine.needs_dangling_eval = true;
             }
         }
 

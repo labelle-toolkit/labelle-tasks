@@ -63,7 +63,7 @@ pub fn Handlers(
 
             // If an EOS just got an item, try to transport it
             if (storage.role == .eos) {
-                engine.evaluateTransports();
+                engine.needs_transport_eval = true;
             }
         }
 
@@ -94,7 +94,7 @@ pub fn Handlers(
 
             // If an EIS or standalone just became empty, EOS items may now have a destination
             if (role == .eis or role == .standalone) {
-                engine.evaluateTransports();
+                engine.needs_transport_eval = true;
             }
         }
 
@@ -140,18 +140,10 @@ pub fn Handlers(
             worker.assigned_workstation = null;
             engine.markWorkerIdle(worker_id);
 
-            // First, try to assign worker to pick up dangling items (highest priority)
-            engine.evaluateDanglingItems();
-
-            // If worker is still idle, try to assign to a queued workstation
-            if (worker.state == .Idle) {
-                engine.tryAssignWorkers();
-            }
-
-            // If worker is still idle, try EOS transport (lowest priority)
-            if (worker.state == .Idle) {
-                engine.evaluateTransports();
-            }
+            // Defer all evaluations — processDeferredEvaluations handles priority order
+            engine.needs_dangling_eval = true;
+            engine.needs_worker_eval = true;
+            engine.needs_transport_eval = true;
         }
 
         pub fn handleWorkerUnavailable(engine: *EngineType, worker_id: GameId) anyerror!void {
@@ -189,10 +181,10 @@ pub fn Handlers(
 
             // Re-evaluate orphaned tasks so other workers can pick them up
             if (had_dangling) {
-                engine.evaluateDanglingItems();
+                engine.needs_dangling_eval = true;
             }
             if (had_transport) {
-                engine.evaluateTransports();
+                engine.needs_transport_eval = true;
             }
         }
 
@@ -228,10 +220,10 @@ pub fn Handlers(
 
             // Re-evaluate orphaned tasks so other workers can pick them up
             if (had_dangling) {
-                engine.evaluateDanglingItems();
+                engine.needs_dangling_eval = true;
             }
             if (had_transport) {
-                engine.evaluateTransports();
+                engine.needs_transport_eval = true;
             }
         }
 

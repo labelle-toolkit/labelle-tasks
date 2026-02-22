@@ -105,7 +105,7 @@ pub fn Helpers(
             while (iter.next()) |ws_id| {
                 evaluateWorkstationStatus(engine, ws_id.*);
             }
-            tryAssignWorkers(engine);
+            engine.needs_worker_eval = true;
         }
 
         // ============================================

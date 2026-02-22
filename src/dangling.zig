@@ -15,8 +15,8 @@ pub fn DanglingManager(
         /// Register a dangling item (item not in any storage)
         pub fn addDanglingItem(engine: *EngineType, item_id: GameId, item_type: Item) !void {
             try engine.dangling_items.put(item_id, item_type);
-            // Evaluate if any idle worker can pick up this item
-            evaluateDanglingItems(engine);
+            // Defer evaluation — processDeferredEvaluations will handle it
+            engine.needs_dangling_eval = true;
         }
 
         /// Remove a dangling item (picked up or despawned)

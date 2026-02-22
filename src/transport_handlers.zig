@@ -147,15 +147,15 @@ pub fn TransportHandlers(
         // Transport worker helpers
         // ============================================
 
-        /// Clear transport state from a worker and re-evaluate for new tasks.
+        /// Clear transport state from a worker and defer re-evaluation.
         fn releaseTransportWorker(engine: *EngineType, worker: *WorkerData, worker_id: GameId) void {
             worker.transport_task = null;
             _ = engine.transport_items.remove(worker_id);
             worker.state = .Idle;
             engine.markWorkerIdle(worker_id);
-            engine.evaluateDanglingItems();
-            if (worker.state == .Idle) engine.tryAssignWorkers();
-            if (worker.state == .Idle) engine.evaluateTransports();
+            engine.needs_dangling_eval = true;
+            engine.needs_worker_eval = true;
+            engine.needs_transport_eval = true;
         }
 
         // ============================================
@@ -214,9 +214,9 @@ pub fn TransportHandlers(
             }
 
             if (found_worker != null) {
-                engine.evaluateDanglingItems();
-                engine.tryAssignWorkers();
-                engine.evaluateTransports();
+                engine.needs_dangling_eval = true;
+                engine.needs_worker_eval = true;
+                engine.needs_transport_eval = true;
             }
         }
 
@@ -241,9 +241,9 @@ pub fn TransportHandlers(
             }
 
             if (found_worker != null) {
-                engine.evaluateDanglingItems();
-                engine.tryAssignWorkers();
-                engine.evaluateTransports();
+                engine.needs_dangling_eval = true;
+                engine.needs_worker_eval = true;
+                engine.needs_transport_eval = true;
             }
         }
 
@@ -269,9 +269,9 @@ pub fn TransportHandlers(
 
             // Re-evaluate freed worker for other tasks
             if (found_worker != null) {
-                engine.evaluateDanglingItems();
-                engine.tryAssignWorkers();
-                engine.evaluateTransports();
+                engine.needs_dangling_eval = true;
+                engine.needs_worker_eval = true;
+                engine.needs_transport_eval = true;
             }
         }
     };
