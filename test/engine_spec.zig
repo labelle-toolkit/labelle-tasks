@@ -2140,6 +2140,42 @@ pub const Engine = zspec.describe("Engine", struct {
             try std.testing.expect(!engine.isStorageReserved(2));
         }
 
+        pub fn @"worker_removed does not emit transport_cancelled"() !void {
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var hooks: Recorder = .{};
+            hooks.init(std.testing.allocator);
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, hooks, null);
+            defer engine.deinit();
+            defer engine.dispatcher.hooks.deinit();
+
+            // Set up EOS with item and an empty EIS destination
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Worker should be assigned a transport task
+            _ = try engine.dispatcher.hooks.expectNext(.transport_started);
+            try std.testing.expect(engine.isStorageReserved(2));
+
+            // Remove the worker while it has an active transport
+            _ = engine.handle(.{ .worker_removed = .{ .worker_id = 10 } });
+
+            // transport_cancelled must NOT be emitted (worker entity is being destroyed,
+            // so the game should not react to a cancellation hook for a dead entity)
+            var cancelled_count: usize = 0;
+            for (engine.dispatcher.hooks.events.items) |event| {
+                if (event == .transport_cancelled) cancelled_count += 1;
+            }
+            try std.testing.expectEqual(@as(usize, 0), cancelled_count);
+
+            // Worker should be fully removed
+            try std.testing.expect(engine.getWorkerState(10) == null);
+
+            // Reservation on destination should still be released (cleanup happened)
+            try std.testing.expect(!engine.isStorageReserved(2));
+        }
+
         pub fn @"EIS freed triggers stranded EOS transport"() !void {
             const Recorder = tasks.RecordingHooks(u32, Item);
             var hooks: Recorder = .{};
