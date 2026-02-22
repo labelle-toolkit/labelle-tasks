@@ -201,12 +201,15 @@ pub fn Engine(
         // Deferred evaluation processing
         // ============================================
 
+        /// Maximum iterations for deferred evaluation loop to prevent infinite cycles.
+        const max_deferred_iterations = 10;
+
         /// Process all deferred evaluations in priority order.
-        /// Loops until no dirty flags remain (max 10 iterations to prevent infinite loops).
+        /// Loops until no dirty flags remain (max iterations to prevent infinite loops).
         /// Priority order: dangling items > worker assignment > transports.
         pub fn processDeferredEvaluations(self: *Self) void {
             var iterations: u32 = 0;
-            while (iterations < 10) : (iterations += 1) {
+            while (iterations < max_deferred_iterations) : (iterations += 1) {
                 if (self.needs_dangling_eval) {
                     self.needs_dangling_eval = false;
                     self.evaluateDanglingItems();
@@ -219,6 +222,19 @@ pub fn Engine(
                 } else {
                     break;
                 }
+            }
+
+            if (self.needs_dangling_eval or self.needs_worker_eval or self.needs_transport_eval) {
+                log.warn("processDeferredEvaluations: flags still dirty after {} iterations (dangling={}, worker={}, transport={})", .{
+                    max_deferred_iterations,
+                    self.needs_dangling_eval,
+                    self.needs_worker_eval,
+                    self.needs_transport_eval,
+                });
+                // Clear flags to avoid stale state carrying over to next handle() call
+                self.needs_dangling_eval = false;
+                self.needs_worker_eval = false;
+                self.needs_transport_eval = false;
             }
         }
 

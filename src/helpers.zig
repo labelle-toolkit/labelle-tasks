@@ -105,7 +105,9 @@ pub fn Helpers(
             while (iter.next()) |ws_id| {
                 evaluateWorkstationStatus(engine, ws_id.*);
             }
-            engine.needs_worker_eval = true;
+            // Direct evaluation: reevaluateWorkstations is called from outside handle()
+            // (scene_load), so dirty flags would never be processed.
+            tryAssignWorkers(engine);
         }
 
         // ============================================
