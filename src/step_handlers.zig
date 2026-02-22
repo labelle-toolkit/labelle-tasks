@@ -20,11 +20,9 @@ pub fn StepHandlers(
             worker.dangling_task = null;
             worker.state = .Idle;
             engine.markWorkerIdle(worker_id);
-            // Try to assign new task
-            engine.evaluateDanglingItems();
-            if (worker.state == .Idle) {
-                engine.tryAssignWorkers();
-            }
+            // Defer task assignment to processDeferredEvaluations
+            engine.needs_dangling_eval = true;
+            engine.needs_worker_eval = true;
         }
 
         pub fn handlePickupCompleted(engine: *EngineType, worker_id: GameId) anyerror!void {
@@ -88,7 +86,7 @@ pub fn StepHandlers(
                 }
 
                 // EIS is now free — check if idle workers can deliver dangling items to it
-                engine.evaluateDanglingItems();
+                engine.needs_dangling_eval = true;
             }
 
             // Check if all IIS are filled
@@ -244,20 +242,15 @@ pub fn StepHandlers(
                 worker.state = .Idle;
                 engine.markWorkerIdle(worker_id);
 
-                // First, check for remaining dangling items (higher priority)
-                engine.evaluateDanglingItems();
-
                 // Re-evaluate workstations (EIS now has item, may become Queued)
-                // Only assign to workstations if worker is still idle
-                if (worker.state == .Idle) {
-                    engine.reevaluateWorkstations();
-                } else {
-                    // Worker was assigned to dangling item, just re-evaluate statuses
-                    var ws_iter = engine.workstations.keyIterator();
-                    while (ws_iter.next()) |ws_id| {
-                        engine.evaluateWorkstationStatus(ws_id.*);
-                    }
+                var ws_iter = engine.workstations.keyIterator();
+                while (ws_iter.next()) |ws_id| {
+                    engine.evaluateWorkstationStatus(ws_id.*);
                 }
+
+                // Defer evaluation — processDeferredEvaluations handles priority order
+                engine.needs_dangling_eval = true;
+                engine.needs_worker_eval = true;
 
                 return;
             }
@@ -269,7 +262,7 @@ pub fn StepHandlers(
                 worker.state = .Idle;
                 engine.markWorkerIdle(worker_id);
                 engine.dispatcher.dispatch(.{ .worker_released = .{ .worker_id = worker_id } });
-                engine.tryAssignWorkers();
+                engine.needs_worker_eval = true;
                 return;
             };
 
@@ -353,7 +346,7 @@ pub fn StepHandlers(
                     }
 
                     // EOS just got an item — other idle workers may transport it
-                    engine.evaluateTransports();
+                    engine.needs_transport_eval = true;
                 } else {
                     // Can't continue — release worker normally
                     ws.assigned_worker = null;
@@ -365,11 +358,9 @@ pub fn StepHandlers(
                     // Re-evaluate workstation status
                     engine.evaluateWorkstationStatus(ws_id);
 
-                    // Try to assign workers to workstations first
-                    engine.tryAssignWorkers();
-
-                    // EOS just got an item — try transport (all idle workers, not just this one)
-                    engine.evaluateTransports();
+                    // Defer worker assignment and transport evaluation
+                    engine.needs_worker_eval = true;
+                    engine.needs_transport_eval = true;
                 }
             } else {
                 // More items to store
@@ -395,7 +386,7 @@ pub fn StepHandlers(
                 }
 
                 // Previous EOS just got an item — other idle workers may transport it
-                engine.evaluateTransports();
+                engine.needs_transport_eval = true;
             }
         }
     };

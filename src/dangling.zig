@@ -15,7 +15,8 @@ pub fn DanglingManager(
         /// Register a dangling item (item not in any storage)
         pub fn addDanglingItem(engine: *EngineType, item_id: GameId, item_type: Item) !void {
             try engine.dangling_items.put(item_id, item_type);
-            // Evaluate if any idle worker can pick up this item
+            // Direct evaluation: addDanglingItem is called from outside handle()
+            // (ECS bridge callbacks), so dirty flags would never be processed.
             evaluateDanglingItems(engine);
         }
 

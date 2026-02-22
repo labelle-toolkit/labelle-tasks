@@ -44,6 +44,8 @@ pub fn Registration(
             });
 
             if (config.role == .eis and config.initial_item == null) {
+                // Direct evaluation: addStorage is called from outside handle()
+                // (component registration), so dirty flags would never be processed.
                 engine.evaluateDanglingItems();
             }
         }
