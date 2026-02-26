@@ -128,6 +128,39 @@ pub fn Engine(
             self.storage_to_workstations.deinit();
         }
 
+        /// Reset all entity state, keeping the engine instance alive.
+        /// Call on scene transitions to clear stale entity references.
+        pub fn reset(self: *Self) void {
+            // Free workstation internal storage lists
+            var ws_iter = self.workstations.valueIterator();
+            while (ws_iter.next()) |ws| {
+                ws.deinit(self.allocator);
+            }
+            self.workstations.clearRetainingCapacity();
+
+            self.workers.clearRetainingCapacity();
+            self.storages.clearRetainingCapacity();
+            self.dangling_items.clearRetainingCapacity();
+            self.idle_workers_set.clearRetainingCapacity();
+            self.queued_workstations_set.clearRetainingCapacity();
+            self.reserved_storages.clearRetainingCapacity();
+            self.transport_items.clearRetainingCapacity();
+
+            // Free reverse index lists
+            var ri_iter = self.storage_to_workstations.valueIterator();
+            while (ri_iter.next()) |list| {
+                list.deinit(self.allocator);
+            }
+            self.storage_to_workstations.clearRetainingCapacity();
+
+            // Clear dirty flags
+            self.needs_dangling_eval = false;
+            self.needs_worker_eval = false;
+            self.needs_transport_eval = false;
+
+            log.info("Task engine state reset (scene transition)", .{});
+        }
+
         /// Set or update the distance function for spatial queries.
         pub fn setDistanceFunction(self: *Self, func: ?DistanceFn) void {
             self.distance_fn = func;

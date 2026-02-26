@@ -385,6 +385,17 @@ pub fn createEngineHooks(
             std.log.info("[labelle-tasks] Task engine initialized", .{});
         }
 
+        /// Reset task engine state before loading a new scene.
+        /// Clears all stale entity references so new entities can register cleanly.
+        pub fn scene_before_load(payload: EngineTypes.HookPayload) void {
+            const info = payload.scene_before_load;
+            std.log.debug("[labelle-tasks] scene_before_load: {s} - resetting task engine state", .{info.name});
+
+            if (Context.getEngine()) |task_eng| {
+                task_eng.reset();
+            }
+        }
+
         /// Re-evaluate after scene is loaded (all entities now registered)
         pub fn scene_load(payload: EngineTypes.HookPayload) void {
             const info = payload.scene_load;
