@@ -2270,4 +2270,174 @@ pub const Engine = zspec.describe("Engine", struct {
             try std.testing.expectEqual(true, engine.getStorageHasItem(10).?);
         }
     });
+
+    pub const locked = zspec.describe("locked", struct {
+        // Helper: set of locked entity IDs for test purposes
+        var locked_entities: std.AutoHashMap(u32, void) = undefined;
+        var locked_initialized: bool = false;
+
+        fn ensureLockedInit() void {
+            if (!locked_initialized) {
+                locked_entities = std.AutoHashMap(u32, void).init(std.testing.allocator);
+                locked_initialized = true;
+            }
+        }
+
+        fn isLocked(entity_id: u32) bool {
+            ensureLockedInit();
+            return locked_entities.contains(entity_id);
+        }
+
+        fn lockEntity(id: u32) void {
+            ensureLockedInit();
+            locked_entities.put(id, {}) catch unreachable;
+        }
+
+        fn unlockEntity(id: u32) void {
+            ensureLockedInit();
+            _ = locked_entities.remove(id);
+        }
+
+        fn resetLocked() void {
+            if (locked_initialized) {
+                locked_entities.deinit();
+                locked_initialized = false;
+            }
+        }
+
+        pub fn @"skips locked workers in tryAssignWorkers"() !void {
+            defer resetLocked();
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+            engine.setIsLockedFn(isLocked);
+
+            // Set up workstation with EIS (has flour) and EOS (empty)
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .iis });
+            try engine.addStorage(3, .{ .role = .ios });
+            try engine.addStorage(4, .{ .role = .eos });
+            try engine.addWorkstation(100, .{});
+            try engine.attachStorageToWorkstation(1, 100, .eis);
+            try engine.attachStorageToWorkstation(2, 100, .iis);
+            try engine.attachStorageToWorkstation(3, 100, .ios);
+            try engine.attachStorageToWorkstation(4, 100, .eos);
+
+            // Add worker and lock it
+            try engine.addWorker(10);
+            lockEntity(10);
+            _ = engine.workerAvailable(10);
+
+            // Worker is idle but locked — should NOT be assigned
+            try std.testing.expectEqual(tasks.WorkerState.Idle, engine.getWorkerState(10).?);
+            try std.testing.expectEqual(tasks.WorkstationStatus.Queued, engine.getWorkstationStatus(100).?);
+
+            // Unlock the worker — should now be assigned
+            unlockEntity(10);
+            // Trigger re-evaluation
+            engine.tryAssignWorkers();
+
+            try std.testing.expectEqual(tasks.WorkerState.Working, engine.getWorkerState(10).?);
+            try std.testing.expectEqual(tasks.WorkstationStatus.Active, engine.getWorkstationStatus(100).?);
+        }
+
+        pub fn @"skips locked EIS in selectEis"() !void {
+            defer resetLocked();
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var recorder = Recorder{};
+            recorder.init(std.testing.allocator);
+            defer recorder.deinit();
+
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, recorder, null);
+            defer engine.deinit();
+            engine.setIsLockedFn(isLocked);
+
+            // Two EIS: one with Flour (locked), one with Water
+            try engine.addStorage(1, .{ .role = .eis, .initial_item = .Flour });
+            try engine.addStorage(2, .{ .role = .eis, .initial_item = .Water });
+            try engine.addStorage(3, .{ .role = .iis });
+            try engine.addStorage(4, .{ .role = .iis });
+            try engine.addStorage(5, .{ .role = .ios });
+            try engine.addStorage(6, .{ .role = .eos });
+            try engine.addWorkstation(100, .{});
+            try engine.attachStorageToWorkstation(1, 100, .eis);
+            try engine.attachStorageToWorkstation(2, 100, .eis);
+            try engine.attachStorageToWorkstation(3, 100, .iis);
+            try engine.attachStorageToWorkstation(4, 100, .iis);
+            try engine.attachStorageToWorkstation(5, 100, .ios);
+            try engine.attachStorageToWorkstation(6, 100, .eos);
+
+            // Lock the Flour EIS — workstation can't operate (missing ingredient)
+            lockEntity(1);
+
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Workstation should be Blocked because EIS 1 is locked
+            try std.testing.expectEqual(tasks.WorkstationStatus.Blocked, engine.getWorkstationStatus(100).?);
+        }
+
+        pub fn @"skips locked storages in findDestinationForItem"() !void {
+            defer resetLocked();
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+            engine.setIsLockedFn(isLocked);
+
+            // Two empty EIS that accept Flour
+            try engine.addStorage(1, .{ .role = .eis, .accepts = .Flour });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Flour });
+
+            // Lock storage 1
+            lockEntity(1);
+
+            // findDestinationForItem should skip locked storage 1 and return 2
+            const dest = engine.findDestinationForItem(.Flour);
+            try std.testing.expect(dest != null);
+            try std.testing.expectEqual(@as(u32, 2), dest.?);
+        }
+
+        pub fn @"skips locked EOS in evaluateTransports"() !void {
+            defer resetLocked();
+            const Recorder = tasks.RecordingHooks(u32, Item);
+            var recorder = Recorder{};
+            recorder.init(std.testing.allocator);
+            defer recorder.deinit();
+
+            var engine = tasks.Engine(u32, Item, Recorder).init(std.testing.allocator, recorder, null);
+            defer engine.deinit();
+            engine.setIsLockedFn(isLocked);
+
+            // EOS with Bread (locked) and empty EIS that accepts Bread
+            try engine.addStorage(1, .{ .role = .eos, .initial_item = .Bread });
+            try engine.addStorage(2, .{ .role = .eis, .accepts = .Bread });
+            try engine.addWorker(10);
+            _ = engine.workerAvailable(10);
+
+            // Lock the EOS
+            lockEntity(1);
+
+            // Evaluate transports — should NOT assign because EOS is locked
+            engine.evaluateTransports();
+
+            // Worker should still be idle
+            try std.testing.expectEqual(tasks.WorkerState.Idle, engine.getWorkerState(10).?);
+
+            // Unlock the EOS and re-evaluate
+            unlockEntity(1);
+            engine.evaluateTransports();
+
+            // Now transport should be assigned
+            try std.testing.expectEqual(tasks.WorkerState.Working, engine.getWorkerState(10).?);
+        }
+
+        pub fn @"isLocked returns false when no callback set"() !void {
+            const TestHooks = struct {};
+            var engine = tasks.Engine(u32, Item, TestHooks).init(std.testing.allocator, .{}, null);
+            defer engine.deinit();
+
+            // No isLocked callback — should return false
+            try std.testing.expectEqual(false, engine.isLocked(42));
+        }
+    });
 });

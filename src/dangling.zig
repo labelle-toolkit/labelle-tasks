@@ -90,6 +90,8 @@ pub fn DanglingManager(
             idle_buf.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
             var idle_iter = engine.idle_workers_set.keyIterator();
             while (idle_iter.next()) |wid| {
+                // Skip locked workers (reserved by another system, e.g. needs)
+                if (engine.isLocked(wid.*)) continue;
                 idle_buf.appendAssumeCapacity(wid.*);
             }
             if (idle_buf.items.len == 0) return;

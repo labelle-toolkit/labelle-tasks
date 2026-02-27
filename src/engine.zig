@@ -41,6 +41,10 @@ pub fn Engine(
         /// Distance function type - returns distance between two entities, or null if no path
         pub const DistanceFn = *const fn (from_id: GameId, to_id: GameId) ?f32;
 
+        /// Locked check function type - returns true if an entity has a Locked component.
+        /// Used to skip locked workers and storages during assignment decisions.
+        pub const IsLockedFn = *const fn (entity_id: GameId) bool;
+
         // Import state types
         const StorageState = state_mod.StorageState(Item);
         const WorkerData = state_mod.WorkerData(GameId);
@@ -80,6 +84,9 @@ pub fn Engine(
 
         // Optional distance function for spatial queries
         distance_fn: ?DistanceFn = null,
+
+        // Optional locked check function for ECS-based coordination
+        is_locked_fn: ?IsLockedFn = null,
 
         // Callback for worker selection
         find_best_worker_fn: ?*const fn (workstation_id: ?GameId, available_workers: []const GameId) ?GameId = null,
@@ -479,6 +486,25 @@ pub fn Engine(
         }
 
         // ============================================
+        // Locked API
+        // ============================================
+
+        /// Set the is_locked callback function.
+        /// The function should query the ECS for a Locked component on the entity.
+        pub fn setIsLockedFn(self: *Self, func: ?IsLockedFn) void {
+            self.is_locked_fn = func;
+        }
+
+        /// Check if an entity is locked (has a Locked ECS component).
+        /// Returns false if no is_locked_fn is set.
+        pub fn isLocked(self: *const Self, entity_id: GameId) bool {
+            if (self.is_locked_fn) |locked_fn| {
+                return locked_fn(entity_id);
+            }
+            return false;
+        }
+
+        // ============================================
         // Distance API
         // ============================================
 
@@ -603,9 +629,10 @@ pub fn Engine(
                 const storage_id = entry.key_ptr.*;
                 const storage = entry.value_ptr.*;
 
-                // Skip full, reserved, or excluded storages
+                // Skip full, reserved, locked, or excluded storages
                 if (storage.has_item) continue;
                 if (self.reserved_storages.contains(storage_id)) continue;
+                if (self.isLocked(storage_id)) continue;
                 if (excluded) |ex| {
                     if (ex.contains(storage_id)) continue;
                 }
@@ -647,6 +674,8 @@ pub fn Engine(
             idle_buf.ensureTotalCapacity(self.allocator, self.idle_workers_set.count()) catch return;
             var idle_iter = self.idle_workers_set.keyIterator();
             while (idle_iter.next()) |wid| {
+                // Skip locked workers (reserved by another system, e.g. needs)
+                if (self.isLocked(wid.*)) continue;
                 idle_buf.appendAssumeCapacity(wid.*);
             }
             if (idle_buf.items.len == 0) return;
@@ -668,11 +697,12 @@ pub fn Engine(
 
             var storage_iter = self.storages.iterator();
             while (storage_iter.next()) |entry| {
+                const storage_id = entry.key_ptr.*;
                 const storage = entry.value_ptr.*;
                 if (storage.role == .eos and storage.has_item) {
                     if (storage.item_type) |item_type| {
-                        if (!active_sources.contains(entry.key_ptr.*)) {
-                            eos_snapshot.append(self.allocator, .{ .id = entry.key_ptr.*, .item_type = item_type }) catch return;
+                        if (!active_sources.contains(storage_id) and !self.isLocked(storage_id)) {
+                            eos_snapshot.append(self.allocator, .{ .id = storage_id, .item_type = item_type }) catch return;
                         }
                     }
                 }

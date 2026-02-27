@@ -295,6 +295,28 @@ pub fn createEngineHooks(
     comptime GameHooks: type,
     comptime EngineTypes: type,
 ) type {
+    return createEngineHooksImpl(GameId, ItemType, GameHooks, EngineTypes, null);
+}
+
+/// Creates engine hooks with Locked component support for ECS-based coordination.
+/// The Locked component type is queried on entities before assignment decisions.
+pub fn createEngineHooksWithLocked(
+    comptime GameId: type,
+    comptime ItemType: type,
+    comptime GameHooks: type,
+    comptime EngineTypes: type,
+    comptime LockedType: type,
+) type {
+    return createEngineHooksImpl(GameId, ItemType, GameHooks, EngineTypes, LockedType);
+}
+
+fn createEngineHooksImpl(
+    comptime GameId: type,
+    comptime ItemType: type,
+    comptime GameHooks: type,
+    comptime EngineTypes: type,
+    comptime MaybeLockedType: ?type,
+) type {
     const Registry = EngineTypes.Registry;
     const Game = EngineTypes.Game;
 
@@ -372,6 +394,17 @@ pub fn createEngineHooks(
 
         const std = @import("std");
 
+        /// Check if an entity has a Locked component via ECS registry query.
+        /// Only available when createEngineHooksWithLocked is used.
+        fn isLockedFn(entity_id: GameId) bool {
+            if (MaybeLockedType) |LockedType| {
+                const registry = context_mod.getSharedRegistry(Registry) orelse return false;
+                const entity = EngineTypes.entityFromU64(entity_id);
+                return registry.tryGet(LockedType, entity) != null;
+            }
+            return false;
+        }
+
         /// Initialize task engine during game initialization.
         /// Uses default euclidean distance function based on Position components.
         pub fn game_init(payload: EngineTypes.HookPayload) void {
@@ -381,6 +414,13 @@ pub fn createEngineHooks(
                 std.log.err("[labelle-tasks] Failed to initialize task engine: {}", .{err});
                 return;
             };
+
+            // Set up Locked component check if LockedType was provided
+            if (MaybeLockedType != null) {
+                if (Context.getEngine()) |task_eng| {
+                    task_eng.setIsLockedFn(isLockedFn);
+                }
+            }
 
             std.log.info("[labelle-tasks] Task engine initialized", .{});
         }
