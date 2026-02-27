@@ -377,7 +377,7 @@ pub fn createEngineHooks(
 
         /// Check if an entity has a Locked component via ECS registry query.
         fn isLockedFn(entity_id: GameId) bool {
-            const registry = context_mod.getSharedRegistry(Registry) orelse return false;
+            const registry = Ctx.getRegistry(Registry) orelse return false;
             const entity = EngineTypes.entityFromU64(entity_id);
             return registry.tryGet(LockedType, entity) != null;
         }

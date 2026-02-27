@@ -131,6 +131,9 @@ pub fn DanglingManager(
                 const item_id = dangling_entry.id;
                 const item_type = dangling_entry.item_type;
 
+                // Skip locked items (reserved by another system, e.g. needs)
+                if (engine.isLocked(item_id)) continue;
+
                 if (assigned_items.get(item_id)) |assigned_worker_id| {
                     log.debug("evaluateDanglingItems: item {d} already assigned to worker {d}, skipping", .{
                         item_id,
