@@ -152,13 +152,6 @@ pub fn TaskEngineContextWith(
             self.engine.setDistanceFunction(func);
         }
 
-        /// Set the is_locked callback function.
-        /// The function should query the ECS for a Locked component on the entity.
-        /// When using createEngineHooksWithLocked, this is set automatically.
-        pub fn setIsLockedFn(func: *const fn (GameId) bool) void {
-            const self = active orelse return;
-            self.engine.setIsLockedFn(func);
-        }
 
         /// Default distance function using Position components.
         /// Calculates euclidean distance between two entities.
