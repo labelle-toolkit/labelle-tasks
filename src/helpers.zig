@@ -61,9 +61,10 @@ pub fn Helpers(
                         if (storage.has_item) return false; // IOS full
                     }
                 }
-                // Check at least one EOS has space
+                // Check at least one EOS has space and is not locked
                 var has_eos_space = false;
                 for (ws.eos.items) |eos_id| {
+                    if (engine.isLocked(eos_id)) continue;
                     if (engine.storages.get(eos_id)) |storage| {
                         if (!storage.has_item) {
                             has_eos_space = true;
@@ -81,6 +82,10 @@ pub fn Helpers(
                     if (!storage.has_item) {
                         return false; // Missing ingredient
                     }
+                    // Locked EIS is unavailable (reserved by another system)
+                    if (engine.isLocked(eis_id)) {
+                        return false;
+                    }
                 } else {
                     return false; // Storage not found
                 }
@@ -88,6 +93,7 @@ pub fn Helpers(
 
             var has_output_space = false;
             for (ws.eos.items) |eos_id| {
+                if (engine.isLocked(eos_id)) continue;
                 if (engine.storages.get(eos_id)) |storage| {
                     if (!storage.has_item) {
                         has_output_space = true;
@@ -130,6 +136,8 @@ pub fn Helpers(
 
             var idle_iter = engine.idle_workers_set.keyIterator();
             while (idle_iter.next()) |wid| {
+                // Skip locked workers (reserved by another system, e.g. needs)
+                if (engine.isLocked(wid.*)) continue;
                 idle_scratch.appendAssumeCapacity(wid.*);
             }
 
@@ -235,6 +243,9 @@ pub fn Helpers(
             var best_priority: i16 = -1;
 
             for (storage_ids) |id| {
+                // Skip locked storages (reserved by another system, e.g. needs)
+                if (engine.isLocked(id)) continue;
+
                 if (engine.storages.get(id)) |storage| {
                     if (storage.has_item == has_item_check) {
                         const current_priority: i16 = @intFromEnum(storage.priority);

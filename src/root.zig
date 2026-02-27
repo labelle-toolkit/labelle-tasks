@@ -132,6 +132,12 @@ pub const Priority = engine_mod.Priority;
 /// Storage role in the workflow (EIS, IIS, IOS, EOS).
 pub const StorageRole = state_mod.StorageRole;
 
+// === Coordination Components ===
+
+/// Pure data components for game-side task state tracking.
+/// Exported via bind() for ECS auto-registration, also available directly.
+pub const coordination = @import("coordination.zig");
+
 // === ECS Integration (RFC #28) ===
 
 const ecs_bridge = @import("ecs_bridge.zig");
@@ -248,11 +254,23 @@ pub fn Workstation(comptime Item: type) type {
 /// ```
 pub fn bind(comptime Item: type, comptime EngineTypes: type) type {
     const Components = components_mod.ComponentsWith(EngineTypes);
+    const coord = @import("coordination.zig");
     return struct {
+        // Auto-registering components (have onAdd/onRemove/onReady callbacks)
         pub const Storage = Components.Storage(Item);
         pub const Worker = Components.Worker(Item);
         pub const DanglingItem = Components.DanglingItem(Item);
         pub const Workstation = Components.Workstation(Item);
+
+        // Coordination components (pure data, managed by game hooks)
+        pub const StoredItem = coord.StoredItem;
+        pub const CarriedItem = coord.CarriedItem;
+        pub const AssignedWorkstation = coord.AssignedWorkstation;
+        pub const TransportTask = coord.TransportTask;
+        pub const StoreTarget = coord.StoreTarget;
+        pub const PickupSource = coord.PickupSource;
+        pub const DanglingTarget = coord.DanglingTarget;
+        pub const PendingArrival = coord.PendingArrival;
     };
 }
 
@@ -264,29 +282,32 @@ pub fn bind(comptime Item: type, comptime EngineTypes: type) type {
 /// - ItemType: Item enum for the task system
 /// - GameHooks: Game-specific task hook handlers (store_started, pickup_dangling_started, etc.)
 /// - EngineTypes: Type bundle from labelle-engine containing HookPayload, Registry, Game, etc.
+/// - LockedType: ECS component type for cross-engine coordination. The engine queries this
+///   component on entities before making assignment decisions (workers, storages, transports).
 ///
 /// Returns a struct containing:
 /// - Context: The TaskEngineContext for accessing engine/registry
 /// - game_init, scene_load, game_deinit: Engine hooks
 ///
 /// Hook payloads are enriched with .registry and .game pointers for direct ECS access.
-/// A default distance function (euclidean distance using Position components) is used.
-/// To override, call Context.setDistanceFunction() after initialization.
+/// The engine automatically checks for Locked components before assigning workers or storages.
 ///
 /// Example:
 /// ```zig
 /// const engine = @import("labelle-engine");
 /// const tasks = @import("labelle-tasks");
 ///
+/// const Locked = @import("components/locked.zig").Locked;
+///
 /// const GameHooks = struct {
 ///     pub fn store_started(payload: anytype) void {
 ///         const registry = payload.registry orelse return;
-///         const worker = engine.entityFromU64(payload.original.worker_id);
+///         const worker = engine.entityFromU64(payload.worker_id);
 ///         registry.set(worker, MovementTarget{ ... });
 ///     }
 /// };
 ///
-/// pub const TaskHooks = tasks.createEngineHooks(u64, ItemType, GameHooks, engine.EngineTypes);
+/// pub const TaskHooks = tasks.createEngineHooks(u64, ItemType, GameHooks, engine.EngineTypes, Locked);
 /// pub const Context = TaskHooks.Context;
 /// ```
 pub fn createEngineHooks(
@@ -294,6 +315,7 @@ pub fn createEngineHooks(
     comptime ItemType: type,
     comptime GameHooks: type,
     comptime EngineTypes: type,
+    comptime LockedType: type,
 ) type {
     const Registry = EngineTypes.Registry;
     const Game = EngineTypes.Game;
@@ -302,7 +324,6 @@ pub fn createEngineHooks(
     // Uses active context instance for registry/game access.
     const WrappedHooks = struct {
         /// Flat enriched payload: copies all original fields to top level + adds registry/game.
-        /// This preserves backward compatibility so game hooks can access payload.worker_id directly.
         fn EnrichedPayload(comptime Original: type) type {
             return struct {
                 // Copy original payload fields (void if not present in original)
@@ -372,6 +393,13 @@ pub fn createEngineHooks(
 
         const std = @import("std");
 
+        /// Check if an entity has a Locked component via ECS registry query.
+        fn isLockedFn(entity_id: GameId) bool {
+            const registry = Ctx.getRegistry(Registry) orelse return false;
+            const entity = EngineTypes.entityFromU64(entity_id);
+            return registry.tryGet(LockedType, entity) != null;
+        }
+
         /// Initialize task engine during game initialization.
         /// Uses default euclidean distance function based on Position components.
         pub fn game_init(payload: EngineTypes.HookPayload) void {
@@ -381,6 +409,11 @@ pub fn createEngineHooks(
                 std.log.err("[labelle-tasks] Failed to initialize task engine: {}", .{err});
                 return;
             };
+
+            // Set up Locked component check
+            if (Context.getEngine()) |task_eng| {
+                task_eng.setIsLockedFn(isLockedFn);
+            }
 
             std.log.info("[labelle-tasks] Task engine initialized", .{});
         }

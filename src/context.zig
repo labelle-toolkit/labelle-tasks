@@ -152,6 +152,7 @@ pub fn TaskEngineContextWith(
             self.engine.setDistanceFunction(func);
         }
 
+
         /// Default distance function using Position components.
         /// Calculates euclidean distance between two entities.
         fn defaultDistanceFn(from_id: GameId, to_id: GameId) ?f32 {

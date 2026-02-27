@@ -29,7 +29,7 @@ pub fn StorageState(comptime Item: type) type {
 }
 
 /// Internal worker state
-pub fn WorkerData(comptime GameId: type) type {
+pub fn WorkerData(comptime GameId: type, comptime Item: type) type {
     return struct {
         state: WorkerState = .Idle,
         assigned_workstation: ?GameId = null,
@@ -44,6 +44,8 @@ pub fn WorkerData(comptime GameId: type) type {
         transport_task: ?struct {
             from_storage_id: GameId,
             to_storage_id: GameId,
+            /// Item type being transported (set on pickup, read on delivery)
+            item_type: ?Item = null,
         } = null,
     };
 }

@@ -90,6 +90,8 @@ pub fn DanglingManager(
             idle_buf.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
             var idle_iter = engine.idle_workers_set.keyIterator();
             while (idle_iter.next()) |wid| {
+                // Skip locked workers (reserved by another system, e.g. needs)
+                if (engine.isLocked(wid.*)) continue;
                 idle_buf.appendAssumeCapacity(wid.*);
             }
             if (idle_buf.items.len == 0) return;
@@ -128,6 +130,9 @@ pub fn DanglingManager(
             for (dangling_snapshot.items) |dangling_entry| {
                 const item_id = dangling_entry.id;
                 const item_type = dangling_entry.item_type;
+
+                // Skip locked items (reserved by another system, e.g. needs)
+                if (engine.isLocked(item_id)) continue;
 
                 if (assigned_items.get(item_id)) |assigned_worker_id| {
                     log.debug("evaluateDanglingItems: item {d} already assigned to worker {d}, skipping", .{

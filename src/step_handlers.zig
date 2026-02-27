@@ -13,7 +13,7 @@ pub fn StepHandlers(
     comptime EngineType: type,
 ) type {
     return struct {
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
 
         /// Helper function to recover worker state when a dangling item no longer exists
         fn recoverWorkerFromMissingDanglingItem(engine: *EngineType, worker: *WorkerData, worker_id: GameId) void {

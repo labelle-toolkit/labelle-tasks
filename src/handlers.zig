@@ -16,7 +16,7 @@ pub fn Handlers(
     comptime EngineType: type,
 ) type {
     return struct {
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
         const TransportHelpers = transport_handlers_mod.TransportHandlers(GameId, Item, EngineType);
 
         // Re-export transport handler functions for engine dispatch
@@ -215,7 +215,6 @@ pub fn Handlers(
                 }
             }
             engine.releaseWorkerReservations(worker_id);
-            _ = engine.transport_items.remove(worker_id);
             engine.removeWorkerTracking(worker_id);
             _ = engine.workers.remove(worker_id);
 

@@ -14,7 +14,7 @@ pub fn TransportHandlers(
     comptime EngineType: type,
 ) type {
     return struct {
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
 
         // ============================================
         // Transport event handlers
@@ -46,13 +46,8 @@ pub fn TransportHandlers(
                 return error.NoItemType;
             };
 
-            // Store the item type for delivery phase
-            engine.transport_items.put(worker_id, item_type) catch {
-                log.err("transport_pickup_completed: failed to track item for worker {}", .{worker_id});
-                // Recover: cancel transport so worker doesn't get stuck
-                cancelAndReleaseTransport(engine, worker, worker_id, task, null);
-                return error.OutOfMemory;
-            };
+            // Store the item type inline in the transport task for delivery phase
+            worker.transport_task.?.item_type = item_type;
 
             // Clear the source storage
             from_storage.has_item = false;
@@ -73,7 +68,7 @@ pub fn TransportHandlers(
                 return error.NoTransportTask;
             };
 
-            const item_type = engine.transport_items.get(worker_id) orelse {
+            const item_type = task.item_type orelse {
                 log.err("transport_delivery_completed: no tracked item for worker {}", .{worker_id});
                 // Recover: cancel transport so worker doesn't get stuck
                 cancelAndReleaseTransport(engine, worker, worker_id, task, null);
@@ -100,6 +95,7 @@ pub fn TransportHandlers(
                     worker.transport_task = .{
                         .from_storage_id = task.to_storage_id,
                         .to_storage_id = new_dest,
+                        .item_type = item_type,
                     };
                     engine.reserveStorage(new_dest, worker_id);
                     engine.dispatcher.dispatch(.{ .transport_rerouted = .{
@@ -150,7 +146,6 @@ pub fn TransportHandlers(
         /// Clear transport state from a worker and defer re-evaluation.
         fn releaseTransportWorker(engine: *EngineType, worker: *WorkerData, worker_id: GameId) void {
             worker.transport_task = null;
-            _ = engine.transport_items.remove(worker_id);
             worker.state = .Idle;
             engine.markWorkerIdle(worker_id);
             engine.needs_dangling_eval = true;
@@ -184,16 +179,14 @@ pub fn TransportHandlers(
             engine.releaseReservation(task.to_storage_id);
 
             if (!skip_hooks) {
-                const item_type = engine.transport_items.get(worker_id);
                 engine.dispatcher.dispatch(.{ .transport_cancelled = .{
                     .worker_id = worker_id,
                     .from_storage_id = task.from_storage_id,
                     .to_storage_id = task.to_storage_id,
-                    .item = item_type,
+                    .item = task.item_type,
                 } });
             }
 
-            _ = engine.transport_items.remove(worker_id);
             worker.transport_task = null;
         }
 
