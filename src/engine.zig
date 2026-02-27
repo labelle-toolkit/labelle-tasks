@@ -47,7 +47,7 @@ pub fn Engine(
 
         // Import state types
         const StorageState = state_mod.StorageState(Item);
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
         const WorkstationData = state_mod.WorkstationData(GameId);
 
         // Import delegated modules
@@ -75,9 +75,6 @@ pub fn Engine(
 
         // Storage reservations: storage_id → worker_id (destination spoken for)
         reserved_storages: std.AutoHashMap(GameId, GameId),
-
-        // Transport item tracking: worker_id → Item (set on pickup, cleared on delivery)
-        transport_items: std.AutoHashMap(GameId, Item),
 
         // Hook dispatcher
         dispatcher: Dispatcher,
@@ -107,7 +104,6 @@ pub fn Engine(
                 .queued_workstations_set = std.AutoHashMap(GameId, void).init(allocator),
                 .storage_to_workstations = std.AutoHashMap(GameId, std.ArrayListUnmanaged(GameId)).init(allocator),
                 .reserved_storages = std.AutoHashMap(GameId, GameId).init(allocator),
-                .transport_items = std.AutoHashMap(GameId, Item).init(allocator),
                 .dispatcher = Dispatcher.init(task_hooks),
                 .distance_fn = distance_fn,
             };
@@ -126,7 +122,6 @@ pub fn Engine(
             self.idle_workers_set.deinit();
             self.queued_workstations_set.deinit();
             self.reserved_storages.deinit();
-            self.transport_items.deinit();
             // Free reverse index lists
             var ri_iter = self.storage_to_workstations.valueIterator();
             while (ri_iter.next()) |list| {
@@ -151,7 +146,6 @@ pub fn Engine(
             self.idle_workers_set.clearRetainingCapacity();
             self.queued_workstations_set.clearRetainingCapacity();
             self.reserved_storages.clearRetainingCapacity();
-            self.transport_items.clearRetainingCapacity();
 
             // Free reverse index lists
             var ri_iter = self.storage_to_workstations.valueIterator();

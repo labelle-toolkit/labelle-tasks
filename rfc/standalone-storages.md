@@ -150,7 +150,7 @@ transport_task: ?struct {
 } = null,
 ```
 
-The transported item type is tracked separately in `transport_items: AutoHashMap(GameId, Item)` (keyed by worker_id), set on pickup and cleared on delivery. This avoids making `WorkerData` generic over `Item`.
+The transported item type is tracked inline in `transport_task.item_type: ?Item`, set on pickup and read on delivery.
 
 A worker with a `transport_task` is in `.Working` state and won't be assigned to workstations or dangling pickups.
 

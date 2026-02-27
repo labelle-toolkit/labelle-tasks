@@ -17,7 +17,7 @@ pub fn Query(
     comptime EngineType: type,
 ) type {
     return struct {
-        const WorkerData = state_mod.WorkerData(GameId);
+        const WorkerData = state_mod.WorkerData(GameId, Item);
 
         // ============================================
         // Simple Query API

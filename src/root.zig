@@ -132,6 +132,12 @@ pub const Priority = engine_mod.Priority;
 /// Storage role in the workflow (EIS, IIS, IOS, EOS).
 pub const StorageRole = state_mod.StorageRole;
 
+// === Coordination Components ===
+
+/// Pure data components for game-side task state tracking.
+/// Exported via bind() for ECS auto-registration, also available directly.
+pub const coordination = @import("coordination.zig");
+
 // === ECS Integration (RFC #28) ===
 
 const ecs_bridge = @import("ecs_bridge.zig");
@@ -248,11 +254,23 @@ pub fn Workstation(comptime Item: type) type {
 /// ```
 pub fn bind(comptime Item: type, comptime EngineTypes: type) type {
     const Components = components_mod.ComponentsWith(EngineTypes);
+    const coord = @import("coordination.zig");
     return struct {
+        // Auto-registering components (have onAdd/onRemove/onReady callbacks)
         pub const Storage = Components.Storage(Item);
         pub const Worker = Components.Worker(Item);
         pub const DanglingItem = Components.DanglingItem(Item);
         pub const Workstation = Components.Workstation(Item);
+
+        // Coordination components (pure data, managed by game hooks)
+        pub const StoredItem = coord.StoredItem;
+        pub const CarriedItem = coord.CarriedItem;
+        pub const AssignedWorkstation = coord.AssignedWorkstation;
+        pub const TransportTask = coord.TransportTask;
+        pub const StoreTarget = coord.StoreTarget;
+        pub const PickupSource = coord.PickupSource;
+        pub const DanglingTarget = coord.DanglingTarget;
+        pub const PendingArrival = coord.PendingArrival;
     };
 }
 
