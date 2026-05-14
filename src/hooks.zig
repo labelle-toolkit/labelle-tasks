@@ -253,7 +253,7 @@ pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
     return struct {
         const Self = @This();
 
-        events: std.ArrayListUnmanaged(Payload) = .{},
+        events: std.ArrayListUnmanaged(Payload) = .empty,
         allocator: ?std.mem.Allocator = null,
         next_idx: usize = 0,
 

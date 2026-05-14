@@ -65,7 +65,7 @@ pub fn DanglingManager(
 
         /// Get list of idle workers (allocated, caller must free)
         pub fn getIdleWorkers(engine: *EngineType) ![]GameId {
-            var list: std.ArrayListUnmanaged(GameId) = .{};
+            var list: std.ArrayListUnmanaged(GameId) = .empty;
             errdefer list.deinit(engine.allocator);
 
             var iter = engine.workers.iterator();
@@ -85,7 +85,7 @@ pub fn DanglingManager(
             if (engine.idle_workers_set.count() == 0) return;
 
             // Snapshot idle workers into local buffer (reentrancy-safe pattern)
-            var idle_buf: std.ArrayListUnmanaged(GameId) = .{};
+            var idle_buf: std.ArrayListUnmanaged(GameId) = .empty;
             defer idle_buf.deinit(engine.allocator);
             idle_buf.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
             var idle_iter = engine.idle_workers_set.keyIterator();
@@ -99,7 +99,7 @@ pub fn DanglingManager(
             // Snapshot dangling items to avoid iterator invalidation if hooks
             // modify dangling_items during dispatch (e.g., addDanglingItem/removeDanglingItem)
             const DanglingEntry = struct { id: GameId, item_type: Item };
-            var dangling_snapshot: std.ArrayListUnmanaged(DanglingEntry) = .{};
+            var dangling_snapshot: std.ArrayListUnmanaged(DanglingEntry) = .empty;
             defer dangling_snapshot.deinit(engine.allocator);
             dangling_snapshot.ensureTotalCapacity(engine.allocator, engine.dangling_items.count()) catch return;
             var snap_iter = engine.dangling_items.iterator();

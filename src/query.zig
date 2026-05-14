@@ -169,7 +169,7 @@ pub fn Query(
             });
 
             // Storages (sorted by ID for deterministic output)
-            var s_keys: std.ArrayListUnmanaged(GameId) = .{};
+            var s_keys: std.ArrayListUnmanaged(GameId) = .empty;
             defer s_keys.deinit(engine.allocator);
             var s_iter = engine.storages.keyIterator();
             while (s_iter.next()) |key| try s_keys.append(engine.allocator, key.*);
@@ -187,7 +187,7 @@ pub fn Query(
             }
 
             // Workers (sorted by ID)
-            var w_keys: std.ArrayListUnmanaged(GameId) = .{};
+            var w_keys: std.ArrayListUnmanaged(GameId) = .empty;
             defer w_keys.deinit(engine.allocator);
             var w_iter = engine.workers.keyIterator();
             while (w_iter.next()) |key| try w_keys.append(engine.allocator, key.*);
@@ -203,7 +203,7 @@ pub fn Query(
             }
 
             // Workstations (sorted by ID)
-            var ws_keys: std.ArrayListUnmanaged(GameId) = .{};
+            var ws_keys: std.ArrayListUnmanaged(GameId) = .empty;
             defer ws_keys.deinit(engine.allocator);
             var ws_iter = engine.workstations.keyIterator();
             while (ws_iter.next()) |key| try ws_keys.append(engine.allocator, key.*);
@@ -225,7 +225,7 @@ pub fn Query(
 
             // Dangling items (sorted by ID)
             if (engine.dangling_items.count() > 0) {
-                var d_keys: std.ArrayListUnmanaged(GameId) = .{};
+                var d_keys: std.ArrayListUnmanaged(GameId) = .empty;
                 defer d_keys.deinit(engine.allocator);
                 var d_iter = engine.dangling_items.keyIterator();
                 while (d_iter.next()) |key| try d_keys.append(engine.allocator, key.*);

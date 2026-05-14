@@ -126,9 +126,9 @@ pub fn Helpers(
 
             // Snapshot into local buffers to avoid reentrancy issues
             // (assignWorkerToWorkstation dispatches hooks which could trigger tryAssignWorkers again)
-            var idle_scratch: std.ArrayListUnmanaged(GameId) = .{};
+            var idle_scratch: std.ArrayListUnmanaged(GameId) = .empty;
             defer idle_scratch.deinit(engine.allocator);
-            var queued_scratch: std.ArrayListUnmanaged(GameId) = .{};
+            var queued_scratch: std.ArrayListUnmanaged(GameId) = .empty;
             defer queued_scratch.deinit(engine.allocator);
 
             idle_scratch.ensureTotalCapacity(engine.allocator, engine.idle_workers_set.count()) catch return;
