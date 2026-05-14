@@ -328,7 +328,7 @@ pub fn Engine(
             if (self.storage_to_workstations.get(storage_id)) |ws_ids| {
                 // Snapshot workstation IDs to avoid dangling pointer if the list
                 // is freed by a reentrant removeStorage call during evaluation
-                var snapshot: std.ArrayListUnmanaged(GameId) = .{};
+                var snapshot: std.ArrayListUnmanaged(GameId) = .empty;
                 defer snapshot.deinit(self.allocator);
                 snapshot.appendSlice(self.allocator, ws_ids.items) catch {
                     // On OOM, skip evaluation but still set dirty flag
@@ -368,7 +368,7 @@ pub fn Engine(
                 return;
             };
             if (!gop.found_existing) {
-                gop.value_ptr.* = .{};
+                gop.value_ptr.* = .empty;
             }
             for (gop.value_ptr.items) |existing_id| {
                 if (existing_id == workstation_id) return;
@@ -663,7 +663,7 @@ pub fn Engine(
             if (self.idle_workers_set.count() == 0) return;
 
             // Snapshot idle workers (reentrancy-safe)
-            var idle_buf: std.ArrayListUnmanaged(GameId) = .{};
+            var idle_buf: std.ArrayListUnmanaged(GameId) = .empty;
             defer idle_buf.deinit(self.allocator);
             idle_buf.ensureTotalCapacity(self.allocator, self.idle_workers_set.count()) catch return;
             var idle_iter = self.idle_workers_set.keyIterator();
@@ -686,7 +686,7 @@ pub fn Engine(
 
             // Snapshot EOS storages with items (O(S) single pass)
             const EosEntry = struct { id: GameId, item_type: Item };
-            var eos_snapshot: std.ArrayListUnmanaged(EosEntry) = .{};
+            var eos_snapshot: std.ArrayListUnmanaged(EosEntry) = .empty;
             defer eos_snapshot.deinit(self.allocator);
 
             var storage_iter = self.storages.iterator();

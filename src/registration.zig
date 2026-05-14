@@ -59,19 +59,19 @@ pub fn Registration(
 
         /// Register a workstation with the engine
         pub fn addWorkstation(engine: *EngineType, workstation_id: GameId, config: WorkstationConfig) !void {
-            var eis = std.ArrayListUnmanaged(GameId){};
+            var eis: std.ArrayListUnmanaged(GameId) = .empty;
             errdefer eis.deinit(engine.allocator);
             try eis.appendSlice(engine.allocator, config.eis);
 
-            var iis = std.ArrayListUnmanaged(GameId){};
+            var iis: std.ArrayListUnmanaged(GameId) = .empty;
             errdefer iis.deinit(engine.allocator);
             try iis.appendSlice(engine.allocator, config.iis);
 
-            var ios = std.ArrayListUnmanaged(GameId){};
+            var ios: std.ArrayListUnmanaged(GameId) = .empty;
             errdefer ios.deinit(engine.allocator);
             try ios.appendSlice(engine.allocator, config.ios);
 
-            var eos = std.ArrayListUnmanaged(GameId){};
+            var eos: std.ArrayListUnmanaged(GameId) = .empty;
             errdefer eos.deinit(engine.allocator);
             try eos.appendSlice(engine.allocator, config.eos);
 

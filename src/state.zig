@@ -62,10 +62,10 @@ pub fn WorkstationData(comptime GameId: type) type {
         priority: Priority = .Normal,
 
         // Storage references (by GameId) - dynamically growable lists
-        eis: std.ArrayListUnmanaged(GameId) = .{},
-        iis: std.ArrayListUnmanaged(GameId) = .{},
-        ios: std.ArrayListUnmanaged(GameId) = .{},
-        eos: std.ArrayListUnmanaged(GameId) = .{},
+        eis: std.ArrayListUnmanaged(GameId) = .empty,
+        iis: std.ArrayListUnmanaged(GameId) = .empty,
+        ios: std.ArrayListUnmanaged(GameId) = .empty,
+        eos: std.ArrayListUnmanaged(GameId) = .empty,
 
         // Selected storages for current cycle
         selected_eis: ?GameId = null,
