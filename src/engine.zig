@@ -368,7 +368,7 @@ pub fn Engine(
                 return;
             };
             if (!gop.found_existing) {
-                gop.value_ptr.* = .{};
+                gop.value_ptr.* = .empty;
             }
             for (gop.value_ptr.items) |existing_id| {
                 if (existing_id == workstation_id) return;

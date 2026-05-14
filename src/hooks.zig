@@ -286,7 +286,7 @@ pub fn RecordingHooks(comptime GameId: type, comptime Item: type) type {
         }
 
         /// Assert the next event matches the expected tag (O(1), non-destructive)
-        pub fn expectNext(self: *Self, comptime expected_tag: std.meta.Tag(Payload)) !std.meta.TagPayload(Payload, expected_tag) {
+        pub fn expectNext(self: *Self, comptime expected_tag: std.meta.Tag(Payload)) !@FieldType(Payload, @tagName(expected_tag)) {
             if (self.next_idx >= self.events.items.len) {
                 std.debug.print("Expected {s} event but no more events recorded\n", .{@tagName(expected_tag)});
                 return error.NoEventsRecorded;

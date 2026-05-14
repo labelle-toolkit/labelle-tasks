@@ -1561,10 +1561,10 @@ pub const Engine = zspec.describe("Engine", struct {
             try engine.addWorker(10);
 
             var buf: [4096]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
-            try engine.dumpState(stream.writer());
+            var writer = std.Io.Writer.fixed(&buf);
+            try engine.dumpState(&writer);
 
-            const output = stream.getWritten();
+            const output = writer.buffered();
             // Verify it contains key information
             try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Task Engine State"));
             try std.testing.expect(std.mem.containsAtLeast(u8, output, 1, "Storages: 4"));
